@@ -51,3 +51,16 @@ Open a new TextEdit document and type text automatically.
 
 **Result:**  
 Success. The program created a TextEdit document and typed the test message correctly.
+
+## Experiment 05: Clipboard
+
+**Date:** August 21, 2026
+
+**Objective:**  
+Write text to the system clipboard and read it back.
+
+**File:**  
+`experiments/week01/clipboard_test.py`
+
+**Result:**  
+Success. The copied and retrieved text matched.
