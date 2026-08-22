@@ -64,3 +64,19 @@ Write text to the system clipboard and read it back.
 
 **Result:**  
 Success. The copied and retrieved text matched.
+
+## Experiment 06: Scrolling
+
+**Date:** August 21, 2026
+
+**Objective:**  
+Scroll down and up inside a scrollable page.
+
+**File:**  
+`experiments/week01/scroll_test.py`
+
+**Result:**  
+Success. The page scrolled down and returned upward correctly.
+
+**Future Improvement:**  
+Detect the end of a page by comparing screenshots before and after scrolling.
