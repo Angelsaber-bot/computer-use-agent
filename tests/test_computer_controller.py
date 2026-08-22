@@ -56,7 +56,11 @@ def test_hotkey(mock_hotkey):
     controller = ComputerController()
     controller.hotkey("command", "c")
 
-    mock_hotkey.assert_called_once_with("command", "c")
+    mock_hotkey.assert_called_once_with(
+        "command",
+        "c",
+        interval=0.1
+    )
 
 @patch("computer_agent.control.computer_controller.pyperclip.copy")
 def test_copy_to_clipboard(mock_copy):
@@ -83,7 +87,11 @@ def test_paste_text(mock_copy, mock_hotkey):
     controller.paste_text("Hello")
 
     mock_copy.assert_called_once_with("Hello")
-    mock_hotkey.assert_called_once_with("command", "v")
+    mock_hotkey.assert_called_once_with(
+        "command",
+        "v",
+        interval=0.1
+    )
 
 @patch("computer_agent.control.computer_controller.pyautogui.size")
 def test_get_screen_size(mock_size):

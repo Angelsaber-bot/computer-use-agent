@@ -159,3 +159,6 @@ Success. Pytest completed with `14 passed`.
 
 **Integration Verification:**  
 Experiment 10 completed successfully using the formal `ComputerController` class.
+
+**Reliability Fix:**  
+An intermittent macOS focus issue caused shortcut letters such as `n` and `v` to be typed as normal text. Hotkey timing was improved, clipboard paste now reuses the reliable hotkey method, and Experiment 10 explicitly creates a new TextEdit document. The integration workflow was repeated twice successfully with no extra characters.

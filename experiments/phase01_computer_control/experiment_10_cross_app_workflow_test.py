@@ -1,6 +1,6 @@
 from pathlib import Path
 import time
-
+import subprocess
 from computer_agent.control.computer_controller import ComputerController
 
 
@@ -12,9 +12,16 @@ controller.open_url(url)
 time.sleep(2)
 
 controller.activate_app("TextEdit")
-time.sleep(1)
 
-controller.hotkey("command", "n")
+subprocess.run(
+    [
+        "osascript",
+        "-e",
+        'tell application "TextEdit" to make new document'
+    ],
+    check=True
+)
+
 time.sleep(1)
 
 controller.paste_text(url)

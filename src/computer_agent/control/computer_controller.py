@@ -31,8 +31,8 @@ class ComputerController:
         pyautogui.press(key)
 
     @staticmethod
-    def hotkey(*keys):
-        pyautogui.hotkey(*keys)
+    def hotkey(*keys, interval=0.1):
+        pyautogui.hotkey(*keys, interval=interval)
     @staticmethod
     def copy_to_clipboard(text):
         pyperclip.copy(text)
@@ -44,7 +44,7 @@ class ComputerController:
     @staticmethod
     def paste_text(text):
         pyperclip.copy(text)
-        pyautogui.hotkey("command", "v")
+        ComputerController.hotkey("command", "v")
 
     @staticmethod
     def get_screen_size():
@@ -56,7 +56,7 @@ class ComputerController:
         screenshot.save(output_path)
 
         return output_path
-    
+
     @staticmethod
     def activate_app(app_name):
         subprocess.run(["open", "-a", app_name], check=True)
