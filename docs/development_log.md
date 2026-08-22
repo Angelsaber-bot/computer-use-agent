@@ -109,3 +109,16 @@ Open Google Chrome and navigate to a specified URL.
 
 **Result:**  
 Success. Google Chrome opened `https://example.com`.
+
+## Experiment 09: App Switching
+
+**Date:** August 21, 2026
+
+**Objective:**  
+Switch between multiple macOS applications automatically.
+
+**File:**  
+`experiments/week01/experiment_09_app_switching_test.py`
+
+**Result:**  
+Success. The program activated TextEdit and then switched to Google Chrome.
