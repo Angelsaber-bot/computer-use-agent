@@ -140,3 +140,19 @@ Combine browser navigation, clipboard access, app switching, keyboard input, and
 
 **Result:**  
 Success. The program opened a webpage, switched to TextEdit, entered the copied URL, and saved a screenshot.
+
+### Formal Module 01: Computer Controller
+
+**Date:** August 22, 2026
+
+**Objective:**  
+Convert the mouse position experiment into a reusable computer-control class.
+
+**Source File:**  
+`src/computer_agent/control/computer_controller.py`
+
+**Test File:**  
+`tests/test_computer_controller.py`
+
+**Result:**  
+Success. Pytest completed with `1 passed`.
