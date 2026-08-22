@@ -122,3 +122,19 @@ Switch between multiple macOS applications automatically.
 
 **Result:**  
 Success. The program activated TextEdit and then switched to Google Chrome.
+
+## Experiment 10: Cross-App Workflow
+
+**Date:** August 21, 2026
+
+**Objective:**  
+Combine browser navigation, clipboard access, app switching, keyboard input, and screenshot capture.
+
+**File:**  
+`experiments/week01/experiment_10_cross_app_workflow_test.py`
+
+**Output:**  
+`assets/screenshots/experiment_10_workflow.png`
+
+**Result:**  
+Success. The program opened a webpage, switched to TextEdit, entered the copied URL, and saved a screenshot.
