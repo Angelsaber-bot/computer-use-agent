@@ -25,3 +25,16 @@ Move the mouse to the screen center and return it to its starting position.
 
 **Result:**  
 Success. The mouse moved to `(735, 478)` and returned to its starting position.
+
+## Experiment 03: Mouse Click
+
+**Date:** August 21, 2026
+
+**Objective:**  
+Perform a mouse click at a selected safe location.
+
+**File:**  
+`experiments/week01/mouse_click_test.py`
+
+**Result:**  
+Success. The program clicked at `(987, 245)`.
