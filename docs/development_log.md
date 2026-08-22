@@ -38,3 +38,16 @@ Perform a mouse click at a selected safe location.
 
 **Result:**  
 Success. The program clicked at `(987, 245)`.
+
+## Experiment 04: Keyboard Typing
+
+**Date:** August 21, 2026
+
+**Objective:**  
+Open a new TextEdit document and type text automatically.
+
+**File:**  
+`experiments/week01/keyboard_typing_test.py`
+
+**Result:**  
+Success. The program created a TextEdit document and typed the test message correctly.
