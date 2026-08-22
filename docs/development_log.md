@@ -8,7 +8,7 @@
 Read and display the current mouse position.
 
 **File:**  
-`experiments/week01/mouse_position_test.py`
+`experiments/week01/experiment_01_mouse_position_test.py`
 
 **Result:**  
 Success. The program returned the mouse position `x=723, y=436`.
@@ -21,7 +21,7 @@ Success. The program returned the mouse position `x=723, y=436`.
 Move the mouse to the screen center and return it to its starting position.
 
 **File:**  
-`experiments/week01/mouse_movement_test.py`
+`experiments/week01/experiment_02_mouse_movement_test.py`
 
 **Result:**  
 Success. The mouse moved to `(735, 478)` and returned to its starting position.
@@ -34,7 +34,7 @@ Success. The mouse moved to `(735, 478)` and returned to its starting position.
 Perform a mouse click at a selected safe location.
 
 **File:**  
-`experiments/week01/mouse_click_test.py`
+`experiments/week01/experiment_03_mouse_click_test.py`
 
 **Result:**  
 Success. The program clicked at `(987, 245)`.
@@ -47,7 +47,7 @@ Success. The program clicked at `(987, 245)`.
 Open a new TextEdit document and type text automatically.
 
 **File:**  
-`experiments/week01/keyboard_typing_test.py`
+`experiments/week01/experiment_04_keyboard_typing_test.py`
 
 **Result:**  
 Success. The program created a TextEdit document and typed the test message correctly.
@@ -60,7 +60,7 @@ Success. The program created a TextEdit document and typed the test message corr
 Write text to the system clipboard and read it back.
 
 **File:**  
-`experiments/week01/clipboard_test.py`
+`experiments/week01/experiment_05_clipboard_test.py`
 
 **Result:**  
 Success. The copied and retrieved text matched.
@@ -73,10 +73,26 @@ Success. The copied and retrieved text matched.
 Scroll down and up inside a scrollable page.
 
 **File:**  
-`experiments/week01/scroll_test.py`
+`experiments/week01/experiment_06_scroll_test.py`
 
 **Result:**  
 Success. The page scrolled down and returned upward correctly.
 
 **Future Improvement:**  
 Detect the end of a page by comparing screenshots before and after scrolling.
+
+## Experiment 07: Screenshot Capture
+
+**Date:** August 21, 2026
+
+**Objective:**  
+Capture the computer screen and save it as an image file.
+
+**File:**  
+`experiments/week01/experiment_07_screenshot_test.py`
+
+**Output:**  
+`assets/screenshots/experiment_07_screen.png`
+
+**Result:**  
+Success. The program captured the full screen and saved the image correctly.
