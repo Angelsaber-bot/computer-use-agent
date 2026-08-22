@@ -96,3 +96,16 @@ Capture the computer screen and save it as an image file.
 
 **Result:**  
 Success. The program captured the full screen and saved the image correctly.
+
+## Experiment 08: Browser Navigation
+
+**Date:** August 21, 2026
+
+**Objective:**  
+Open Google Chrome and navigate to a specified URL.
+
+**File:**  
+`experiments/week01/experiment_08_browser_navigation_test.py`
+
+**Result:**  
+Success. Google Chrome opened `https://example.com`.
