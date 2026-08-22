@@ -5,7 +5,7 @@ import pyautogui
 import pyperclip
 
 url = "https://example.com"
-output = Path(__file__).parents[2] / "assets/screenshots/experiment_10_workflow.png"
+output = Path(__file__).parents[2] / "assets/screenshots/phase01_computer_control/experiment_10_workflow.png"
 
 pyperclip.copy(url)
 subprocess.run(["open", "-a", "Google Chrome", url], check=True)

@@ -4,7 +4,7 @@ A Python-based AI agent that can observe a computer screen, make decisions, and 
 
 ## Current Progress
 
-### Week 1: Computer Control and Tools
+### Phase 01: Computer Control and Tools
 
 - [x] Read the mouse position
 - [x] Move and click the mouse
