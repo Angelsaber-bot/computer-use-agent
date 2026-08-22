@@ -12,3 +12,16 @@ Read and display the current mouse position.
 
 **Result:**  
 Success. The program returned the mouse position `x=723, y=436`.
+
+## Experiment 02: Mouse Movement
+
+**Date:** August 21, 2026
+
+**Objective:**  
+Move the mouse to the screen center and return it to its starting position.
+
+**File:**  
+`experiments/week01/mouse_movement_test.py`
+
+**Result:**  
+Success. The mouse moved to `(735, 478)` and returned to its starting position.
