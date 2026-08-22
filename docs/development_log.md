@@ -162,3 +162,107 @@ Experiment 10 completed successfully using the formal `ComputerController` class
 
 **Reliability Fix:**  
 An intermittent macOS focus issue caused shortcut letters such as `n` and `v` to be typed as normal text. Hotkey timing was improved, clipboard paste now reuses the reliable hotkey method, and Experiment 10 explicitly creates a new TextEdit document. The integration workflow was repeated twice successfully with no extra characters.
+
+## Phase 02: Tool System and Agent State
+
+All earlier `prework` code is excluded from the formal project.
+
+### Formal Module 02: Structured Agent Data Models
+
+**Date:** August 22, 2026
+
+**Objective:**
+
+Create standard data formats for agent actions, tool results, observations, and execution history.
+
+**Source File:**
+
+`src/computer_agent/core/models.py`
+
+**Test File:**
+
+`tests/test_models.py`
+
+**Implemented:**
+
+- Added `Action` for structured tool requests.
+- Added `ToolResult` for successful and failed execution results.
+- Added `Observation` for information collected from the environment.
+- Added `StepRecord` for connecting one action with its result and observation.
+- Added unique IDs and timestamps for execution tracking.
+
+**Result:**
+
+Success. All 7 new data-model tests passed. The complete test suite finished with `21 passed`.
+
+**Commit:**
+
+`8f374fc` — `feat: add phase 02 agent data models`
+
+
+### Formal Module 03: Agent State Management
+
+**Date:** August 22, 2026
+
+**Objective:**
+
+Track the complete status and execution history of one user task.
+
+**Source File:**
+
+`src/computer_agent/agent/state.py`
+
+**Test File:**
+
+`tests/test_agent_state.py`
+
+**Implemented:**
+
+- Added pending, running, succeeded, and failed task states.
+- Added validated state transitions.
+- Added step-history recording.
+- Added task context and latest-error storage.
+- Prevented completed tasks from being restarted or changed incorrectly.
+
+**Result:**
+
+Success. All 6 new Agent-state tests passed. The complete test suite finished with `27 passed`.
+
+**Commit:**
+
+`666972f` — `feat: add agent task state management`
+
+
+### Formal Module 04: Base Tool and Tool Registry
+
+**Date:** August 22, 2026
+
+**Objective:**
+
+Create a common tool interface and a central system for tool registration and discovery.
+
+**Source Files:**
+
+- `src/computer_agent/tools/base.py`
+- `src/computer_agent/tools/registry.py`
+
+**Test File:**
+
+`tests/test_tool_registry.py`
+
+**Implemented:**
+
+- Added a common `BaseTool` interface.
+- Added tool names, descriptions, parameters, and platform support.
+- Added argument validation and optional default values.
+- Added planner-readable tool schemas.
+- Added tool registration, lookup, listing, and removal.
+- Added duplicate-tool and missing-tool error handling.
+
+**Result:**
+
+Success. All 10 new tool-system tests passed. The complete test suite finished with `37 passed`.
+
+**Commit:**
+
+`9e0012f` — `feat: add base tool interface and registry`
