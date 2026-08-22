@@ -1,21 +1,23 @@
 from pathlib import Path
-import subprocess
 import time
-import pyautogui
-import pyperclip
 
+from computer_agent.control.computer_controller import ComputerController
+
+
+controller = ComputerController()
 url = "https://example.com"
 output = Path(__file__).parents[2] / "assets/screenshots/phase01_computer_control/experiment_10_workflow.png"
 
-pyperclip.copy(url)
-subprocess.run(["open", "-a", "Google Chrome", url], check=True)
+controller.open_url(url)
 time.sleep(2)
 
-script = 'tell application "TextEdit" to activate\ntell application "TextEdit" to make new document'
-subprocess.run(["osascript", "-e", script], check=True)
+controller.activate_app("TextEdit")
 time.sleep(1)
 
-pyautogui.write(pyperclip.paste(), interval=0.05)
-pyautogui.screenshot().save(output)
+controller.hotkey("command", "n")
+time.sleep(1)
+
+controller.paste_text(url)
+controller.capture_screenshot(output)
 
 print("Cross-app workflow completed.")

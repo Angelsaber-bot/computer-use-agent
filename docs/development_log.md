@@ -155,4 +155,7 @@ Convert the mouse position experiment into a reusable computer-control class.
 `tests/test_computer_controller.py`
 
 **Result:**  
-Success. Pytest completed with `1 passed`.
+Success. Pytest completed with `14 passed`.
+
+**Integration Verification:**  
+Experiment 10 completed successfully using the formal `ComputerController` class.
