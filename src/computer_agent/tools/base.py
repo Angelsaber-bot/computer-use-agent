@@ -102,7 +102,7 @@ class BaseTool(ABC):
 
             value = arguments[name]
 
-            if not isinstance(value, parameter.python_type):
+            if not self._matches_type(value, parameter.python_type):
                 expected = self._type_name(parameter.python_type)
                 actual = type(value).__name__
 
@@ -149,6 +149,26 @@ class BaseTool(ABC):
     @abstractmethod
     def run(self, **arguments: Any) -> Any:
         """Execute the tool using validated arguments."""
+
+    @staticmethod
+    def _matches_type(
+        value: Any,
+        expected: type | tuple[type, ...],
+    ) -> bool:
+        expected_types = (
+            expected
+            if isinstance(expected, tuple)
+            else (expected,)
+        )
+
+        if (
+            isinstance(value, bool)
+            and bool not in expected_types
+            and int in expected_types
+        ):
+            return False
+
+        return isinstance(value, expected)
 
     @staticmethod
     def _type_name(

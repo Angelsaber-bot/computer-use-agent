@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -68,3 +69,41 @@ def test_screen_frame_rejects_invalid_dimensions():
             screen_width=1920,
             screen_height=1080,
         )
+
+
+def test_screen_frame_rejects_naive_timestamp():
+    with pytest.raises(
+        ValueError,
+        match="captured_at must be timezone-aware",
+    ):
+        ScreenFrame(
+            image_path=Path("screen.png"),
+            pixel_width=1920,
+            pixel_height=1080,
+            screen_width=1920,
+            screen_height=1080,
+            captured_at=datetime(2026, 8, 23, 12, 0, 0),
+        )
+
+
+def test_screen_frame_accepts_timezone_aware_timestamp():
+    captured_at = datetime(
+        2026,
+        8,
+        23,
+        12,
+        0,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    frame = ScreenFrame(
+        image_path=Path("screen.png"),
+        pixel_width=1920,
+        pixel_height=1080,
+        screen_width=1920,
+        screen_height=1080,
+        captured_at=captured_at,
+    )
+
+    assert frame.captured_at is captured_at

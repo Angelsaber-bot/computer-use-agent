@@ -51,6 +51,43 @@ class MacOnlyTool(BaseTool):
         return "macOS"
 
 
+class TypeValidationTool(BaseTool):
+    """Test tool for primitive argument type validation."""
+
+    name = "type_validation"
+    description = "Validate primitive values."
+
+    parameters = {
+        "integer": ToolParameter(
+            int,
+            "Integer value.",
+            required=False,
+            default=0,
+        ),
+        "number": ToolParameter(
+            (int, float),
+            "Numeric value.",
+            required=False,
+            default=0,
+        ),
+        "flag": ToolParameter(
+            bool,
+            "Boolean value.",
+            required=False,
+            default=False,
+        ),
+        "bool_or_int": ToolParameter(
+            (bool, int),
+            "Boolean or integer value.",
+            required=False,
+            default=False,
+        ),
+    }
+
+    def run(self, **arguments):
+        return arguments
+
+
 def test_tool_validates_arguments_and_adds_default():
     tool = EchoTool()
 
@@ -64,6 +101,58 @@ def test_tool_validates_arguments_and_adds_default():
     }
 
     assert tool.run(**arguments) == "hello"
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_tool_rejects_bool_for_int_parameter(value):
+    with pytest.raises(
+        ToolValidationError,
+        match="argument 'integer' must be int, not bool",
+    ):
+        TypeValidationTool().validate_arguments(
+            {"integer": value}
+        )
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_tool_rejects_bool_for_numeric_tuple_parameter(value):
+    with pytest.raises(
+        ToolValidationError,
+        match="argument 'number' must be int or float, not bool",
+    ):
+        TypeValidationTool().validate_arguments(
+            {"number": value}
+        )
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_tool_accepts_bool_for_bool_parameter(value):
+    arguments = TypeValidationTool().validate_arguments(
+        {"flag": value}
+    )
+
+    assert arguments["flag"] is value
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_tool_accepts_bool_when_explicitly_in_type_tuple(value):
+    arguments = TypeValidationTool().validate_arguments(
+        {"bool_or_int": value}
+    )
+
+    assert arguments["bool_or_int"] is value
+
+
+def test_tool_accepts_ordinary_numeric_values():
+    arguments = TypeValidationTool().validate_arguments(
+        {
+            "integer": 7,
+            "number": 1.5,
+        }
+    )
+
+    assert arguments["integer"] == 7
+    assert arguments["number"] == 1.5
 
 
 @pytest.mark.parametrize(

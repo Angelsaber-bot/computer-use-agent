@@ -31,6 +31,14 @@ class ScreenFrame:
                 "screen frame dimensions must be positive"
             )
 
+        if (
+            self.captured_at.tzinfo is None
+            or self.captured_at.utcoffset() is None
+        ):
+            raise ValueError(
+                "captured_at must be timezone-aware"
+            )
+
     @property
     def pixel_size(self) -> tuple[int, int]:
         """Return the screenshot image size in pixels."""
