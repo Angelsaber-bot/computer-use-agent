@@ -509,3 +509,45 @@ Screenshot output should eventually use an approved artifact-root policy rather 
 **Next Step:**
 
 Phase 03 Experiment 02 — `BoundingBox` and `UIElement` perception models.
+
+### Experiment 02: Reusable Perception Models
+
+**Date:** August 23, 2026
+
+**Objective:**
+
+Create reusable immutable data models for detected screen regions and user-interface elements.
+
+**Experiment File:**
+
+`experiments/phase03_screen_perception/experiment_02_perception_models.py`
+
+**Source File:**
+
+`src/computer_agent/perception/models.py`
+
+**Test File:**
+
+`tests/test_perception_models.py`
+
+**Implemented:**
+
+- Added immutable `BoundingBox` coordinates with inclusive left and top edges and exclusive right and bottom edges.
+- Added geometry helpers for edges, center, area, containment, intersection checks, and intersection boxes.
+- Added validation for non-negative coordinates, positive dimensions, and boolean rejection for integer fields.
+- Added immutable `UIElement` with element type, bounding box, confidence, optional text, and delegated center access.
+- Added validation for element types, bounding boxes, confidence values, and text values.
+- Exported the new perception models from `computer_agent.perception`.
+
+**Validation:**
+
+- The complete automated test suite finished with `108 passed`.
+- The Experiment 02 script completed successfully.
+
+**Result:**
+
+Success. The perception package now has reusable data contracts for future screen element detection without adding OCR, image processing, planner integration, or automation behavior.
+
+**Next Step:**
+
+Phase 03 Experiment 03.

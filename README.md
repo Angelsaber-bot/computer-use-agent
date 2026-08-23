@@ -28,6 +28,6 @@ A Python-based AI agent that can observe a computer screen, make decisions, and 
 ### Phase 03: Screen Perception
 
 - [x] Experiment 01: Normalized Screen Capture
-- [ ] Experiment 02: Reusable `BoundingBox` and `UIElement` perception models
+- [x] Experiment 02: Reusable `BoundingBox` and `UIElement` perception models
 
-**Next Step:** Phase 03 Experiment 02 — reusable `BoundingBox` and `UIElement` perception models
+**Next Step:** Phase 03 Experiment 03
