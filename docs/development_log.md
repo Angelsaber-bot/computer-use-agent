@@ -358,3 +358,57 @@ The next step is the Phase 2 integration experiment using the real macOS `Comput
 **Commit:**
 
 `964e9c5` — `feat: wrap computer controller as tools`
+
+
+### Formal Module 07: Phase 02 Integration Experiment
+
+**Date:** August 22, 2026
+
+**Objective:**
+
+Verify that structured actions can pass through the complete Phase 2 tool system and perform real macOS operations.
+
+**Experiment File:**
+
+`experiments/phase02_tool_system/experiment_01_tool_workflow.py`
+
+**Screenshot:**
+
+`assets/screenshots/phase02_tool_system/experiment_01_tool_workflow.png`
+
+**Workflow:**
+
+1. Created the real macOS `ComputerController`.
+2. Created and registered all 14 computer-control tools.
+3. Created a `ToolExecutor` using the tool registry.
+4. Created and started an `AgentState`.
+5. Executed `open_url` to open `example.com` in Google Chrome.
+6. Executed `activate_app` to activate TextEdit.
+7. Executed `hotkey` to create a new TextEdit document.
+8. Executed `paste_text` to insert the experiment message.
+9. Executed `capture_screenshot` to save visual evidence.
+10. Recorded every `Action` and `ToolResult` in the Agent-state history.
+
+**Observed Result:**
+
+- All five structured actions returned successful `ToolResult` objects.
+- The Agent state recorded all five execution steps.
+- The final Agent status was `SUCCEEDED`.
+- Google Chrome successfully opened `example.com`.
+- TextEdit successfully created a new document.
+- The experiment message appeared correctly with no extra characters.
+- The screenshot was saved as a valid `2940 x 1912` PNG image.
+- The experiment process finished with exit code `0`.
+- The complete automated test suite still finished with `65 passed`.
+
+Screen-content correctness was verified manually because automatic screen understanding belongs to the later Screen Perception and Verification phases.
+
+**Result:**
+
+Success. The complete Phase 2 execution path worked with the real macOS computer controller:
+
+`Action -> ToolRegistry -> ToolExecutor -> ComputerTool -> ComputerController -> macOS -> ToolResult -> AgentState`
+
+**Commit:**
+
+`7fe0900` — `test: add phase 02 integration experiment`
