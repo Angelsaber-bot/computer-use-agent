@@ -305,3 +305,56 @@ The executor can now safely run registered tools and report failures without cra
 **Commit:**
 
 `2e5bc54` — `feat: add structured tool executor`
+
+### Formal Module 06: Computer Control Tool Adapters
+
+**Date:** August 22, 2026
+
+**Objective:**
+
+Expose all Phase 1 computer-control functions through the standardized Phase 2 tool system.
+
+**Source Files:**
+
+- `src/computer_agent/tools/computer/base.py`
+- `src/computer_agent/tools/computer/mouse.py`
+- `src/computer_agent/tools/computer/keyboard.py`
+- `src/computer_agent/tools/computer/clipboard.py`
+- `src/computer_agent/tools/computer/screen.py`
+- `src/computer_agent/tools/computer/application.py`
+- `src/computer_agent/tools/computer/__init__.py`
+
+**Test Files:**
+
+- `tests/test_mouse_tools.py`
+- `tests/test_keyboard_tools.py`
+- `tests/test_clipboard_tools.py`
+- `tests/test_screen_tools.py`
+- `tests/test_application_tools.py`
+- `tests/test_computer_tool_factory.py`
+
+**Implemented:**
+
+- Added a shared `ComputerTool` adapter base class.
+- Added four mouse tools for position, movement, clicking, and scrolling.
+- Added three keyboard tools for typing, single keys, and shortcuts.
+- Added three clipboard tools for copying, reading, and pasting text.
+- Added two screen tools for screen size and screenshot capture.
+- Added two application tools for activating apps and opening URLs.
+- Added `create_computer_tools()` to create all 14 tools with one controller.
+- Declared the current computer adapters as macOS tools.
+- Returned structured output from every computer tool.
+- Added validation for keyboard shortcuts, application names, URLs, and browser names.
+- Connected `Action`, `ToolExecutor`, `ToolRegistry`, computer tools, and `ToolResult` in one safe mocked execution test.
+
+**Result:**
+
+Success. All 22 new computer-tool tests passed. The complete test suite finished with `65 passed`.
+
+All 14 Phase 1 `ComputerController` functions are now available through the structured Phase 2 tool system. Unit tests used mock controllers, so no real mouse, keyboard, browser, or application actions occurred during automated testing.
+
+The next step is the Phase 2 integration experiment using the real macOS `ComputerController`.
+
+**Commit:**
+
+`964e9c5` — `feat: wrap computer controller as tools`
