@@ -412,3 +412,71 @@ Success. The complete Phase 2 execution path worked with the real macOS computer
 **Commit:**
 
 `7fe0900` — `test: add phase 02 integration experiment`
+
+## Phase 03: Screen Perception
+
+### Experiment 01: Normalized Screen Capture
+
+**Date:** August 23, 2026
+
+**Objective:**
+
+Create the input boundary for screen perception by converting a raw screenshot into a structured `ScreenFrame`.
+
+**Experiment File:**
+
+`experiments/phase03_screen_perception/experiment_01_screen_capture.py`
+
+**Source Files:**
+
+- `src/computer_agent/perception/__init__.py`
+- `src/computer_agent/perception/models.py`
+- `src/computer_agent/perception/screen_capture.py`
+
+**Test File:**
+
+`tests/test_screen_capture.py`
+
+**Screenshot:**
+
+`assets/screenshots/phase03_screen_perception/experiment_01_screen_capture.png`
+
+**Implemented:**
+
+- Added the `computer_agent.perception` package.
+- Added `ScreenFrame` for screenshot path, pixel dimensions, logical screen dimensions, capture time, and coordinate scaling.
+- Added `ScreenController` Protocol for dependency injection.
+- Added `ScreenCapture`, which reuses `ComputerController` and reads image dimensions with Pillow.
+- Added three unit tests.
+- Added a live integration experiment and screenshot evidence.
+- Configured the repository as an editable Python `src`-layout package.
+
+**Problems Encountered:**
+
+- `screen_capture.py` was initially missing because code was placed in the wrong file.
+- The `src`-layout package was not installed, causing `ModuleNotFoundError` outside pytest.
+- A temporary `sys.path` workaround was removed after configuring editable installation.
+
+**Resolution:**
+
+- Separated `ScreenFrame` and `ScreenCapture` into the correct modules.
+- Added standard `pyproject.toml` packaging metadata.
+- Installed the project using editable mode.
+- Used protocol-based dependency injection instead of environment-specific imports.
+
+**Validation:**
+
+- Import resolved to `/Users/lejiazhang/Desktop/computer_agent/src/computer_agent/__init__.py`.
+- The complete automated test suite finished with `68 passed`.
+- Screenshot pixel size was `2940 x 1912`.
+- Logical screen size was `1470 x 956`.
+- Retina coordinate scale was `x=2.00, y=2.00`.
+- Screenshot evidence was saved at `assets/screenshots/phase03_screen_perception/experiment_01_screen_capture.png`.
+
+**Result:**
+
+Success. The perception system can now capture a screen image while preserving the metadata needed to convert image coordinates into logical mouse coordinates.
+
+**Next Step:**
+
+Define reusable perception data models such as `BoundingBox` and `UIElement`.
