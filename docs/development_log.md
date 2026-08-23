@@ -480,3 +480,32 @@ Success. The perception system can now capture a screen image while preserving t
 **Next Step:**
 
 Define reusable perception data models such as `BoundingBox` and `UIElement`.
+
+### Repository Audit Remediation
+
+**Date:** August 23, 2026
+
+**Summary:**
+
+- A complete read-only audit was performed at commit `e19e61f`.
+- Audit result: 0 P0, 0 P1, 4 P2, and 3 P3 findings.
+- Fixed bool values being accepted as integer and numeric tool arguments.
+- Added timezone-awareness validation for `ScreenFrame.captured_at`.
+- Updated README Phase 03 progress.
+- Added regression tests for numeric boolean validation and timestamps.
+- Full test result after remediation: `79 passed`.
+- `pip check` reported no broken requirements.
+
+**Deferred Before Phase 04:**
+
+- Mouse coordinate and duration bounds.
+- URL scheme and browser validation.
+- Import-safe historical experiment scripts.
+
+**Deferred Design Decision:**
+
+Screenshot output should eventually use an approved artifact-root policy rather than simply rejecting every absolute path.
+
+**Next Step:**
+
+Phase 03 Experiment 02 — `BoundingBox` and `UIElement` perception models.

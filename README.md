@@ -4,7 +4,7 @@ A Python-based AI agent that can observe a computer screen, make decisions, and 
 
 ## Current Progress
 
-### Phase 01: Computer Control
+### Phase 01: Basic Computer Control
 
 - [x] Read the mouse position
 - [x] Move and click the mouse
@@ -25,4 +25,9 @@ A Python-based AI agent that can observe a computer screen, make decisions, and 
 - [x] Wrap all 14 computer-control functions as registered tools
 - [x] Complete a real macOS integration experiment
 
-**Next Phase:** Phase 03 — Screen Perception
+### Phase 03: Screen Perception
+
+- [x] Experiment 01: Normalized Screen Capture
+- [ ] Experiment 02: Reusable `BoundingBox` and `UIElement` perception models
+
+**Next Step:** Phase 03 Experiment 02 — reusable `BoundingBox` and `UIElement` perception models
