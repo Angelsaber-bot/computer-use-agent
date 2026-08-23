@@ -266,3 +266,42 @@ Success. All 10 new tool-system tests passed. The complete test suite finished w
 **Commit:**
 
 `9e0012f` — `feat: add base tool interface and registry`
+
+### Formal Module 05: Tool Executor
+
+**Date:** August 22, 2026
+
+**Objective:**
+
+Safely execute structured agent actions through the tool registry and always return a standardized result.
+
+**Source File:**
+
+`src/computer_agent/tools/executor.py`
+
+**Test File:**
+
+`tests/test_tool_executor.py`
+
+**Implemented:**
+
+- Added `ToolExecutor` for executing structured `Action` objects.
+- Connected `Action`, `ToolRegistry`, `BaseTool`, and `ToolResult`.
+- Added platform-availability checks before tool execution.
+- Added automatic tool-argument validation.
+- Converted missing-tool errors into failed `ToolResult` objects.
+- Converted unavailable-tool errors into failed `ToolResult` objects.
+- Converted invalid arguments into failed `ToolResult` objects.
+- Converted runtime exceptions into failed `ToolResult` objects.
+- Added execution timestamps and duration measurement.
+- Kept execution separate from `AgentState` to preserve clear module responsibilities.
+
+**Result:**
+
+Success. All 6 new ToolExecutor tests passed. The complete test suite finished with `43 passed`.
+
+The executor can now safely run registered tools and report failures without crashing the agent. Real computer-control tools will be connected in the next module.
+
+**Commit:**
+
+`2e5bc54` — `feat: add structured tool executor`
