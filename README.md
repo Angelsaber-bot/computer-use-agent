@@ -4,7 +4,7 @@ A Python-based AI agent that can observe a computer screen, make decisions, and 
 
 ## Current Progress
 
-### Phase 01: Computer Control and Tools
+### Phase 01: Computer Control
 
 - [x] Read the mouse position
 - [x] Move and click the mouse
@@ -15,3 +15,14 @@ A Python-based AI agent that can observe a computer screen, make decisions, and 
 - [x] Open webpages
 - [x] Switch between applications
 - [x] Complete a cross-app workflow
+
+### Phase 02: Tool System and Agent State
+
+- [x] Define structured actions, results, observations, and step records
+- [x] Track task status and execution history
+- [x] Create a common tool interface and tool registry
+- [x] Execute structured actions through a safe tool executor
+- [x] Wrap all 14 computer-control functions as registered tools
+- [x] Complete a real macOS integration experiment
+
+**Next Phase:** Phase 03 — Screen Perception
