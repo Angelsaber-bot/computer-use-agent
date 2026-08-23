@@ -29,5 +29,6 @@ A Python-based AI agent that can observe a computer screen, make decisions, and 
 
 - [x] Experiment 01: Normalized Screen Capture
 - [x] Experiment 02: Reusable `BoundingBox` and `UIElement` perception models
+- [x] Experiment 03: Image Preprocessing
 
-**Next Step:** Phase 03 Experiment 03
+**Next Step:** Phase 03 Experiment 04

@@ -551,3 +551,52 @@ Success. The perception package now has reusable data contracts for future scree
 **Next Step:**
 
 Phase 03 Experiment 03.
+
+### Experiment 03: Image Preprocessing
+
+**Date:** August 23, 2026
+
+**Objective:**
+
+Create deterministic, reusable PIL image preprocessing for later screen perception work.
+
+**Experiment File:**
+
+`experiments/phase03_screen_perception/experiment_03_image_preprocessing.py`
+
+**Source File:**
+
+`src/computer_agent/perception/preprocessing.py`
+
+**Test File:**
+
+`tests/test_image_preprocessing.py`
+
+**Output:**
+
+`assets/screenshots/phase03_screen_perception/experiment_03_image_preprocessing.png`
+
+**Implemented:**
+
+- Added `ImagePreprocessor` for grayscale conversion, deterministic resizing, automatic contrast enhancement, and OCR-oriented preparation.
+- Used Pillow grayscale mode `L`.
+- Used `Image.Resampling.LANCZOS` for resized images.
+- Added validation for PIL image inputs and numeric, finite, positive scale factors.
+- Rejected boolean scale factors explicitly.
+- Preserved source images by returning processed copies.
+- Exported `ImagePreprocessor` from `computer_agent.perception`.
+
+**Validation:**
+
+- Focused preprocessing tests finished with `27 passed`.
+- The complete automated test suite finished with `135 passed`.
+- Experiment 03 completed successfully.
+- The saved processed image was mode `L` with dimensions `1470 x 956`.
+
+**Result:**
+
+Success. The perception package now has deterministic image preprocessing that prepares screenshots for future OCR-oriented work without implementing OCR, template matching, UI detection, planner integration, or automation behavior.
+
+**Next Step:**
+
+Phase 03 Experiment 04.
