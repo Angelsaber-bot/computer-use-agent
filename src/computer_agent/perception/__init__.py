@@ -5,6 +5,9 @@ from computer_agent.perception.models import (
     ScreenFrame,
     UIElement,
 )
+from computer_agent.perception.ocr import (
+    TesseractOCR,
+)
 from computer_agent.perception.preprocessing import (
     ImagePreprocessor,
 )
@@ -17,5 +20,6 @@ __all__ = [
     "ImagePreprocessor",
     "ScreenCapture",
     "ScreenFrame",
+    "TesseractOCR",
     "UIElement",
 ]

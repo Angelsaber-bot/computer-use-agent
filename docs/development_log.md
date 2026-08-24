@@ -600,3 +600,96 @@ Success. The perception package now has deterministic image preprocessing that p
 **Next Step:**
 
 Phase 03 Experiment 04.
+
+### Experiment 04: OCR Text Recognition
+
+**Date:** August 23, 2026
+
+**Objective:**
+
+Recognize word-level text from the original high-resolution Phase 03 screenshot using Tesseract OCR and convert accepted OCR words into immutable `UIElement` results.
+
+**Experiment File:**
+
+`experiments/phase03_screen_perception/experiment_04_ocr_text_recognition.py`
+
+**Source File:**
+
+`src/computer_agent/perception/ocr.py`
+
+**Test File:**
+
+`tests/test_ocr.py`
+
+**Input:**
+
+`assets/screenshots/phase03_screen_perception/experiment_01_screen_capture.png`
+
+**Output:**
+
+`assets/screenshots/phase03_screen_perception/experiment_04_ocr_text_recognition.png`
+
+**OCR Engine and Versions:**
+
+- Python package: `pytesseract==0.3.13`
+- External executable: Tesseract `5.5.1`
+- The external `tesseract` executable must be installed as a system prerequisite and available on `PATH`; it is not installed through pip.
+
+**Implemented:**
+
+- Added `TesseractOCR` for sparse English screen text using Tesseract page segmentation mode 11.
+- Used `pytesseract.image_to_data` with `pytesseract.Output.DICT`.
+- Added configurable minimum confidence validation from `0.0` to `1.0`.
+- Converted Tesseract confidence values from `0-100` into normalized `0.0-1.0` values.
+- Filtered empty text, low confidence text, invalid confidence values, invalid boxes, zero-sized boxes, and boxes outside the image dimensions.
+- Returned immutable `UIElement` objects with `element_type="text"`.
+- Preserved source images by passing a copy to the OCR backend.
+- Added Tesseract executable availability reporting.
+- Exported `TesseractOCR` from `computer_agent.perception`.
+- Updated the live experiment to convert the original screenshot to RGB and preserve the Retina pixel dimensions for OCR.
+
+**Experiment Settings:**
+
+- Confidence threshold: `0.70`
+- Input image mode: `RGB`
+- Input pixel dimensions: `2940 x 1912`
+- Logical screen dimensions: `1470 x 956`
+- Coordinate scale: `x=2.00`, `y=2.00`
+- Recognized text elements: `93`
+- Matched expected anchors: `12/12`
+- Annotated output mode: `RGB`
+- Annotated output dimensions: `2940 x 1912`
+
+**OCR Benchmark Results:**
+
+A read-only benchmark compared four inputs using Tesseract page segmentation mode 11:
+
+- The existing `1470 x 956` processed image.
+- The original `2940 x 1912` screenshot converted to RGB.
+- The original screenshot converted to grayscale with automatic contrast.
+- The grayscale automatic-contrast image inverted.
+
+The original high-resolution RGB screenshot was selected because it preserved Retina pixel detail and produced the best confidence profile among variants that recognized all expected anchors. At confidence `0.50`, it recognized `12/12` expected anchors with mean confidence `0.8411` and median confidence `0.9100`. At the final confidence threshold `0.70`, it produced `93` accepted word-level OCR results. Grayscale conversion, automatic contrast, and inversion did not improve recognition. The Experiment 03 preprocessing functions remain valid, but the `0.5x` demonstration image is not the preferred input for small-text OCR.
+
+A separate read-only Apple Vision benchmark compared the current Tesseract baseline with Apple Vision accurate mode using language correction both enabled and disabled. Apple Vision with language correction disabled matched `12/12` expected anchors and was faster than Tesseract on this screenshot, but it returned only `46` larger text observations instead of Tesseract's `93` accepted word-level elements. Range-level Apple Vision boxes were smaller than their parent text-observation boxes for `10/12` anchors, but they were often phrase or chunk boxes rather than precise word boxes. Confidence values from different OCR engines are not directly comparable. The current decision is to retain Tesseract for word-level OCR and defer Apple Vision as a possible coarse-text or fallback backend.
+
+**Validation:**
+
+- Focused OCR tests finished with `23 passed`.
+- The complete automated test suite finished with `158 passed`.
+- Experiment 04 completed successfully with the real Tesseract executable.
+- The saved annotated PNG was verified with Pillow as mode `RGB` and dimensions `2940 x 1912`.
+
+**Limitations:**
+
+- This experiment performs word-level text recognition only.
+- Recognized words are not merged into lines or paragraphs.
+- Buttons and other controls are not classified.
+- OCR bounding boxes are currently high-resolution pixel coordinates, not PyAutoGUI logical coordinates.
+- Future screen parsing must convert OCR coordinates with `logical_x = pixel_x / scale_x` and `logical_y = pixel_y / scale_y` before using them as logical screen coordinates.
+- OCR results can contain errors, especially on small, low-contrast, icon-like, stylized, or partially occluded text.
+- The OCR output is not connected to the planner, locator, mouse, or keyboard systems.
+
+**Result:**
+
+Success. The perception package can now recognize sparse screen text from a high-resolution RGB screenshot and represent accepted words as bounded `UIElement` objects without adding control classification, template matching, screen parsing, coordinate conversion, planner integration, or automation behavior.

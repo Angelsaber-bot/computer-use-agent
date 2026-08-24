@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
     "Pillow",
     "PyAutoGUI==0.9.54",
+    "pytesseract==0.3.13",
     "pyperclip==1.11.0",
 ]
 
