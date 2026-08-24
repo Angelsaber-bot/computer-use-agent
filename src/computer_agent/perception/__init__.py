@@ -1,5 +1,8 @@
 """Screen perception components."""
 
+from computer_agent.perception.coordinates import (
+    ScreenCoordinateMapper,
+)
 from computer_agent.perception.models import (
     BoundingBox,
     ScreenFrame,
@@ -19,6 +22,7 @@ __all__ = [
     "BoundingBox",
     "ImagePreprocessor",
     "ScreenCapture",
+    "ScreenCoordinateMapper",
     "ScreenFrame",
     "TesseractOCR",
     "UIElement",

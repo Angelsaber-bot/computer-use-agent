@@ -36,7 +36,10 @@ A Python-based AI agent that can observe a computer screen, make decisions, and 
 - [x] Experiment 02: Reusable `BoundingBox` and `UIElement` perception models
 - [x] Experiment 03: Image Preprocessing
 - [x] Experiment 04: OCR Text Recognition on high-resolution RGB screenshots
+- [x] Experiment 05: OCR Coordinate Mapping
 
-Experiment 04 uses the original Retina screenshot at `2940 x 1912` with minimum confidence `0.70`, producing `93` accepted word-level OCR elements. OCR bounding boxes are high-resolution pixel coordinates, not PyAutoGUI logical coordinates; future screen parsing will convert them with `logical_x = pixel_x / scale_x` and `logical_y = pixel_y / scale_y`.
+Experiment 04 uses the original Retina screenshot at `2940 x 1912` with minimum confidence `0.70`, producing `93` accepted word-level OCR elements. OCR bounding boxes are high-resolution pixel coordinates, not PyAutoGUI logical coordinates; Experiment 05 now converts them through `ScreenCoordinateMapper`.
 
-**Next Step:** Phase 03 Experiment 05
+Experiment 05 maps OCR pixel boxes into PyAutoGUI logical coordinates using `ScreenFrame` scale metadata. It floors logical left/top edges and ceils logical right/bottom edges so each mapped logical box contains the full pixel OCR region.
+
+**Next Step:** Phase 03 Experiment 06

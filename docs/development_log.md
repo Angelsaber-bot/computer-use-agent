@@ -693,3 +693,77 @@ A separate read-only Apple Vision benchmark compared the current Tesseract basel
 **Result:**
 
 Success. The perception package can now recognize sparse screen text from a high-resolution RGB screenshot and represent accepted words as bounded `UIElement` objects without adding control classification, template matching, screen parsing, coordinate conversion, planner integration, or automation behavior.
+
+### Experiment 05: OCR Coordinate Mapping
+
+**Date:** August 23, 2026
+
+**Objective:**
+
+Convert high-resolution OCR pixel coordinates into PyAutoGUI logical screen coordinates using `ScreenFrame` scale metadata, without performing any mouse, keyboard, or other computer-control action.
+
+**Experiment File:**
+
+`experiments/phase03_screen_perception/experiment_05_ocr_coordinate_mapping.py`
+
+**Source File:**
+
+`src/computer_agent/perception/coordinates.py`
+
+**Test File:**
+
+`tests/test_screen_coordinate_mapper.py`
+
+**Input:**
+
+`assets/screenshots/phase03_screen_perception/experiment_01_screen_capture.png`
+
+**Output:**
+
+`assets/screenshots/phase03_screen_perception/experiment_05_ocr_coordinate_mapping.png`
+
+**Implemented:**
+
+- Added `ScreenCoordinateMapper` for converting screenshot pixel coordinates into logical screen coordinates.
+- Converted pixel points with `logical_x = pixel_x / frame.scale_x` and `logical_y = pixel_y / frame.scale_y`.
+- Converted pixel `BoundingBox` objects into integer logical `BoundingBox` objects.
+- Preserved exclusive right and bottom edge semantics.
+- Used floor for logical left and top edges.
+- Used ceil for logical right and bottom edges.
+- Calculated logical width and height from the converted logical edges so each logical box contains the full mapped pixel region.
+- Converted pixel-coordinate `UIElement` objects into new logical-coordinate `UIElement` objects while preserving element type, text, and confidence.
+- Rejected invalid object types, boolean point values, non-finite point values, out-of-frame points, and boxes outside the `ScreenFrame` pixel dimensions.
+- Kept coordinate mapping independent from Tesseract and PyAutoGUI.
+- Exported `ScreenCoordinateMapper` from `computer_agent.perception`.
+
+**Experiment Settings:**
+
+- OCR backend: Tesseract `5.5.1` through `pytesseract==0.3.13`
+- Tesseract page segmentation mode: `11`
+- Confidence threshold: `0.70`
+- Input image mode: `RGB`
+- Input pixel dimensions: `2940 x 1912`
+- Logical screen dimensions: `1470 x 956`
+- Coordinate scale: `x=2.00`, `y=2.00`
+- OCR pixel elements: `93`
+- Mapped logical elements: `93`
+- Visualization mode: `RGB`
+- Visualization dimensions: `1470 x 956`
+
+**Validation:**
+
+- Focused coordinate-mapping tests finished with `27 passed`.
+- The complete automated test suite finished with `185 passed`.
+- Experiment 05 completed successfully with the real Tesseract executable.
+- The saved logical-coordinate visualization was verified with Pillow as mode `RGB` and dimensions `1470 x 956`.
+- `git diff --check` reported no whitespace errors.
+
+**Limitations:**
+
+- This experiment only maps OCR coordinates; it does not classify controls, parse the screen, locate targets, or execute any input action.
+- Logical boxes are suitable for representing PyAutoGUI coordinate space, but click targeting still requires later validation and locator work.
+- OCR errors and false positives from Experiment 04 are preserved because this module only maps coordinates.
+
+**Result:**
+
+Success. OCR word boxes can now be mapped from high-resolution screenshot pixels into logical screen coordinates using `ScreenFrame` scale metadata while preserving immutable perception models and avoiding any computer-control action.
