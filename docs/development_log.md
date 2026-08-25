@@ -802,44 +802,58 @@ Demonstrate UI text localization by capturing a live screen, recognizing text wi
 - `TextTargetLocator` returns exact matches by default.
 - Matching trims whitespace and is case-insensitive by default.
 - Added `partial_match=True` to enable substring candidate matching for OCR strings with extra punctuation, prefixes, paths, or surrounding text.
+- Added `TextTargetLocator.extract_target()`.
+- `extract_target()` preserves exact-match boxes.
+- For partial matches, `extract_target()` finds the first matching substring and estimates its horizontal position from its character start and end positions within the source OCR text.
+- `extract_target()` floors the left edge, ceils the right edge, keeps the result inside the source box, and guarantees positive width.
+- `extract_target()` preserves element type, confidence, vertical position, and height.
 - Experiment 06 captures a live screenshot with `ComputerController` and `ScreenCapture`.
-- Experiment 06 runs Tesseract OCR at minimum confidence `0.70`.
+- Experiment 06 runs Tesseract OCR at minimum confidence `0.05`.
 - Experiment 06 maps high-resolution OCR pixel boxes into PyAutoGUI logical coordinates with `ScreenCoordinateMapper`.
-- Experiment 06 draws all OCR boxes in green and candidate boxes in red.
+- Experiment 06 keeps original OCR boxes in green.
+- Only extracted target substring boxes are drawn in red.
 - The highest-confidence exact match is preferred when selecting a target.
-- A partial match is selected only when no exact match exists.
-- A red crosshair marks the selected logical center.
+- Partial source matches are fallback candidates.
+- The crosshair uses the selected extracted target center.
 - The experiment performs no mouse or keyboard action.
 
 **Experiment Settings and Results:**
 
 - Target text: `computer_agent`
 - OCR backend: Tesseract
-- Minimum confidence: `0.70`
+- Minimum confidence: `0.05`
 - Screenshot pixel size: `2940 x 1912`
 - Logical screen size: `1470 x 956`
 - Coordinate scale: `x=2.00`, `y=2.00`
-- Recognized OCR elements: `125`
-- Exact matches: `2`
+- Recognized OCR elements: `184`
+- Exact matches: `1`
 - Candidate matches: `6`
-- Selected target center: `x=475.00`, `y=892.50`
+- Selected extracted target center: `x=169.00`, `y=58.00`
+
+**Observed Examples:**
+
+- `~/Desktop/computer_agent`: source box `x=203`, `y=131`, `width=168`, `height=13`; target box `x=273`, `y=131`, `width=98`, `height=13`.
+- Long `/Users/.../computer_agent/...` path: source box `x=93`, `y=708`, `width=443`, `height=14`; target box `x=295`, `y=708`, `width=109`, `height=14`.
 
 **Validation:**
 
-- Focused text-locator tests finished with `10 passed`.
-- The complete automated test suite finished with `195 passed in 0.58s`.
+- Focused text-locator tests finished with `26 passed in 0.10s`.
+- The complete automated test suite finished with `211 passed in 0.57s`.
 - The live localization experiment completed successfully.
 - The visualization was saved as `assets/screenshots/phase03_screen_perception/experiment_06_ui_text_localization.png`.
 
 **Limitations:**
 
 - OCR can miss small or low-confidence text.
-- Results below `0.70` are filtered.
+- A `0.05` threshold improves text coverage but admits more low-confidence OCR candidates.
+- A green OCR box does not guarantee that the recognized text is correct.
 - OCR may return extra punctuation, prefixes, paths, or incomplete words.
-- Partial matching improves candidate recall but can produce broader candidates.
+- Substring boxes are character-proportion estimates.
+- Substring boxes are most accurate for monospaced text and may be less precise with proportional fonts.
+- Low-confidence targets will require verification before future mouse actions.
 - Duplicate text still requires contextual target selection.
 - No mouse movement or clicking occurs yet.
 
 **Result:**
 
-Experiment 06 successfully demonstrated the complete perception path from live screenshot capture through OCR, logical-coordinate mapping, text candidate localization, exact-match prioritization, and visual verification without executing a computer-control action.
+Experiment 06 now demonstrates high-recall OCR candidate collection and target-only substring localization inside longer OCR strings, while remaining visualization-only.

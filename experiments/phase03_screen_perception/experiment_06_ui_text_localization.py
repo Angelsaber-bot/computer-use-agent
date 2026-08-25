@@ -27,7 +27,7 @@ OUTPUT_PATH = (
     / "experiment_06_ui_text_localization.png"
 )
 TARGET_TEXT = "computer_agent"
-MINIMUM_CONFIDENCE = 0.70
+MINIMUM_CONFIDENCE = 0.05
 
 
 def _preview_text(text: str) -> str:
@@ -119,6 +119,16 @@ def _draw_crosshair(
     )
 
 
+def _is_exact_match(
+    element,
+    exact_matches,
+) -> bool:
+    return any(
+        element is exact_match
+        for exact_match in exact_matches
+    )
+
+
 def main() -> int:
     INPUT_PATH.parent.mkdir(
         parents=True,
@@ -153,20 +163,50 @@ def main() -> int:
         TARGET_TEXT,
         partial_match=True,
     )
+    candidate_targets = []
+
+    for candidate in candidate_matches:
+        extracted = TextTargetLocator.extract_target(
+            candidate,
+            TARGET_TEXT,
+        )
+        assert extracted is not None
+        candidate_targets.append(
+            (
+                candidate,
+                extracted,
+                "exact"
+                if _is_exact_match(
+                    candidate,
+                    exact_matches,
+                )
+                else "partial",
+            )
+        )
 
     assert candidate_matches, (
         f"Expected at least one target candidate: {TARGET_TEXT}"
     )
 
-    selected = max(
+    selected_source = max(
         exact_matches or candidate_matches,
         key=lambda element: element.confidence,
     )
-    selected_center = selected.center
+    selected_target = TextTargetLocator.extract_target(
+        selected_source,
+        TARGET_TEXT,
+    )
+    assert selected_target is not None
+    selected_center = selected_target.center
 
-    for match in candidate_matches:
+    for _, target, _ in candidate_targets:
         _assert_box_inside_screen(
-            match.bounding_box,
+            target.bounding_box,
+            frame.screen_width,
+            frame.screen_height,
+        )
+        _assert_point_inside_screen(
+            target.center,
             frame.screen_width,
             frame.screen_height,
         )
@@ -196,8 +236,8 @@ def main() -> int:
             width=1,
         )
 
-    for match in candidate_matches:
-        box = match.bounding_box
+    for _, target, _ in candidate_targets:
+        box = target.bounding_box
         draw.rectangle(
             (
                 box.left,
@@ -234,25 +274,22 @@ def main() -> int:
     print(f"Candidate matches: {len(candidate_matches)}")
 
     for index, match in enumerate(
-        candidate_matches,
+        candidate_targets,
         start=1,
     ):
-        match_type = (
-            "exact"
-            if match in exact_matches
-            else "partial"
-        )
+        source, target, match_type = match
         print(
             f"{index:02d}. "
-            f"text='{_preview_text(match.text or '')}', "
+            f"source_text='{_preview_text(source.text or '')}', "
             f"match_type={match_type}, "
-            f"confidence={match.confidence:.2f}, "
-            f"logical_bbox={_format_box(match.bounding_box)}, "
-            f"logical_center={_format_point(match.center)}"
+            f"confidence={source.confidence:.2f}, "
+            f"source_logical_bbox={_format_box(source.bounding_box)}, "
+            f"target_logical_bbox={_format_box(target.bounding_box)}, "
+            f"target_logical_center={_format_point(target.center)}"
         )
 
     print(
-        "Selected target center: "
+        "Selected extracted target center: "
         f"{_format_point(selected_center)}"
     )
     print(f"Visualization path: {OUTPUT_PATH}")

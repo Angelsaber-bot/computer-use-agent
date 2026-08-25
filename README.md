@@ -43,6 +43,6 @@ Experiment 04 uses the original Retina screenshot at `2940 x 1912` with minimum 
 
 Experiment 05 maps OCR pixel boxes into PyAutoGUI logical coordinates using `ScreenFrame` scale metadata. It floors logical left/top edges and ceils logical right/bottom edges so each mapped logical box contains the full pixel OCR region.
 
-Experiment 06 captures a live screen, runs Tesseract OCR, converts pixel boxes to PyAutoGUI logical coordinates, supports exact and opt-in partial text matching, prefers exact matches when selecting a target, and creates a visualization without moving or clicking the mouse.
+Experiment 06 captures a live screen, runs Tesseract OCR at minimum confidence `0.05` to retain low-confidence text candidates, converts pixel boxes to PyAutoGUI logical coordinates, supports exact and partial text matching, extracts the matching target substring from longer OCR strings, estimates a target-only logical bounding box from character position, draws the extracted target box and selected center, and performs no mouse or keyboard action.
 
 **Next Step:** Phase 03 Experiment 07 — Safe Mouse Movement to a Localized Text Target
