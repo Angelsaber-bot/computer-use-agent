@@ -767,3 +767,79 @@ Convert high-resolution OCR pixel coordinates into PyAutoGUI logical screen coor
 **Result:**
 
 Success. OCR word boxes can now be mapped from high-resolution screenshot pixels into logical screen coordinates using `ScreenFrame` scale metadata while preserving immutable perception models and avoiding any computer-control action.
+
+### Experiment 06: UI Text Localization
+
+**Date:** August 25, 2026
+
+**Objective:**
+
+Demonstrate UI text localization by capturing a live screen, recognizing text with OCR, converting OCR pixel boxes into PyAutoGUI logical coordinates, locating a target text candidate, and visualizing the selected target without executing a computer-control action.
+
+**Experiment File:**
+
+`experiments/phase03_screen_perception/experiment_06_ui_text_localization.py`
+
+**Source File:**
+
+`src/computer_agent/perception/text_locator.py`
+
+**Test File:**
+
+`tests/test_text_locator.py`
+
+**Input:**
+
+`assets/screenshots/phase03_screen_perception/experiment_06_ui_text_localization_input.png`
+
+**Output:**
+
+`assets/screenshots/phase03_screen_perception/experiment_06_ui_text_localization.png`
+
+**Implemented:**
+
+- Added `TextTargetLocator` for locating OCR `UIElement` objects by text.
+- `TextTargetLocator` returns exact matches by default.
+- Matching trims whitespace and is case-insensitive by default.
+- Added `partial_match=True` to enable substring candidate matching for OCR strings with extra punctuation, prefixes, paths, or surrounding text.
+- Experiment 06 captures a live screenshot with `ComputerController` and `ScreenCapture`.
+- Experiment 06 runs Tesseract OCR at minimum confidence `0.70`.
+- Experiment 06 maps high-resolution OCR pixel boxes into PyAutoGUI logical coordinates with `ScreenCoordinateMapper`.
+- Experiment 06 draws all OCR boxes in green and candidate boxes in red.
+- The highest-confidence exact match is preferred when selecting a target.
+- A partial match is selected only when no exact match exists.
+- A red crosshair marks the selected logical center.
+- The experiment performs no mouse or keyboard action.
+
+**Experiment Settings and Results:**
+
+- Target text: `computer_agent`
+- OCR backend: Tesseract
+- Minimum confidence: `0.70`
+- Screenshot pixel size: `2940 x 1912`
+- Logical screen size: `1470 x 956`
+- Coordinate scale: `x=2.00`, `y=2.00`
+- Recognized OCR elements: `125`
+- Exact matches: `2`
+- Candidate matches: `6`
+- Selected target center: `x=475.00`, `y=892.50`
+
+**Validation:**
+
+- Focused text-locator tests finished with `10 passed`.
+- The complete automated test suite finished with `195 passed in 0.58s`.
+- The live localization experiment completed successfully.
+- The visualization was saved as `assets/screenshots/phase03_screen_perception/experiment_06_ui_text_localization.png`.
+
+**Limitations:**
+
+- OCR can miss small or low-confidence text.
+- Results below `0.70` are filtered.
+- OCR may return extra punctuation, prefixes, paths, or incomplete words.
+- Partial matching improves candidate recall but can produce broader candidates.
+- Duplicate text still requires contextual target selection.
+- No mouse movement or clicking occurs yet.
+
+**Result:**
+
+Experiment 06 successfully demonstrated the complete perception path from live screenshot capture through OCR, logical-coordinate mapping, text candidate localization, exact-match prioritization, and visual verification without executing a computer-control action.

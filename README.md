@@ -37,9 +37,12 @@ A Python-based AI agent that can observe a computer screen, make decisions, and 
 - [x] Experiment 03: Image Preprocessing
 - [x] Experiment 04: OCR Text Recognition on high-resolution RGB screenshots
 - [x] Experiment 05: OCR Coordinate Mapping
+- [x] Experiment 06: UI Text Localization
 
 Experiment 04 uses the original Retina screenshot at `2940 x 1912` with minimum confidence `0.70`, producing `93` accepted word-level OCR elements. OCR bounding boxes are high-resolution pixel coordinates, not PyAutoGUI logical coordinates; Experiment 05 now converts them through `ScreenCoordinateMapper`.
 
 Experiment 05 maps OCR pixel boxes into PyAutoGUI logical coordinates using `ScreenFrame` scale metadata. It floors logical left/top edges and ceils logical right/bottom edges so each mapped logical box contains the full pixel OCR region.
 
-**Next Step:** Phase 03 Experiment 06
+Experiment 06 captures a live screen, runs Tesseract OCR, converts pixel boxes to PyAutoGUI logical coordinates, supports exact and opt-in partial text matching, prefers exact matches when selecting a target, and creates a visualization without moving or clicking the mouse.
+
+**Next Step:** Phase 03 Experiment 07 — Safe Mouse Movement to a Localized Text Target

@@ -17,6 +17,9 @@ from computer_agent.perception.preprocessing import (
 from computer_agent.perception.screen_capture import (
     ScreenCapture,
 )
+from computer_agent.perception.text_locator import (
+    TextTargetLocator,
+)
 
 __all__ = [
     "BoundingBox",
@@ -26,4 +29,5 @@ __all__ = [
     "ScreenFrame",
     "TesseractOCR",
     "UIElement",
+    "TextTargetLocator",
 ]
