@@ -9,7 +9,10 @@ from computer_agent.perception.text_locator import (
 )
 
 
-def make_element(text: str) -> UIElement:
+def make_element(
+    text: str,
+    confidence: float = 0.95,
+) -> UIElement:
     return UIElement(
         element_type="text",
         bounding_box=BoundingBox(
@@ -18,7 +21,7 @@ def make_element(text: str) -> UIElement:
             width=80,
             height=30,
         ),
-        confidence=0.95,
+        confidence=confidence,
         text=text,
     )
 
@@ -161,6 +164,179 @@ def test_find_first_supports_partial_matching():
     )
 
     assert result is first
+
+
+def test_find_best_returns_highest_confidence_match():
+    low = make_element(
+        "Next",
+        confidence=0.4,
+    )
+    high = make_element(
+        "Next",
+        confidence=0.9,
+    )
+
+    result = TextTargetLocator.find_best(
+        (low, high),
+        "Next",
+    )
+
+    assert result is high
+
+
+def test_find_best_filters_low_confidence_matches():
+    low = make_element(
+        "Next",
+        confidence=0.69,
+    )
+    high = make_element(
+        "Next",
+        confidence=0.8,
+    )
+
+    result = TextTargetLocator.find_best(
+        (low, high),
+        "Next",
+        minimum_confidence=0.7,
+    )
+
+    assert result is high
+
+
+def test_find_best_threshold_is_inclusive():
+    element = make_element(
+        "Next",
+        confidence=0.7,
+    )
+
+    result = TextTargetLocator.find_best(
+        (element,),
+        "Next",
+        minimum_confidence=0.7,
+    )
+
+    assert result is element
+
+
+def test_find_best_uses_exact_matching_by_default():
+    partial = make_element(
+        "Next:",
+        confidence=0.99,
+    )
+    exact = make_element(
+        "Next",
+        confidence=0.5,
+    )
+
+    result = TextTargetLocator.find_best(
+        (partial, exact),
+        "Next",
+    )
+
+    assert result is exact
+
+
+def test_find_best_supports_partial_matching():
+    partial = make_element(
+        "Next:",
+        confidence=0.99,
+    )
+    exact = make_element(
+        "Next",
+        confidence=0.5,
+    )
+
+    result = TextTargetLocator.find_best(
+        (partial, exact),
+        "Next",
+        partial_match=True,
+    )
+
+    assert result is partial
+
+
+def test_find_best_preserves_case_sensitive_matching():
+    lowercase = make_element(
+        "next",
+        confidence=0.99,
+    )
+    uppercase = make_element(
+        "Next",
+        confidence=0.5,
+    )
+
+    result = TextTargetLocator.find_best(
+        (lowercase, uppercase),
+        "Next",
+        case_sensitive=True,
+    )
+
+    assert result is uppercase
+
+
+def test_find_best_returns_first_match_when_confidence_ties():
+    first = make_element(
+        "Next",
+        confidence=0.8,
+    )
+    second = make_element(
+        "Next",
+        confidence=0.8,
+    )
+
+    result = TextTargetLocator.find_best(
+        (first, second),
+        "Next",
+    )
+
+    assert result is first
+
+
+def test_find_best_returns_none_when_no_match_is_eligible():
+    result = TextTargetLocator.find_best(
+        (
+            make_element(
+                "Next",
+                confidence=0.69,
+            ),
+            make_element(
+                "Back",
+                confidence=0.99,
+            ),
+        ),
+        "Next",
+        minimum_confidence=0.7,
+    )
+
+    assert result is None
+
+
+@pytest.mark.parametrize(
+    ("minimum_confidence", "error_message"),
+    [
+        (True, "minimum_confidence must be numeric"),
+        (False, "minimum_confidence must be numeric"),
+        ("0.7", "minimum_confidence must be numeric"),
+        (float("nan"), "minimum_confidence must be finite"),
+        (float("inf"), "minimum_confidence must be finite"),
+        (float("-inf"), "minimum_confidence must be finite"),
+        (-0.01, "minimum_confidence must be between 0.0 and 1.0"),
+        (1.01, "minimum_confidence must be between 0.0 and 1.0"),
+    ],
+)
+def test_find_best_rejects_invalid_minimum_confidence(
+    minimum_confidence,
+    error_message,
+):
+    with pytest.raises(
+        ValueError,
+        match=error_message,
+    ):
+        TextTargetLocator.find_best(
+            (make_element("Next"),),
+            "Next",
+            minimum_confidence=minimum_confidence,
+        )
 
 
 def test_extract_target_exact_match_preserves_original_box():

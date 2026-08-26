@@ -44,6 +44,41 @@ class TextTargetLocator:
 
         return tuple(matches)
 
+    @classmethod
+    def find_best(
+        cls,
+        elements: Iterable[UIElement],
+        target_text: str,
+        *,
+        case_sensitive: bool = False,
+        partial_match: bool = False,
+        minimum_confidence: float = 0.0,
+    ) -> UIElement | None:
+        """Return the highest-confidence matching element."""
+
+        minimum_confidence = cls._validate_minimum_confidence(
+            minimum_confidence
+        )
+        matches = cls.find_all(
+            elements,
+            target_text,
+            case_sensitive=case_sensitive,
+            partial_match=partial_match,
+        )
+        best_match = None
+
+        for match in matches:
+            if match.confidence < minimum_confidence:
+                continue
+
+            if (
+                best_match is None
+                or match.confidence > best_match.confidence
+            ):
+                best_match = match
+
+        return best_match
+
     @staticmethod
     def extract_target(
         element: UIElement,
@@ -159,3 +194,27 @@ class TextTargetLocator:
             )
 
         return target_text.strip()
+
+    @staticmethod
+    def _validate_minimum_confidence(
+        minimum_confidence: float,
+    ) -> float:
+        if (
+            isinstance(minimum_confidence, bool)
+            or not isinstance(minimum_confidence, (int, float))
+        ):
+            raise ValueError(
+                "minimum_confidence must be numeric"
+            )
+
+        if not math.isfinite(minimum_confidence):
+            raise ValueError(
+                "minimum_confidence must be finite"
+            )
+
+        if not 0.0 <= minimum_confidence <= 1.0:
+            raise ValueError(
+                "minimum_confidence must be between 0.0 and 1.0"
+            )
+
+        return float(minimum_confidence)

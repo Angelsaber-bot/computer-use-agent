@@ -857,3 +857,125 @@ Demonstrate UI text localization by capturing a live screen, recognizing text wi
 **Result:**
 
 Experiment 06 now demonstrates high-recall OCR candidate collection and target-only substring localization inside longer OCR strings, while remaining visualization-only.
+
+### Experiment 07: Safe Mouse Movement to a Localized Text Target
+
+**Date:** August 25, 2026
+
+**Objective:**
+
+Demonstrate a guarded observe-to-act path that captures a live screen, localizes a target text candidate, plans a safe mouse movement through structured tool actions, verifies the reached cursor position, restores the original cursor position, and never clicks.
+
+**Experiment File:**
+
+`experiments/phase03_screen_perception/experiment_07_safe_mouse_movement.py`
+
+**Source File:**
+
+`src/computer_agent/perception/text_locator.py`
+
+**Test File:**
+
+`tests/test_text_locator.py`
+
+**Input:**
+
+`assets/screenshots/phase03_screen_perception/experiment_07_safe_mouse_movement_input.png`
+
+**Output:**
+
+`assets/screenshots/phase03_screen_perception/experiment_07_safe_mouse_movement_plan.png`
+
+**Implemented:**
+
+- Added `TextTargetLocator.find_best()`.
+- `find_best()` reuses existing matching behavior.
+- `find_best()` validates `minimum_confidence` between `0.0` and `1.0`.
+- `find_best()` returns the highest-confidence eligible match.
+- Equal-confidence ties preserve the original element order.
+- Experiment 07 uses exact matching first and partial matching only as fallback.
+- Partial matches use `extract_target()` to estimate the target-only box.
+- OCR candidate collection uses minimum confidence `0.05`.
+- Mouse movement requires action confidence of at least `0.70`.
+- The default mode is dry-run and creates no input-control `Action`.
+- Real movement requires the explicit `--execute` flag.
+- Execution uses `Action`, `ToolRegistry`, `ToolExecutor`, and `create_computer_tools()`.
+- Only `get_mouse_position` and `move_mouse` actions are used.
+- No click, keyboard, clipboard, scrolling, application, or browser action occurs.
+- The script verifies the reached cursor position.
+- The original cursor position is restored in a `finally` block after successful target movement.
+- Restoration is also verified.
+- The plan image draws OCR boxes in green and the selected target box and crosshair in red.
+- Screen dimensions and coordinate scale come from the live `ScreenFrame`.
+
+**Experiment Settings and Results:**
+
+- Target text: `computer_agent`
+- OCR candidate confidence: `0.05`
+- Action confidence: `0.70`
+- Screenshot pixel size: `2940 x 1912`
+- Logical screen size: `1470 x 956`
+- Coordinate scale: `x=2.00`, `y=2.00`
+- Movement duration: `1.0` seconds
+- Countdown: `3` seconds
+- Target hold: `2.0` seconds
+- Position tolerance: `1` logical pixel
+- Safe edge margin: `10` logical pixels
+
+Dry-run results:
+
+- Accepted OCR source elements: `287`
+- Match type: `exact`
+- Confidence: `0.91`
+- Source box: `x=119`, `y=52`, `width=100`, `height=12`
+- Extracted target box: `x=119`, `y=52`, `width=100`, `height=12`
+- Planned movement point: `x=169`, `y=58`
+- No input-control `Action` was created or executed.
+
+Execute-mode results:
+
+- Accepted OCR source elements: `229`
+- Match type: `exact`
+- Confidence: `0.91`
+- Planned movement point: `x=169`, `y=58`
+- Original cursor position: `x=668`, `y=955`
+- Reached cursor position: `x=169`, `y=58`
+- Restored cursor position: `x=668`, `y=955`
+- Execution completed successfully.
+- No click occurred.
+
+**Validation:**
+
+- Experiment file compiled successfully with `py_compile`.
+- Focused text-locator tests finished with `42 passed in 0.09s`.
+- The complete automated test suite finished with `227 passed in 0.59s`.
+- `git diff --check` passed.
+- Dry-run completed successfully.
+- Execute mode completed successfully.
+- Refactored Experiment 07 file length: `382` lines.
+
+**Safety Measures:**
+
+- Explicit `--execute` gate.
+- Three-second countdown.
+- PyAutoGUI fail-safe remains enabled.
+- Execution aborts when the initial cursor is in a fail-safe corner.
+- Target point must be inside the logical screen and at least `10` pixels from its edges.
+- Target confidence must be at least `0.70`.
+- Reached and restored positions must be within one logical pixel.
+- Restoration is attempted in `finally` after successful movement to the target.
+- The experiment never clicks.
+
+**Limitations:**
+
+- Duplicate exact text is currently selected by confidence rather than UI context.
+- OCR and the live interface may change between separate runs.
+- Partial target boxes remain character-proportion estimates.
+- The screenshot is not recaptured immediately before movement for target re-verification.
+- The experiment verifies cursor position but not whether a UI element remained unchanged.
+- It moves only and does not click yet.
+- The `1.0`-second movement duration is intentionally visible for experimentation and may later become configurable for production use.
+
+**Result:**
+
+Experiment 07 successfully demonstrated a guarded observe-to-act path from live screenshot capture and OCR localization to structured mouse movement, reached-position verification, and cursor restoration without clicking.
