@@ -10,7 +10,7 @@
 Read and display the current mouse position.
 
 **File:**  
-`experiments/phase01_computer_control/experiment_01_mouse_position_test.py`
+`experiments/phase01_computer_control/experiment_01_mouse_position.py`
 
 **Result:**  
 Success. The program returned the mouse position `x=723, y=436`.
@@ -23,7 +23,7 @@ Success. The program returned the mouse position `x=723, y=436`.
 Move the mouse to the screen center and return it to its starting position.
 
 **File:**  
-`experiments/phase01_computer_control/experiment_02_mouse_movement_test.py`
+`experiments/phase01_computer_control/experiment_02_mouse_movement.py`
 
 **Result:**  
 Success. The mouse moved to `(735, 478)` and returned to its starting position.
@@ -36,7 +36,7 @@ Success. The mouse moved to `(735, 478)` and returned to its starting position.
 Perform a mouse click at a selected safe location.
 
 **File:**  
-`experiments/phase01_computer_control/experiment_03_mouse_click_test.py`
+`experiments/phase01_computer_control/experiment_03_mouse_click.py`
 
 **Result:**  
 Success. The program clicked at `(987, 245)`.
@@ -49,7 +49,7 @@ Success. The program clicked at `(987, 245)`.
 Open a new TextEdit document and type text automatically.
 
 **File:**  
-`experiments/phase01_computer_control/experiment_04_keyboard_typing_test.py`
+`experiments/phase01_computer_control/experiment_04_keyboard_typing.py`
 
 **Result:**  
 Success. The program created a TextEdit document and typed the test message correctly.
@@ -62,7 +62,7 @@ Success. The program created a TextEdit document and typed the test message corr
 Write text to the system clipboard and read it back.
 
 **File:**  
-`experiments/phase01_computer_control/experiment_05_clipboard_test.py`
+`experiments/phase01_computer_control/experiment_05_clipboard.py`
 
 **Result:**  
 Success. The copied and retrieved text matched.
@@ -75,7 +75,7 @@ Success. The copied and retrieved text matched.
 Scroll down and up inside a scrollable page.
 
 **File:**  
-`experiments/phase01_computer_control/experiment_06_scroll_test.py`
+`experiments/phase01_computer_control/experiment_06_scroll.py`
 
 **Result:**  
 Success. The page scrolled down and returned upward correctly.
@@ -91,7 +91,7 @@ Detect the end of a page by comparing screenshots before and after scrolling.
 Capture the computer screen and save it as an image file.
 
 **File:**  
-`experiments/phase01_computer_control/experiment_07_screenshot_test.py`
+`experiments/phase01_computer_control/experiment_07_screenshot.py`
 
 **Output:**  
 `assets/screenshots/phase01_computer_control/experiment_07_screen.png`
@@ -107,7 +107,7 @@ Success. The program captured the full screen and saved the image correctly.
 Open Google Chrome and navigate to a specified URL.
 
 **File:**  
-`experiments/phase01_computer_control/experiment_08_browser_navigation_test.py`
+`experiments/phase01_computer_control/experiment_08_browser_navigation.py`
 
 **Result:**  
 Success. Google Chrome opened `https://example.com`.
@@ -120,7 +120,7 @@ Success. Google Chrome opened `https://example.com`.
 Switch between multiple macOS applications automatically.
 
 **File:**  
-`experiments/phase01_computer_control/experiment_09_app_switching_test.py`
+`experiments/phase01_computer_control/experiment_09_app_switching.py`
 
 **Result:**  
 Success. The program activated TextEdit and then switched to Google Chrome.
@@ -133,7 +133,7 @@ Success. The program activated TextEdit and then switched to Google Chrome.
 Combine browser navigation, clipboard access, app switching, keyboard input, and screenshot capture.
 
 **File:**  
-`experiments/phase01_computer_control/experiment_10_cross_app_workflow_test.py`
+`experiments/phase01_computer_control/experiment_10_cross_app_workflow.py`
 
 **Output:**  
 `assets/screenshots/phase01_computer_control/experiment_10_workflow.png`
