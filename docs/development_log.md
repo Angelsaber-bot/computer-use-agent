@@ -979,3 +979,122 @@ Execute-mode results:
 **Result:**
 
 Experiment 07 successfully demonstrated a guarded observe-to-act path from live screenshot capture and OCR localization to structured mouse movement, reached-position verification, and cursor restoration without clicking.
+
+### Experiment 08: Verified Click on a Localized Text Target
+
+**Date:** August 26, 2026
+
+**Objective:**
+
+Demonstrate a guarded verified-click path that captures a live fixture screen, localizes a target text button, moves and clicks through structured tool actions, captures the screen again, verifies the clicked state through OCR, and restores the original cursor position.
+
+**Experiment File:**
+
+`experiments/phase03_screen_perception/experiment_08_verified_click.py`
+
+**Fixture File:**
+
+`assets/fixtures/phase03_screen_perception/experiment_08_verified_click.html`
+
+**Before Screenshot:**
+
+`assets/screenshots/phase03_screen_perception/experiment_08_verified_click_before.png`
+
+**Plan Screenshot:**
+
+`assets/screenshots/phase03_screen_perception/experiment_08_verified_click_plan.png`
+
+**After Screenshot:**
+
+`assets/screenshots/phase03_screen_perception/experiment_08_verified_click_after.png`
+
+**Implemented:**
+
+- Target text is `SAFE_CLICK_TARGET_08`.
+- Verification text is `CLICK_VERIFIED`.
+- OCR candidate collection uses minimum confidence `0.05`.
+- Mouse control requires action confidence of at least `0.70`.
+- The default dry-run mode creates and executes no mouse-control `Action`.
+- Real control requires the explicit `--execute` flag.
+- A five-second pre-capture countdown lets the user switch to the already-open Chrome fixture before the initial screenshot.
+- A three-second pre-movement countdown runs before execute-mode mouse movement.
+- The browser fixture is opened or reloaded manually, not automatically.
+- Target localization uses exact matching first and partial matching only as fallback.
+- The experiment aborts if `CLICK_VERIFIED` is already visible, because the fixture is already in its verified state.
+- The target box and click point are validated against the logical screen bounds and safe edge margin.
+- PyAutoGUI fail-safe corner protection remains enabled.
+- Execution uses structured `get_mouse_position`, `move_mouse`, and `click_mouse` `Action` objects.
+- The script verifies the reached cursor position before clicking.
+- After clicking, the script waits briefly, captures a new screenshot, and performs a second OCR pass.
+- Success requires `CLICK_VERIFIED` to meet the action-confidence threshold.
+- Cursor restoration and restoration verification run in a `finally` block.
+- The fixture button colors were changed from white-on-blue to black-on-light-yellow because the first full-screen PSM 11 OCR dry-run omitted the target entirely.
+
+**Experiment Settings and Live Results:**
+
+- Screenshot pixel size: `2940 x 1912`
+- Logical screen size: `1470 x 956`
+- Coordinate scale: `x=2.00`, `y=2.00`
+- Target text: `SAFE_CLICK_TARGET_08`
+- Verification text: `CLICK_VERIFIED`
+- OCR candidate confidence: `0.05`
+- Action confidence: `0.70`
+
+Successful dry-run:
+
+- Accepted OCR elements: `59`
+- Match type: `exact`
+- Source text: `SAFE_CLICK_TARGET_08`
+- Confidence: `0.88`
+- Source logical box: `x=454`, `y=541`, `width=562`, `height=45`
+- Planned click point: `x=735`, `y=564`
+- No mouse-control `Action` was created or executed.
+
+Successful execute mode:
+
+- Accepted initial OCR elements: `59`
+- Original cursor position: `x=460`, `y=859`
+- Reached cursor position: `x=735`, `y=564`
+- Clicked position: `x=735`, `y=564`
+- After-click OCR elements: `58`
+- Verification text: `CLICK_VERIFIED`
+- Verification confidence: `0.90`
+- Restored cursor position: `x=460`, `y=859`
+- Verified click completed successfully.
+
+**Validation:**
+
+- Experiment file compiled successfully with `py_compile`.
+- The complete automated test suite finished with `227 passed in 0.61s`.
+- `git diff --check` passed.
+- Dry-run completed successfully.
+- Real execute-mode test completed successfully.
+
+**Safety Measures:**
+
+- Explicit `--execute` gate.
+- Five-second pre-capture countdown.
+- Three-second pre-movement countdown.
+- PyAutoGUI fail-safe remains enabled.
+- Execution aborts when the initial cursor is in a fail-safe corner.
+- Target point must be inside the logical screen and at least `10` pixels from its edges.
+- Target confidence must be at least `0.70`.
+- The fixture must not already show `CLICK_VERIFIED` before clicking.
+- Reached and restored positions must be within one logical pixel.
+- Restoration is attempted in `finally` after movement to the target.
+- The experiment uses one structured `click_mouse` action only after successful target localization and reached-position verification.
+
+**Limitations:**
+
+- The target text is predetermined rather than selected by task reasoning.
+- Duplicate text still lacks contextual disambiguation.
+- OCR remains sensitive to visual contrast and layout.
+- The fixture must be manually opened or reloaded and kept in the foreground.
+- Verification currently depends on visible OCR text.
+- This experiment does not yet perform recovery retries after a failed click or failed verification.
+
+**Result:**
+
+Experiment 08 successfully demonstrated a guarded verified-click path from live screenshot capture and OCR localization to structured mouse movement, click execution, after-click OCR verification, and cursor restoration.
+
+**Next Step:** Phase 03 Experiment 09
