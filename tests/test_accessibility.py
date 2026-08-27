@@ -63,6 +63,7 @@ class FakeAppKit:
 
 class FakeApplicationServices:
     kAXFocusedWindowAttribute = "AXFocusedWindow"
+    kAXFocusedUIElementAttribute = "AXFocusedUIElement"
     kAXChildrenAttribute = "AXChildren"
     kAXRoleAttribute = "AXRole"
     kAXTitleAttribute = "AXTitle"
@@ -123,6 +124,20 @@ class FakeApplicationServices:
         return value
 
 
+class FakeCoreFoundation:
+    def __init__(self):
+        self.comparisons = []
+
+    def CFEqual(
+        self,
+        first,
+        second,
+    ):
+        self.comparisons.append((first, second))
+
+        return first is second
+
+
 def _node(
     *,
     role=None,
@@ -180,16 +195,28 @@ def _install_fake_accessibility(
     *,
     trusted=True,
     pid=4242,
+    focused_element=None,
+    focused_element_error=False,
 ):
+    application_attributes = {
+        "AXFocusedWindow": window,
+    }
+    if focused_element is not None:
+        application_attributes["AXFocusedUIElement"] = focused_element
+
+    application_error_attributes = set()
+    if focused_element_error:
+        application_error_attributes.add("AXFocusedUIElement")
+
     application_element = FakeAXElement(
-        {
-            "AXFocusedWindow": window,
-        }
+        application_attributes,
+        application_error_attributes,
     )
     services = FakeApplicationServices(
         application_element,
         trusted=trusted,
     )
+    core_foundation = FakeCoreFoundation()
     application = FakeFrontmostApplication(pid)
     workspace = FakeWorkspace(application)
     appkit = FakeAppKit(workspace)
@@ -200,8 +227,20 @@ def _install_fake_accessibility(
         "ApplicationServices",
         services,
     )
+    monkeypatch.setattr(
+        accessibility_module,
+        "CoreFoundation",
+        core_foundation,
+    )
 
-    return appkit, services, application, workspace, application_element
+    return (
+        appkit,
+        services,
+        core_foundation,
+        application,
+        workspace,
+        application_element,
+    )
 
 
 def _read_controls(
@@ -306,6 +345,7 @@ def test_read_frontmost_controls_uses_pid_based_frontmost_application_path(
     (
         appkit,
         services,
+        _core_foundation,
         application,
         workspace,
         application_element,
@@ -326,6 +366,12 @@ def test_read_frontmost_controls_uses_pid_based_frontmost_application_path(
         application_element,
         "AXFocusedWindow",
     ) in services.attribute_reads
+    assert services.attribute_reads.count(
+        (
+            application_element,
+            "AXFocusedUIElement",
+        )
+    ) == 1
 
 
 def test_role_mapping_for_supported_controls_preserves_tree_order(
@@ -468,6 +514,202 @@ def test_enabled_and_focused_are_extracted_only_for_bool_values(monkeypatch):
     assert controls[0].focused is False
     assert controls[1].enabled is None
     assert controls[1].focused is None
+
+
+def test_application_level_focused_element_is_marked_focused(monkeypatch):
+    focused_control = _node(
+        role="AXTextField",
+        title="FOCUSED_FIELD",
+        focused=False,
+    )
+    other_control = _node(
+        role="AXButton",
+        title="OTHER_BUTTON",
+        focused=True,
+    )
+    window = _node(
+        role="AXWindow",
+        children=[
+            focused_control,
+            other_control,
+        ],
+    )
+    _install_fake_accessibility(
+        monkeypatch,
+        window,
+        focused_element=focused_control,
+    )
+
+    controls = MacOSAccessibility().read_frontmost_controls()
+
+    assert [control.text for control in controls] == [
+        "FOCUSED_FIELD",
+        "OTHER_BUTTON",
+    ]
+    assert controls[0].focused is True
+    assert controls[1].focused is False
+
+
+def test_application_level_focus_uses_element_identity_not_metadata(
+    monkeypatch,
+):
+    focused_control = _node(
+        role="AXTextField",
+        title="DUPLICATE_FIELD",
+        identifier="duplicate-field",
+        value="same value",
+        position=(100, 200),
+        size=(300, 40),
+    )
+    duplicate_control = _node(
+        role="AXTextField",
+        title="DUPLICATE_FIELD",
+        identifier="duplicate-field",
+        value="same value",
+        position=(100, 200),
+        size=(300, 40),
+    )
+    window = _node(
+        role="AXWindow",
+        children=[
+            focused_control,
+            duplicate_control,
+        ],
+    )
+    (
+        _appkit,
+        _services,
+        core_foundation,
+        _application,
+        _workspace,
+        _application_element,
+    ) = _install_fake_accessibility(
+        monkeypatch,
+        window,
+        focused_element=focused_control,
+    )
+
+    controls = MacOSAccessibility().read_frontmost_controls()
+
+    assert [control.text for control in controls] == [
+        "DUPLICATE_FIELD",
+        "DUPLICATE_FIELD",
+    ]
+    assert [control.focused for control in controls] == [
+        True,
+        False,
+    ]
+    assert (
+        duplicate_control,
+        focused_control,
+    ) in core_foundation.comparisons
+
+
+def test_application_focus_takes_precedence_over_direct_focused_false(
+    monkeypatch,
+):
+    focused_control = _node(
+        role="AXTextField",
+        title="FOCUSED_FIELD",
+        focused=False,
+    )
+    window = _node(
+        role="AXWindow",
+        children=[focused_control],
+    )
+    _install_fake_accessibility(
+        monkeypatch,
+        window,
+        focused_element=focused_control,
+    )
+
+    controls = MacOSAccessibility().read_frontmost_controls()
+
+    assert controls[0].focused is True
+
+
+def test_failed_application_focused_element_read_falls_back_to_direct_attribute(
+    monkeypatch,
+):
+    focused_control = _node(
+        role="AXTextField",
+        title="DIRECTLY_FOCUSED_FIELD",
+        focused=True,
+    )
+    unfocused_control = _node(
+        role="AXButton",
+        title="DIRECTLY_UNFOCUSED_BUTTON",
+        focused=False,
+    )
+    window = _node(
+        role="AXWindow",
+        children=[
+            focused_control,
+            unfocused_control,
+        ],
+    )
+    _install_fake_accessibility(
+        monkeypatch,
+        window,
+        focused_element_error=True,
+    )
+
+    controls = MacOSAccessibility().read_frontmost_controls()
+
+    assert [control.focused for control in controls] == [
+        True,
+        False,
+    ]
+
+
+def test_missing_application_focused_element_does_not_crash_traversal(
+    monkeypatch,
+):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXButton",
+                title="BUTTON_WITHOUT_FOCUS_METADATA",
+            ),
+        ],
+    )
+
+    assert len(controls) == 1
+    assert controls[0].focused is None
+
+
+def test_selected_remains_none_with_application_level_focus(monkeypatch):
+    checkbox = _node(
+        role="AXCheckBox",
+        title="CHECKBOX",
+        focused=True,
+    )
+    radio = _node(
+        role="AXRadioButton",
+        title="RADIO",
+        focused=True,
+    )
+    window = _node(
+        role="AXWindow",
+        children=[
+            checkbox,
+            radio,
+        ],
+    )
+    _install_fake_accessibility(
+        monkeypatch,
+        window,
+        focused_element=radio,
+    )
+
+    controls = MacOSAccessibility().read_frontmost_controls()
+
+    assert [control.focused for control in controls] == [
+        False,
+        True,
+    ]
+    assert all(control.selected is None for control in controls)
 
 
 def test_selected_is_always_none(monkeypatch):

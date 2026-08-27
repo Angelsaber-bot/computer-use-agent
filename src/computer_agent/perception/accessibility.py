@@ -15,6 +15,11 @@ try:
 except ImportError:  # pragma: no cover - depends on host platform
     ApplicationServices = None  # type: ignore[assignment]
 
+try:
+    import CoreFoundation
+except ImportError:  # pragma: no cover - depends on host platform
+    CoreFoundation = None  # type: ignore[assignment]
+
 from computer_agent.perception.models import BoundingBox, UIElement
 
 
@@ -98,11 +103,17 @@ class MacOSAccessibility:
         if focused_window is None:
             return []
 
+        focused_element = _copy_attribute(
+            application,
+            _ax_constant("kAXFocusedUIElementAttribute"),
+        )
+
         controls: list[UIElement] = []
         self._traverse(
             focused_window,
             depth=0,
             controls=controls,
+            focused_element=focused_element,
         )
 
         return controls
@@ -124,6 +135,7 @@ class MacOSAccessibility:
         *,
         depth: int,
         controls: list[UIElement],
+        focused_element: Any | None,
     ) -> None:
         if len(controls) >= self.maximum_elements:
             return
@@ -138,6 +150,7 @@ class MacOSAccessibility:
             control = _control_from_element(
                 element,
                 mapped_role,
+                focused_element,
             )
 
             if control is not None:
@@ -159,6 +172,7 @@ class MacOSAccessibility:
                 child,
                 depth=depth + 1,
                 controls=controls,
+                focused_element=focused_element,
             )
 
             if len(controls) >= self.maximum_elements:
@@ -205,6 +219,7 @@ def _iter_children(children: Any) -> tuple[Any, ...]:
 def _control_from_element(
     element: Any,
     mapped_role: str,
+    focused_element: Any | None,
 ) -> UIElement | None:
     bounding_box = _bounding_box_from_element(element)
 
@@ -219,7 +234,7 @@ def _control_from_element(
         identifier=_identifier_from_element(element),
         value=_value_from_element(element),
         enabled=_bool_attribute(element, "kAXEnabledAttribute"),
-        focused=_bool_attribute(element, "kAXFocusedAttribute"),
+        focused=_focused_from_element(element, focused_element),
         # Chrome did not reliably expose checkbox/radio state through AXValue
         # or AXSelected during validation.
         selected=None,
@@ -286,6 +301,51 @@ def _bool_attribute(
 
     if type(value) is bool:
         return value
+
+    return None
+
+
+def _focused_from_element(
+    element: Any,
+    focused_element: Any | None,
+) -> bool | None:
+    if focused_element is not None:
+        return _same_accessibility_element(
+            element,
+            focused_element,
+        )
+
+    return _bool_attribute(element, "kAXFocusedAttribute")
+
+
+def _same_accessibility_element(
+    first: Any,
+    second: Any,
+) -> bool:
+    equal = _core_foundation_equal()
+
+    if equal is not None:
+        try:
+            return bool(
+                equal(
+                    first,
+                    second,
+                )
+            )
+        except Exception:
+            pass
+
+    return first is second
+
+
+def _core_foundation_equal():
+    if CoreFoundation is not None:
+        equal = getattr(CoreFoundation, "CFEqual", None)
+        if equal is not None:
+            return equal
+
+    if ApplicationServices is not None:
+        return getattr(ApplicationServices, "CFEqual", None)
 
     return None
 
