@@ -96,6 +96,11 @@ class MacOSAccessibility:
         if application is None:
             return []
 
+        _copy_attribute(
+            application,
+            _ax_constant("kAXRoleAttribute"),
+        )
+
         focused_window = _copy_attribute(
             application,
             _ax_constant("kAXFocusedWindowAttribute"),

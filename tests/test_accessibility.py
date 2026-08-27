@@ -87,6 +87,7 @@ class FakeApplicationServices:
         self.trusted = trusted
         self.created_application_pids = []
         self.attribute_reads = []
+        self.attribute_writes = []
 
     def AXIsProcessTrusted(self):
         return self.trusted
@@ -111,6 +112,16 @@ class FakeApplicationServices:
             return 1, None
 
         return self.kAXErrorSuccess, element.attributes[attribute]
+
+    def AXUIElementSetAttributeValue(
+        self,
+        element,
+        attribute,
+        value,
+    ):
+        self.attribute_writes.append((element, attribute, value))
+
+        return self.kAXErrorSuccess
 
     def AXValueGetValue(
         self,
@@ -197,14 +208,20 @@ def _install_fake_accessibility(
     pid=4242,
     focused_element=None,
     focused_element_error=False,
+    application_role="AXApplication",
+    application_role_error=False,
 ):
     application_attributes = {
+        "AXRole": application_role,
         "AXFocusedWindow": window,
     }
     if focused_element is not None:
         application_attributes["AXFocusedUIElement"] = focused_element
 
     application_error_attributes = set()
+    if application_role_error:
+        application_error_attributes.add("AXRole")
+
     if focused_element_error:
         application_error_attributes.add("AXFocusedUIElement")
 
@@ -241,6 +258,14 @@ def _install_fake_accessibility(
         workspace,
         application_element,
     )
+
+
+def _attribute_read_index(
+    services,
+    element,
+    attribute,
+):
+    return services.attribute_reads.index((element, attribute))
 
 
 def _read_controls(
@@ -369,9 +394,154 @@ def test_read_frontmost_controls_uses_pid_based_frontmost_application_path(
     assert services.attribute_reads.count(
         (
             application_element,
+            "AXRole",
+        )
+    ) == 1
+    assert services.attribute_reads.count(
+        (
+            application_element,
             "AXFocusedUIElement",
         )
     ) == 1
+
+
+def test_application_role_is_requested_once_per_read_frontmost_controls_call(
+    monkeypatch,
+):
+    control = _node(
+        role="AXButton",
+        title="ACTIVE_BUTTON",
+    )
+    window = _node(
+        role="AXWindow",
+        children=[control],
+    )
+    (
+        _appkit,
+        services,
+        _core_foundation,
+        _application,
+        _workspace,
+        application_element,
+    ) = _install_fake_accessibility(monkeypatch, window)
+    reader = MacOSAccessibility()
+
+    first_controls = reader.read_frontmost_controls()
+    second_controls = reader.read_frontmost_controls()
+
+    assert [control.text for control in first_controls] == ["ACTIVE_BUTTON"]
+    assert [control.text for control in second_controls] == ["ACTIVE_BUTTON"]
+    assert services.attribute_reads.count(
+        (
+            application_element,
+            "AXRole",
+        )
+    ) == 2
+    assert services.attribute_writes == []
+
+
+def test_application_role_is_requested_before_focus_and_traversal(
+    monkeypatch,
+):
+    focused_control = _node(
+        role="AXTextField",
+        title="FOCUSED_FIELD",
+        identifier="focused-field",
+        value="ready",
+        enabled=True,
+    )
+    window = _node(
+        role="AXWindow",
+        children=[focused_control],
+    )
+    (
+        _appkit,
+        services,
+        _core_foundation,
+        _application,
+        _workspace,
+        application_element,
+    ) = _install_fake_accessibility(
+        monkeypatch,
+        window,
+        focused_element=focused_control,
+    )
+
+    controls = MacOSAccessibility().read_frontmost_controls()
+
+    application_role_index = _attribute_read_index(
+        services,
+        application_element,
+        "AXRole",
+    )
+    focused_element_index = _attribute_read_index(
+        services,
+        application_element,
+        "AXFocusedUIElement",
+    )
+    focused_window_index = _attribute_read_index(
+        services,
+        application_element,
+        "AXFocusedWindow",
+    )
+    window_traversal_index = _attribute_read_index(
+        services,
+        window,
+        "AXRole",
+    )
+
+    assert len(controls) == 1
+    assert controls[0].element_type == "text_field"
+    assert controls[0].text == "FOCUSED_FIELD"
+    assert controls[0].identifier == "focused-field"
+    assert controls[0].value == "ready"
+    assert controls[0].enabled is True
+    assert application_role_index < focused_element_index
+    assert application_role_index < focused_window_index
+    assert application_role_index < window_traversal_index
+    assert services.attribute_writes == []
+
+
+def test_failed_application_role_request_does_not_prevent_window_traversal(
+    monkeypatch,
+):
+    control = _node(
+        role="AXButton",
+        title="BUTTON_AFTER_FAILED_ROLE_PROBE",
+    )
+    window = _node(
+        role="AXWindow",
+        children=[control],
+    )
+    (
+        _appkit,
+        services,
+        _core_foundation,
+        _application,
+        _workspace,
+        application_element,
+    ) = _install_fake_accessibility(
+        monkeypatch,
+        window,
+        application_role_error=True,
+    )
+
+    controls = MacOSAccessibility().read_frontmost_controls()
+
+    assert [control.text for control in controls] == [
+        "BUTTON_AFTER_FAILED_ROLE_PROBE",
+    ]
+    assert services.attribute_reads.count(
+        (
+            application_element,
+            "AXRole",
+        )
+    ) == 1
+    assert (
+        application_element,
+        "AXFocusedWindow",
+    ) in services.attribute_reads
+    assert services.attribute_writes == []
 
 
 def test_role_mapping_for_supported_controls_preserves_tree_order(

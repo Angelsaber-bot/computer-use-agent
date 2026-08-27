@@ -42,6 +42,7 @@ A Python-based AI agent that can observe a computer screen, make decisions, and 
 - [x] Experiment 08: Verified Click on a Localized Text Target
 - [x] Experiment 09: Recovery Retry with Visual State Verification
 - [x] Experiment 10: macOS Accessibility Element Detection
+- [x] Experiment 11: Accessibility-Grounded Text Input
 
 Experiment 04 uses the original Retina screenshot at `2940 x 1912` with minimum confidence `0.70`, producing `93` accepted word-level OCR elements. OCR bounding boxes are high-resolution pixel coordinates, not PyAutoGUI logical coordinates; Experiment 05 now converts them through `ScreenCoordinateMapper`.
 
@@ -57,4 +58,6 @@ Experiment 09 defaults to dry-run and requires `--execute` for real control. It 
 
 Experiment 10 reads the focused macOS window through the Accessibility API and detects semantic controls including empty text fields, buttons, checkboxes, popup buttons, and radio buttons. It returns roles, accessible names, identifiers, values, enabled/focused state, logical bounding boxes, and source metadata; distinguishes enabled and disabled controls; detects an empty input field without relying on visible OCR text; remains completely read-only; and produces an annotated screenshot.
 
-**Next Step:** Phase 03 Experiment 11
+Experiment 11 locates a specific empty text field through macOS Accessibility semantics, selects it among an enabled decoy and a disabled field, defaults to dry-run, and requires `--execute` for real control. It uses structured mouse and keyboard `Action` objects, verifies focus before typing, verifies the exact final Accessibility value, confirms the decoy and disabled fields remain unchanged, and restores the original cursor position.
+
+**Next Step:** Phase 03 Experiment 12

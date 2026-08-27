@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phase 03 Experiment 11 — Accessibility-Grounded Text Input</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page-bg: #f7f7f7;
+      --panel-bg: #ffffff;
+      --disabled-bg: #d9d9d9;
+      --text: #111111;
+      --border: #111111;
+      --focus: #005fcc;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+    }
+
+    body {
+      background: var(--page-bg);
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      padding: 24px;
+    }
+
+    main {
+      margin: 0 auto;
+      max-width: 1120px;
+    }
+
+    h1 {
+      font-size: 44px;
+      font-weight: 900;
+      line-height: 1.1;
+      margin: 0 0 22px;
+      text-align: center;
+    }
+
+    form {
+      display: grid;
+      gap: 18px;
+    }
+
+    .field-panel {
+      background: var(--panel-bg);
+      border: 4px solid var(--border);
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    label {
+      display: block;
+      font-size: 34px;
+      font-weight: 900;
+      line-height: 1.1;
+      margin: 0 0 12px;
+    }
+
+    input[type="text"] {
+      background: #ffffff;
+      border: 4px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font: inherit;
+      font-size: 34px;
+      font-weight: 800;
+      min-height: 66px;
+      padding: 10px 14px;
+      width: 100%;
+    }
+
+    input[type="text"]:disabled {
+      background: var(--disabled-bg);
+      color: var(--text);
+      opacity: 1;
+    }
+
+    input[type="text"]:focus-visible {
+      outline: 6px solid var(--focus);
+      outline-offset: 4px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ACCESSIBILITY_INPUT_FIXTURE_11</h1>
+    <form autocomplete="off">
+      <div class="field-panel">
+        <label for="decoy-text-field">DECOY_TEXT_FIELD_11</label>
+        <input
+          id="decoy-text-field"
+          type="text"
+          value="DECOY_VALUE_11"
+          autocomplete="off"
+          spellcheck="false"
+        >
+      </div>
+
+      <div class="field-panel">
+        <label for="target-text-field">TARGET_TEXT_FIELD_11</label>
+        <input
+          id="target-text-field"
+          type="text"
+          value=""
+          autocomplete="off"
+          spellcheck="false"
+        >
+      </div>
+
+      <div class="field-panel">
+        <label for="disabled-text-field">DISABLED_TEXT_FIELD_11</label>
+        <input
+          id="disabled-text-field"
+          type="text"
+          value="LOCKED_VALUE_11"
+          disabled
+        >
+      </div>
+    </form>
+  </main>
+
+  <script>
+    const resetFieldValues = () => {
+      document.getElementById("decoy-text-field").value = "DECOY_VALUE_11";
+      document.getElementById("target-text-field").value = "";
+      document.getElementById("disabled-text-field").value = "LOCKED_VALUE_11";
+    };
+
+    window.addEventListener("load", resetFieldValues);
+    window.addEventListener("pageshow", resetFieldValues);
+  </script>
+</body>
+</html>

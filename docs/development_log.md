@@ -1334,4 +1334,155 @@ Checked-state limitation:
 
 Experiment 10 demonstrated that the agent can discover actionable UI semantics and logical control bounds directly from the focused macOS Accessibility tree, including an empty text field that OCR alone cannot localize reliably.
 
-**Next Step:** Phase 03 Experiment 11
+### Experiment 11: Accessibility-Grounded Text Input
+
+**Date:** August 27, 2026
+
+**Objective:**
+
+Demonstrate a guarded observe -> semantically locate -> click -> verify focus -> type -> verify value -> restore cursor workflow using macOS Accessibility grounding and structured computer-control actions.
+
+**Experiment File:**
+
+`experiments/phase03_screen_perception/experiment_11_accessibility_text_input.py`
+
+**Fixture File:**
+
+`assets/fixtures/phase03_screen_perception/experiment_11_accessibility_text_input.html`
+
+The fixture contains three native labeled text inputs:
+
+- `DECOY_TEXT_FIELD_11` appears before the target and starts with `DECOY_VALUE_11`.
+- `TARGET_TEXT_FIELD_11` is enabled and initially empty.
+- `DISABLED_TEXT_FIELD_11` starts with `LOCKED_VALUE_11` and is disabled.
+- Native labels provide exact accessible names.
+- `load` and `pageshow` reset handlers prevent Chrome from restoring stale input values.
+- The fixture contains no success text, submit button, autofocus, or automatic interaction.
+
+**Before Screenshot:**
+
+`assets/screenshots/phase03_screen_perception/experiment_11_accessibility_text_input_before.png`
+
+**Plan Screenshot:**
+
+`assets/screenshots/phase03_screen_perception/experiment_11_accessibility_text_input_plan.png`
+
+**After Screenshot:**
+
+`assets/screenshots/phase03_screen_perception/experiment_11_accessibility_text_input_after.png`
+
+**Implemented:**
+
+- The target value typed by the experiment is `ACCESSIBILITY_TYPED_VALUE_11`.
+- Exact semantic text, identifier, type, enabled state, value, source, confidence, and geometry are validated.
+- Accessibility logical bounds determine the click point without OCR or fixed coordinates.
+- The default mode is dry-run.
+- Real control requires the explicit `--execute` flag.
+- Dry-run creates and executes no mouse or keyboard control `Action`.
+- Execute mode uses structured `get_mouse_position`, `move_mouse`, `click_mouse`, and `type_text` actions.
+- A fresh Accessibility observation and fresh target center are required immediately before movement.
+- Reached mouse position is verified before clicking.
+- After clicking, the target must be the unique focused control before typing is permitted.
+- After typing, completion requires the exact target value.
+- The decoy and disabled-field values must remain unchanged.
+- The disabled field must remain disabled.
+- Cursor restoration and verification run in `finally` after movement begins.
+- The typed value intentionally remains in the target after success.
+- The macOS Accessibility adapter used by this workflow is `src/computer_agent/perception/accessibility.py`.
+- Focused fake-framework coverage for the adapter is in `tests/test_accessibility.py`.
+
+Bounded observation recovery:
+
+- Each semantic stage supports up to five fresh Accessibility observations.
+- Retry delay is `0.25` seconds.
+- Retries apply to initial, pre-movement, post-click focus, and post-typing value observations.
+- No `Action` is performed from an incomplete observation.
+- Exact safety validation is never weakened.
+
+Chrome Accessibility activation:
+
+- An initial execute attempt safely aborted because Chrome exposed browser controls but temporarily omitted the webpage Accessibility subtree.
+- The captured screenshot proved that the correct fixture was fully rendered.
+- Five repeated reads still omitted the webpage fields, so this was not ordinary rendering delay.
+- Before activation, the reader returned `36` controls and no fixture fields.
+- `AXEnhancedUserInterface` mutation was rejected with error `-25208` and is not used by the implementation.
+- Reading `kAXRoleAttribute` from the `AXApplication` activated Chrome's native webpage Accessibility support.
+- After the application-role request, the reader returned `39` controls and all three fixture fields.
+- `MacOSAccessibility` now performs this generic read-only application-role request before reading focused UI element, focused window, and window descendants.
+- The reader contains no Chrome-name branch, Accessibility setter, or internal sleep.
+- A failed best-effort application-role read does not prevent otherwise valid traversal.
+
+**Experiment Settings and Live Results:**
+
+Live dry-run results:
+
+- Screenshot pixel size: `2940 x 1912`
+- Logical screen size: `1470 x 956`
+- Coordinate scale: `x=2.00`, `y=2.00`
+- Total frontmost-window controls: `39`
+- Target box: `BoundingBox(x=197, y=469, width=1076, height=68)`
+- Planned click point: `(735, 503)`
+- Target was empty, enabled, unfocused, source `accessibility`, and confidence `1.0`.
+- No mouse-control or keyboard-control `Action` was created or executed.
+
+Successful execute result:
+
+- Total initial controls: `39`
+- Original cursor position: `(507, 763)`
+- Fresh target box: `BoundingBox(x=197, y=469, width=1076, height=68)`
+- Fresh click point: `(735, 503)`
+- Reached cursor position: `(735, 503)`
+- Target focus was verified before typing.
+- Final target value: `ACCESSIBILITY_TYPED_VALUE_11`
+- Final decoy value: `DECOY_VALUE_11`
+- Final disabled value: `LOCKED_VALUE_11`
+- Cursor restored to: `(507, 763)`
+- No successful-stage observation retry was needed.
+- The execute workflow completed successfully.
+
+**Validation:**
+
+- `tests/test_accessibility.py`: `40 passed`
+- Complete automated test suite: `293 passed in 0.65s`
+- Experiment script compiled successfully with `py_compile`.
+- `git diff --check` passed.
+- Semantic fixture validation passed.
+- Dry-run completed successfully.
+- Execute mode completed successfully.
+- Before, plan, and after screenshots were visually verified.
+
+**Safety Measures:**
+
+- Explicit `--execute` gate.
+- Five-second initial countdown.
+- Three-second pre-movement countdown.
+- PyAutoGUI fail-safe remains enabled.
+- Exact semantic target and identifier validation.
+- Initial target must be empty and enabled.
+- Decoy and disabled-field invariant checks.
+- Positive geometry and logical-screen edge validation.
+- Fresh observation and coordinate recalculation before movement.
+- Reached-position verification.
+- Focus verification before typing.
+- Final value verification after typing.
+- Bounded observation retries without weakened validation.
+- Structured `Action` objects only.
+- Cursor restoration in `finally`.
+
+**Limitations:**
+
+- macOS Accessibility permission is required.
+- Accessibility metadata depends on application support.
+- Chrome may initialize its webpage Accessibility tree on demand.
+- The fixture must be manually opened, freshly reloaded, and kept in front.
+- The target is predetermined rather than chosen by task reasoning.
+- The typed test value is ASCII.
+- This experiment covers text input but not checkbox, radio, popup, or submit workflows.
+- It does not yet fuse Accessibility elements with OCR.
+- Checkbox/radio checked state remains unknown in the current Chrome AX mapping.
+
+**Result:**
+
+Experiment 11 demonstrated a guarded semantic input workflow from Accessibility-based field discovery through structured clicking, verified focus, structured typing, exact value verification, invariant protection, and cursor restoration.
+
+**Next Step:** Phase 03 Experiment 12
