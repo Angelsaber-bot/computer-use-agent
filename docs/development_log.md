@@ -1226,4 +1226,112 @@ Final post-maintenance execute validation:
 
 Experiment 09 demonstrated observe -> locate -> act -> capture fresh observation -> visually verify -> relocate -> retry -> stop on success -> restore cursor.
 
-**Next Step:** Phase 03 Experiment 10
+### Experiment 10: macOS Accessibility Element Detection
+
+**Date:** August 27, 2026
+
+**Objective:**
+
+Demonstrate read-only semantic control detection from the focused macOS Accessibility tree, validating native controls in the Experiment 10 Chrome fixture and creating an annotated screenshot of their logical actionable bounds.
+
+**Experiment File:**
+
+`experiments/phase03_screen_perception/experiment_10_accessibility_elements.py`
+
+**Fixture File:**
+
+`assets/fixtures/phase03_screen_perception/experiment_10_accessibility_elements.html`
+
+**Before Screenshot:**
+
+`assets/screenshots/phase03_screen_perception/experiment_10_accessibility_elements_before.png`
+
+**Annotated Screenshot:**
+
+`assets/screenshots/phase03_screen_perception/experiment_10_accessibility_elements_annotated.png`
+
+**Implemented:**
+
+- Added the Darwin-only dependency `pyobjc-framework-ApplicationServices==12.2.2`.
+- Added optional semantic metadata to `UIElement` in `src/computer_agent/perception/models.py`: `identifier`, `value`, `enabled`, `focused`, `selected`, and `source`.
+- Existing `UIElement` construction remains backward compatible.
+- Added the read-only `MacOSAccessibility` adapter in `src/computer_agent/perception/accessibility.py`.
+- Framework imports remain safe on unsupported platforms.
+- The reader exposes `is_available()`, `is_trusted()`, and `read_frontmost_controls()`.
+- Frontmost application discovery uses `NSWorkspace` to obtain the PID, `AXUIElementCreateApplication` for the application element, and the focused-window Accessibility tree.
+- Traversal has maximum-element and maximum-depth limits.
+- Supported mappings are `AXTextField -> text_field`, `AXButton -> button`, `AXCheckBox -> checkbox`, `AXPopUpButton -> popup_button`, and `AXRadioButton -> radio_button`.
+- Accessible title is preferred with description fallback.
+- `AXDOMIdentifier` is preserved as `identifier`.
+- Position and size are converted into logical `BoundingBox` values.
+- Left and top use floor; right and bottom use ceil.
+- Accessibility-derived controls use source `"accessibility"` and confidence `1.0`.
+- Invalid or unavailable geometry is skipped.
+- Experiment 10 performs no mouse, keyboard, focus, value-change, or structured `Action` operation.
+- The experiment validates exactly eight fixture controls and draws their actionable bounds on a copied screenshot.
+- Focused tests cover the Accessibility adapter in `tests/test_accessibility.py`.
+- Focused model tests cover semantic `UIElement` metadata in `tests/test_perception_models.py`.
+
+**Experiment Settings and Live Results:**
+
+- Accessibility available: `True`
+- Accessibility trusted: `True`
+- Screenshot pixel size: `2940 x 1912`
+- Logical screen size: `1470 x 956`
+- Coordinate scale: `x=2.00`, `y=2.00`
+- Total frontmost-window controls: `40`
+- Matched fixture controls: `8`
+- All eight controls had exact expected semantic types and identifiers.
+- `EMPTY_TEXT_FIELD_10` was detected as a `text_field` even though its value was empty.
+- `ACTIVE_BUTTON_10` was enabled.
+- `DISABLED_BUTTON_10` was disabled.
+- `MODE_SELECTOR_10` exposed `MODE_ALPHA_10` as its current value.
+- All fixture elements used source `accessibility` and confidence `1.0`.
+- All bounding boxes were inside the logical screen.
+- Visual inspection confirmed that every annotation matched its actionable control area.
+
+Checked-state limitation:
+
+- Chrome returned unreliable `AXValue` and `AXSelected` information for native checkbox and radio checked state.
+- The adapter therefore reports `selected=None` instead of making a false inference.
+- Checked-state recovery is deferred to later OCR/visual and Accessibility fusion work.
+
+**Validation:**
+
+- `tests/test_perception_models.py` finished with `55 passed`.
+- `tests/test_accessibility.py` finished with `31 passed`.
+- The complete automated test suite finished with `284 passed in 0.63s`.
+- Experiment script compiled successfully with `py_compile`.
+- `git diff --check` passed.
+- Live integration experiment completed successfully.
+- Annotated screenshot was visually verified.
+
+**Safety Measures:**
+
+- Read-only Accessibility traversal.
+- No `--execute` mode.
+- No computer-control `Action`.
+- No mouse movement or clicking.
+- No keyboard input.
+- No focus or value changes.
+- Accessibility availability and trust are checked before capture.
+- Exact fixture-control validation.
+- Positive geometry and logical-screen bounds validation.
+- Bounded tree traversal.
+
+**Limitations:**
+
+- The adapter is macOS-specific.
+- Accessibility permission is required.
+- Accessibility metadata quality depends on the application.
+- Browser interface controls are returned alongside webpage controls and require semantic filtering.
+- Chrome does not reliably expose checkbox/radio checked state through the tested AX attributes.
+- The current experiment reads only the focused window.
+- This experiment does not yet fuse Accessibility results with OCR.
+- This experiment detects controls but does not interact with them.
+
+**Result:**
+
+Experiment 10 demonstrated that the agent can discover actionable UI semantics and logical control bounds directly from the focused macOS Accessibility tree, including an empty text field that OCR alone cannot localize reliably.
+
+**Next Step:** Phase 03 Experiment 11

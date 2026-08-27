@@ -1,5 +1,8 @@
 """Screen perception components."""
 
+from computer_agent.perception.accessibility import (
+    MacOSAccessibility,
+)
 from computer_agent.perception.coordinates import (
     ScreenCoordinateMapper,
 )
@@ -24,6 +27,7 @@ from computer_agent.perception.text_locator import (
 __all__ = [
     "BoundingBox",
     "ImagePreprocessor",
+    "MacOSAccessibility",
     "ScreenCapture",
     "ScreenCoordinateMapper",
     "ScreenFrame",

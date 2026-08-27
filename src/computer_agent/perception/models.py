@@ -17,6 +17,32 @@ def _validate_int_field(name: str, value: Any) -> None:
         )
 
 
+def _validate_optional_non_empty_string(
+    name: str,
+    value: Any,
+) -> None:
+    if value is None:
+        return
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"{name} must be a non-empty string or None"
+        )
+
+
+def _validate_optional_bool(
+    name: str,
+    value: Any,
+) -> None:
+    if value is None:
+        return
+
+    if not isinstance(value, bool):
+        raise ValueError(
+            f"{name} must be a bool or None"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class BoundingBox:
     """A rectangular region using exclusive right and bottom edges."""
@@ -137,6 +163,12 @@ class UIElement:
     bounding_box: BoundingBox
     confidence: float = 1.0
     text: str | None = None
+    identifier: str | None = None
+    value: str | int | float | bool | None = None
+    enabled: bool | None = None
+    focused: bool | None = None
+    selected: bool | None = None
+    source: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -169,6 +201,36 @@ class UIElement:
             raise ValueError(
                 "text must be a string or None"
             )
+
+        _validate_optional_non_empty_string(
+            "identifier",
+            self.identifier,
+        )
+
+        if self.value is not None and not isinstance(
+            self.value,
+            (str, int, float, bool),
+        ):
+            raise ValueError(
+                "value must be a string, number, boolean, or None"
+            )
+
+        _validate_optional_bool(
+            "enabled",
+            self.enabled,
+        )
+        _validate_optional_bool(
+            "focused",
+            self.focused,
+        )
+        _validate_optional_bool(
+            "selected",
+            self.selected,
+        )
+        _validate_optional_non_empty_string(
+            "source",
+            self.source,
+        )
 
     @property
     def center(self) -> tuple[float, float]:

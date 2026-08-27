@@ -1,0 +1,668 @@
+import math
+
+import pytest
+
+import computer_agent.perception.accessibility as accessibility_module
+from computer_agent.perception import MacOSAccessibility
+from computer_agent.perception import MacOSAccessibility as ExportedMacOSAccessibility
+from computer_agent.perception import UIElement
+
+
+class FakeAXValue:
+    def __init__(self, value):
+        self.value = value
+
+
+class FakeAXElement:
+    def __init__(
+        self,
+        attributes=None,
+        error_attributes=None,
+    ):
+        self.attributes = attributes or {}
+        self.error_attributes = set(error_attributes or ())
+
+
+class FakeFrontmostApplication:
+    def __init__(self, pid):
+        self.pid = pid
+        self.process_identifier_calls = 0
+
+    def processIdentifier(self):
+        self.process_identifier_calls += 1
+
+        return self.pid
+
+
+class FakeWorkspace:
+    def __init__(self, application):
+        self.application = application
+        self.frontmost_application_calls = 0
+
+    def frontmostApplication(self):
+        self.frontmost_application_calls += 1
+
+        return self.application
+
+
+class FakeNSWorkspace:
+    def __init__(self, workspace):
+        self.workspace = workspace
+        self.shared_workspace_calls = 0
+
+    def sharedWorkspace(self):
+        self.shared_workspace_calls += 1
+
+        return self.workspace
+
+
+class FakeAppKit:
+    def __init__(self, workspace):
+        self.NSWorkspace = FakeNSWorkspace(workspace)
+
+
+class FakeApplicationServices:
+    kAXFocusedWindowAttribute = "AXFocusedWindow"
+    kAXChildrenAttribute = "AXChildren"
+    kAXRoleAttribute = "AXRole"
+    kAXTitleAttribute = "AXTitle"
+    kAXDescriptionAttribute = "AXDescription"
+    kAXDOMIdentifierAttribute = "AXDOMIdentifier"
+    kAXValueAttribute = "AXValue"
+    kAXEnabledAttribute = "AXEnabled"
+    kAXFocusedAttribute = "AXFocused"
+    kAXPositionAttribute = "AXPosition"
+    kAXSizeAttribute = "AXSize"
+    kAXErrorSuccess = 0
+    kAXValueCGPointType = "point"
+    kAXValueCGSizeType = "size"
+
+    def __init__(
+        self,
+        application_element,
+        trusted=True,
+    ):
+        self.application_element = application_element
+        self.trusted = trusted
+        self.created_application_pids = []
+        self.attribute_reads = []
+
+    def AXIsProcessTrusted(self):
+        return self.trusted
+
+    def AXUIElementCreateApplication(self, pid):
+        self.created_application_pids.append(pid)
+
+        return self.application_element
+
+    def AXUIElementCopyAttributeValue(
+        self,
+        element,
+        attribute,
+        _output,
+    ):
+        self.attribute_reads.append((element, attribute))
+
+        if attribute in element.error_attributes:
+            raise RuntimeError(f"attribute failed: {attribute}")
+
+        if attribute not in element.attributes:
+            return 1, None
+
+        return self.kAXErrorSuccess, element.attributes[attribute]
+
+    def AXValueGetValue(
+        self,
+        value,
+        _value_type,
+        _output,
+    ):
+        if isinstance(value, FakeAXValue):
+            return value.value
+
+        return value
+
+
+def _node(
+    *,
+    role=None,
+    title=None,
+    description=None,
+    identifier=None,
+    value=None,
+    enabled=None,
+    focused=None,
+    position=(10, 20),
+    size=(30, 40),
+    children=(),
+    error_attributes=(),
+):
+    attributes = {
+        "AXChildren": list(children),
+    }
+
+    if role is not None:
+        attributes["AXRole"] = role
+
+    if title is not None:
+        attributes["AXTitle"] = title
+
+    if description is not None:
+        attributes["AXDescription"] = description
+
+    if identifier is not None:
+        attributes["AXDOMIdentifier"] = identifier
+
+    if value is not None:
+        attributes["AXValue"] = value
+
+    if enabled is not None:
+        attributes["AXEnabled"] = enabled
+
+    if focused is not None:
+        attributes["AXFocused"] = focused
+
+    if position is not None:
+        attributes["AXPosition"] = position
+
+    if size is not None:
+        attributes["AXSize"] = size
+
+    return FakeAXElement(
+        attributes,
+        error_attributes,
+    )
+
+
+def _install_fake_accessibility(
+    monkeypatch,
+    window,
+    *,
+    trusted=True,
+    pid=4242,
+):
+    application_element = FakeAXElement(
+        {
+            "AXFocusedWindow": window,
+        }
+    )
+    services = FakeApplicationServices(
+        application_element,
+        trusted=trusted,
+    )
+    application = FakeFrontmostApplication(pid)
+    workspace = FakeWorkspace(application)
+    appkit = FakeAppKit(workspace)
+
+    monkeypatch.setattr(accessibility_module, "AppKit", appkit)
+    monkeypatch.setattr(
+        accessibility_module,
+        "ApplicationServices",
+        services,
+    )
+
+    return appkit, services, application, workspace, application_element
+
+
+def _read_controls(
+    monkeypatch,
+    children,
+    *,
+    maximum_elements=5000,
+    maximum_depth=30,
+):
+    window = _node(
+        role="AXWindow",
+        children=children,
+    )
+    _install_fake_accessibility(monkeypatch, window)
+
+    return MacOSAccessibility(
+        maximum_elements=maximum_elements,
+        maximum_depth=maximum_depth,
+    ).read_frontmost_controls()
+
+
+def test_macos_accessibility_is_exported_from_perception_package():
+    assert ExportedMacOSAccessibility is accessibility_module.MacOSAccessibility
+
+
+def test_is_available_requires_both_framework_modules(monkeypatch):
+    monkeypatch.setattr(accessibility_module, "AppKit", object())
+    monkeypatch.setattr(accessibility_module, "ApplicationServices", object())
+
+    assert MacOSAccessibility.is_available() is True
+
+    monkeypatch.setattr(accessibility_module, "AppKit", None)
+
+    assert MacOSAccessibility.is_available() is False
+
+    monkeypatch.setattr(accessibility_module, "AppKit", object())
+    monkeypatch.setattr(accessibility_module, "ApplicationServices", None)
+
+    assert MacOSAccessibility.is_available() is False
+
+
+def test_read_frontmost_controls_fails_when_frameworks_are_unavailable(
+    monkeypatch,
+):
+    monkeypatch.setattr(accessibility_module, "AppKit", None)
+    monkeypatch.setattr(accessibility_module, "ApplicationServices", object())
+
+    with pytest.raises(
+        RuntimeError,
+        match="macOS Accessibility frameworks are unavailable",
+    ):
+        MacOSAccessibility().read_frontmost_controls()
+
+
+def test_read_frontmost_controls_fails_when_permission_is_untrusted(
+    monkeypatch,
+):
+    window = _node(role="AXWindow")
+    _install_fake_accessibility(
+        monkeypatch,
+        window,
+        trusted=False,
+    )
+
+    assert MacOSAccessibility.is_trusted() is False
+
+    with pytest.raises(
+        RuntimeError,
+        match="macOS Accessibility permission is not trusted",
+    ):
+        MacOSAccessibility().read_frontmost_controls()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"maximum_elements": True}, "maximum_elements must be an integer"),
+        ({"maximum_elements": "5000"}, "maximum_elements must be an integer"),
+        ({"maximum_elements": 0}, "maximum_elements must be positive"),
+        ({"maximum_elements": -1}, "maximum_elements must be positive"),
+        ({"maximum_depth": False}, "maximum_depth must be an integer"),
+        ({"maximum_depth": "30"}, "maximum_depth must be an integer"),
+        ({"maximum_depth": -1}, "maximum_depth must be non-negative"),
+    ],
+)
+def test_constructor_rejects_invalid_limits(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        MacOSAccessibility(**kwargs)
+
+
+def test_read_frontmost_controls_uses_pid_based_frontmost_application_path(
+    monkeypatch,
+):
+    control = _node(
+        role="AXButton",
+        title="ACTIVE_BUTTON_10",
+    )
+    window = _node(
+        role="AXWindow",
+        children=[control],
+    )
+    (
+        appkit,
+        services,
+        application,
+        workspace,
+        application_element,
+    ) = _install_fake_accessibility(
+        monkeypatch,
+        window,
+        pid=12345,
+    )
+
+    controls = MacOSAccessibility().read_frontmost_controls()
+
+    assert len(controls) == 1
+    assert appkit.NSWorkspace.shared_workspace_calls == 1
+    assert workspace.frontmost_application_calls == 1
+    assert application.process_identifier_calls == 1
+    assert services.created_application_pids == [12345]
+    assert (
+        application_element,
+        "AXFocusedWindow",
+    ) in services.attribute_reads
+
+
+def test_role_mapping_for_supported_controls_preserves_tree_order(
+    monkeypatch,
+):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(role="AXTextField", title="TEXT"),
+            _node(role="AXButton", title="BUTTON"),
+            _node(role="AXCheckBox", title="CHECKBOX"),
+            _node(role="AXPopUpButton", title="POPUP"),
+            _node(role="AXRadioButton", title="RADIO"),
+        ],
+    )
+
+    assert [control.element_type for control in controls] == [
+        "text_field",
+        "button",
+        "checkbox",
+        "popup_button",
+        "radio_button",
+    ]
+    assert all(control.source == "accessibility" for control in controls)
+    assert all(control.confidence == 1.0 for control in controls)
+
+
+def test_title_is_preferred_and_description_is_fallback(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXButton",
+                title="TITLE_TEXT",
+                description="DESCRIPTION_TEXT",
+            ),
+            _node(
+                role="AXButton",
+                title="   ",
+                description="DESCRIPTION_FALLBACK",
+            ),
+            _node(
+                role="AXButton",
+                title=None,
+                description=None,
+            ),
+        ],
+    )
+
+    assert [control.text for control in controls] == [
+        "TITLE_TEXT",
+        "DESCRIPTION_FALLBACK",
+        None,
+    ]
+
+
+def test_identifier_extraction_uses_non_empty_dom_identifier(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXButton",
+                title="BUTTON",
+                identifier="active-button",
+            ),
+            _node(
+                role="AXButton",
+                title="BUTTON",
+                identifier="   ",
+            ),
+        ],
+    )
+
+    assert [control.identifier for control in controls] == [
+        "active-button",
+        None,
+    ]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "text",
+        7,
+        7.5,
+        True,
+        False,
+    ],
+)
+def test_scalar_values_are_preserved(monkeypatch, value):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXTextField",
+                title="TEXT_FIELD",
+                value=value,
+            ),
+        ],
+    )
+
+    assert controls[0].value == value
+
+
+def test_unsupported_values_become_none(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXTextField",
+                title="TEXT_FIELD",
+                value=["unsupported"],
+            ),
+        ],
+    )
+
+    assert controls[0].value is None
+
+
+def test_enabled_and_focused_are_extracted_only_for_bool_values(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXButton",
+                title="BUTTON",
+                enabled=True,
+                focused=False,
+            ),
+            _node(
+                role="AXButton",
+                title="BUTTON",
+                enabled=1,
+                focused="false",
+            ),
+        ],
+    )
+
+    assert controls[0].enabled is True
+    assert controls[0].focused is False
+    assert controls[1].enabled is None
+    assert controls[1].focused is None
+
+
+def test_selected_is_always_none(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXCheckBox",
+                title="CHECKBOX",
+                value=True,
+            ),
+            _node(
+                role="AXRadioButton",
+                title="RADIO",
+                value=True,
+            ),
+        ],
+    )
+
+    assert all(control.selected is None for control in controls)
+
+
+def test_geometry_uses_floor_and_ceil_bounding_box_conversion(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXButton",
+                title="BUTTON",
+                position=FakeAXValue((10.2, 20.8)),
+                size=FakeAXValue((30.1, 40.05)),
+            ),
+        ],
+    )
+
+    assert controls[0].bounding_box.x == 10
+    assert controls[0].bounding_box.y == 20
+    assert controls[0].bounding_box.width == 31
+    assert controls[0].bounding_box.height == 41
+
+
+def test_invalid_geometry_is_skipped(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(role="AXButton", title="MISSING_POSITION", position=None),
+            _node(
+                role="AXButton",
+                title="NON_FINITE_POSITION",
+                position=(math.nan, 20),
+            ),
+            _node(
+                role="AXButton",
+                title="NEGATIVE_POSITION",
+                position=(-1, 20),
+            ),
+            _node(
+                role="AXButton",
+                title="ZERO_WIDTH",
+                size=(0, 40),
+            ),
+            _node(
+                role="AXButton",
+                title="VALID",
+            ),
+        ],
+    )
+
+    assert [control.text for control in controls] == ["VALID"]
+
+
+def test_unsupported_roles_are_ignored_but_children_are_traversed(
+    monkeypatch,
+):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXGroup",
+                title="IGNORED_GROUP",
+                children=[
+                    _node(
+                        role="AXButton",
+                        title="CHILD_BUTTON",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    assert [control.text for control in controls] == ["CHILD_BUTTON"]
+
+
+def test_maximum_elements_limits_returned_controls(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(role="AXButton", title="FIRST"),
+            _node(role="AXButton", title="SECOND"),
+            _node(role="AXButton", title="THIRD"),
+        ],
+        maximum_elements=2,
+    )
+
+    assert [control.text for control in controls] == [
+        "FIRST",
+        "SECOND",
+    ]
+
+
+def test_maximum_depth_limits_descending_without_skipping_current_depth(
+    monkeypatch,
+):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(role="AXButton", title="DEPTH_ONE"),
+            _node(
+                role="AXGroup",
+                title="GROUP",
+                children=[
+                    _node(role="AXButton", title="DEPTH_TWO"),
+                ],
+            ),
+        ],
+        maximum_depth=1,
+    )
+
+    assert [control.text for control in controls] == ["DEPTH_ONE"]
+
+
+def test_accessibility_attribute_errors_are_tolerated(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXButton",
+                title="TITLE_ERROR",
+                description="DESCRIPTION_USED",
+                error_attributes={"AXTitle"},
+            ),
+            _node(
+                role="AXButton",
+                title="GEOMETRY_ERROR",
+                error_attributes={"AXPosition"},
+            ),
+            _node(
+                role="AXGroup",
+                children=[
+                    _node(
+                        role="AXButton",
+                        title="CHILD_AFTER_ROLE_ERROR",
+                    ),
+                ],
+                error_attributes={"AXRole"},
+            ),
+        ],
+    )
+
+    assert [control.text for control in controls] == [
+        "DESCRIPTION_USED",
+        "CHILD_AFTER_ROLE_ERROR",
+    ]
+
+
+def test_accessibility_tree_order_is_preserved(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(role="AXButton", title="FIRST"),
+            _node(
+                role="AXGroup",
+                children=[
+                    _node(role="AXButton", title="SECOND"),
+                    _node(role="AXButton", title="THIRD"),
+                ],
+            ),
+            _node(role="AXButton", title="FOURTH"),
+        ],
+    )
+
+    assert [control.text for control in controls] == [
+        "FIRST",
+        "SECOND",
+        "THIRD",
+        "FOURTH",
+    ]
+
+
+def test_controls_are_returned_as_ui_elements(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(role="AXButton", title="BUTTON"),
+        ],
+    )
+
+    assert isinstance(controls[0], UIElement)

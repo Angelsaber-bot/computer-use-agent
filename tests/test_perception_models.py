@@ -212,6 +212,218 @@ def test_ui_element_stores_perception_data():
     assert element.center == box.center
 
 
+def test_ui_element_stores_semantic_fields():
+    box = BoundingBox(
+        x=10,
+        y=20,
+        width=30,
+        height=40,
+    )
+
+    element = UIElement(
+        element_type="button",
+        bounding_box=box,
+        confidence=0.75,
+        text="Submit",
+        identifier="active-button",
+        value="Submit",
+        enabled=True,
+        focused=False,
+        selected=True,
+        source="accessibility",
+    )
+
+    assert element.identifier == "active-button"
+    assert element.value == "Submit"
+    assert element.enabled is True
+    assert element.focused is False
+    assert element.selected is True
+    assert element.source == "accessibility"
+
+
+def test_ui_element_semantic_fields_default_to_none():
+    element = UIElement(
+        element_type="text",
+        bounding_box=BoundingBox(
+            x=10,
+            y=20,
+            width=30,
+            height=40,
+        ),
+    )
+
+    assert element.identifier is None
+    assert element.value is None
+    assert element.enabled is None
+    assert element.focused is None
+    assert element.selected is None
+    assert element.source is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "typed text",
+        123,
+        1.5,
+        True,
+        False,
+    ],
+)
+def test_ui_element_accepts_valid_scalar_values(value):
+    element = UIElement(
+        element_type="text_field",
+        bounding_box=BoundingBox(
+            x=10,
+            y=20,
+            width=30,
+            height=40,
+        ),
+        value=value,
+    )
+
+    assert element.value == value
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    [
+        "",
+        "   ",
+        123,
+    ],
+)
+def test_ui_element_rejects_invalid_identifier_values(identifier):
+    with pytest.raises(
+        ValueError,
+        match="identifier must be a non-empty string or None",
+    ):
+        UIElement(
+            element_type="button",
+            bounding_box=BoundingBox(
+                x=10,
+                y=20,
+                width=30,
+                height=40,
+            ),
+            identifier=identifier,
+        )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        [],
+        {},
+        object(),
+    ],
+)
+def test_ui_element_rejects_invalid_value_types(value):
+    with pytest.raises(
+        ValueError,
+        match="value must be a string, number, boolean, or None",
+    ):
+        UIElement(
+            element_type="text_field",
+            bounding_box=BoundingBox(
+                x=10,
+                y=20,
+                width=30,
+                height=40,
+            ),
+            value=value,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("enabled", 0),
+        ("enabled", 1),
+        ("enabled", "true"),
+        ("focused", 0),
+        ("focused", 1),
+        ("focused", "false"),
+        ("selected", 0),
+        ("selected", 1),
+        ("selected", "true"),
+    ],
+)
+def test_ui_element_rejects_invalid_boolean_semantic_values(
+    field_name,
+    value,
+):
+    arguments = {
+        "element_type": "button",
+        "bounding_box": BoundingBox(
+            x=10,
+            y=20,
+            width=30,
+            height=40,
+        ),
+        field_name: value,
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=f"{field_name} must be a bool or None",
+    ):
+        UIElement(**arguments)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "",
+        "   ",
+        123,
+    ],
+)
+def test_ui_element_rejects_invalid_source_values(source):
+    with pytest.raises(
+        ValueError,
+        match="source must be a non-empty string or None",
+    ):
+        UIElement(
+            element_type="button",
+            bounding_box=BoundingBox(
+                x=10,
+                y=20,
+                width=30,
+                height=40,
+            ),
+            source=source,
+        )
+
+
+def test_ui_element_existing_constructor_behavior_remains_unchanged():
+    box = BoundingBox(
+        x=10,
+        y=20,
+        width=30,
+        height=40,
+    )
+
+    element = UIElement(
+        "text",
+        box,
+        0.5,
+        "Label",
+    )
+
+    assert element.element_type == "text"
+    assert element.bounding_box is box
+    assert element.confidence == 0.5
+    assert element.text == "Label"
+    assert element.center == box.center
+    assert element.identifier is None
+    assert element.value is None
+    assert element.enabled is None
+    assert element.focused is None
+    assert element.selected is None
+    assert element.source is None
+
+
 def test_ui_element_is_immutable():
     element = UIElement(
         element_type="button",

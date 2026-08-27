@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phase 03 Experiment 10 — Accessibility Elements</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page-bg: #f7f7f7;
+      --panel-bg: #ffffff;
+      --text: #111111;
+      --border: #111111;
+      --focus: #005fcc;
+      --disabled-bg: #dddddd;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+    }
+
+    body {
+      background: var(--page-bg);
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      padding: 24px;
+    }
+
+    main {
+      margin: 0 auto;
+      max-width: 1180px;
+    }
+
+    h1 {
+      font-size: 44px;
+      font-weight: 900;
+      line-height: 1.1;
+      margin: 0 0 22px;
+      text-align: center;
+    }
+
+    form {
+      display: grid;
+      gap: 18px;
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .field,
+    fieldset {
+      background: var(--panel-bg);
+      border: 4px solid var(--border);
+      border-radius: 8px;
+      margin: 0;
+      padding: 16px;
+    }
+
+    label,
+    legend {
+      display: block;
+      font-size: 25px;
+      font-weight: 900;
+      line-height: 1.15;
+      margin: 0 0 10px;
+    }
+
+    input[type="text"],
+    select,
+    button {
+      background: #ffffff;
+      border: 4px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font: inherit;
+      font-size: 28px;
+      font-weight: 800;
+      min-height: 58px;
+      padding: 8px 12px;
+      width: 100%;
+    }
+
+    input[type="checkbox"],
+    input[type="radio"] {
+      accent-color: var(--text);
+      height: 34px;
+      margin: 0 12px 0 0;
+      width: 34px;
+    }
+
+    button:disabled {
+      background: var(--disabled-bg);
+      color: var(--text);
+      opacity: 1;
+    }
+
+    input:focus-visible,
+    select:focus-visible,
+    button:focus-visible {
+      outline: 6px solid var(--focus);
+      outline-offset: 4px;
+    }
+
+    .choice-row {
+      align-items: center;
+      display: flex;
+      min-height: 58px;
+    }
+
+    .choice-row label {
+      margin: 0;
+    }
+
+    @media (max-width: 900px) {
+      form {
+        grid-template-columns: 1fr;
+      }
+
+      h1 {
+        font-size: 36px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ACCESSIBILITY_FIXTURE_10</h1>
+    <form>
+      <div class="field">
+        <label for="empty-text-field">EMPTY_TEXT_FIELD_10</label>
+        <input id="empty-text-field" type="text" value="">
+      </div>
+
+      <div class="field">
+        <label for="placeholder-text-field">PLACEHOLDER_TEXT_FIELD_10</label>
+        <input id="placeholder-text-field" type="text" value="" placeholder="PLACEHOLDER_VALUE_10">
+      </div>
+
+      <div class="field">
+        <button id="active-button" type="button">ACTIVE_BUTTON_10</button>
+      </div>
+
+      <div class="field">
+        <button id="disabled-button" type="button" disabled>DISABLED_BUTTON_10</button>
+      </div>
+
+      <div class="field">
+        <div class="choice-row">
+          <input id="checkbox-option" type="checkbox">
+          <label for="checkbox-option">CHECKBOX_OPTION_10</label>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="mode-selector">MODE_SELECTOR_10</label>
+        <select id="mode-selector">
+          <option>MODE_ALPHA_10</option>
+          <option>MODE_BETA_10</option>
+        </select>
+      </div>
+
+      <fieldset>
+        <legend>RADIO_GROUP_10</legend>
+        <div class="choice-row">
+          <input id="radio-alpha" type="radio" name="radio-group-10" checked>
+          <label for="radio-alpha">RADIO_ALPHA_10</label>
+        </div>
+        <div class="choice-row">
+          <input id="radio-beta" type="radio" name="radio-group-10">
+          <label for="radio-beta">RADIO_BETA_10</label>
+        </div>
+      </fieldset>
+    </form>
+  </main>
+</body>
+</html>
