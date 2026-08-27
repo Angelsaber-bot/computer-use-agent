@@ -40,6 +40,7 @@ A Python-based AI agent that can observe a computer screen, make decisions, and 
 - [x] Experiment 06: UI Text Localization
 - [x] Experiment 07: Safe Mouse Movement to a Localized Text Target
 - [x] Experiment 08: Verified Click on a Localized Text Target
+- [x] Experiment 09: Recovery Retry with Visual State Verification
 
 Experiment 04 uses the original Retina screenshot at `2940 x 1912` with minimum confidence `0.70`, producing `93` accepted word-level OCR elements. OCR bounding boxes are high-resolution pixel coordinates, not PyAutoGUI logical coordinates; Experiment 05 now converts them through `ScreenCoordinateMapper`.
 
@@ -51,4 +52,6 @@ Experiment 07 captures and localizes target text using the existing perception p
 
 Experiment 08 captures and OCR-localizes a target, defaults to dry-run, and requires `--execute` for real control. In execute mode it moves and clicks through structured tool `Action` objects, captures the screen again, succeeds only after detecting `CLICK_VERIFIED`, and restores and verifies the original cursor position.
 
-**Next Step:** Phase 03 Experiment 09
+Experiment 09 defaults to dry-run and requires `--execute` for real control. It OCR-localizes `RECOVERY_TARGET_09` from a fresh screenshot on every attempt, clicks through structured mouse `Action` objects, verifies completion from the target background color rather than OCR status text, treats light yellow as incomplete and light green as completed, relocalizes a moved target and retries up to three attempts, and restores the original cursor position.
+
+**Next Step:** Phase 03 Experiment 10

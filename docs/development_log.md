@@ -1097,4 +1097,133 @@ Successful execute mode:
 
 Experiment 08 successfully demonstrated a guarded verified-click path from live screenshot capture and OCR localization to structured mouse movement, click execution, after-click OCR verification, and cursor restoration.
 
-**Next Step:** Phase 03 Experiment 09
+### Experiment 09: Recovery Retry with Visual State Verification
+
+**Date:** August 27, 2026
+
+**Objective:**
+
+Demonstrate a guarded recovery loop against a fixture that secretly requires one through three clicks, using fresh OCR localization for each attempt and target-background color verification to decide whether to stop or retry.
+
+**Experiment File:**
+
+`experiments/phase03_screen_perception/experiment_09_recovery_retry.py`
+
+**Fixture File:**
+
+`assets/fixtures/phase03_screen_perception/experiment_09_recovery_retry.html`
+
+**Before Screenshot:**
+
+`assets/screenshots/phase03_screen_perception/experiment_09_recovery_retry_before.png`
+
+**Attempt 1 Plan Screenshot:**
+
+`assets/screenshots/phase03_screen_perception/experiment_09_recovery_retry_attempt_1_plan.png`
+
+**Attempt 1 After Screenshot:**
+
+`assets/screenshots/phase03_screen_perception/experiment_09_recovery_retry_attempt_1_after.png`
+
+**Implemented:**
+
+- The fixture displays only `RECOVERY_TARGET_09`.
+- The fixture randomly requires one through three clicks.
+- An unsuccessful click keeps the button light yellow and moves it to a different predefined position.
+- A successful click disables the button and changes it to light green.
+- The secret required click count is never displayed.
+- OCR is used to locate the target in each fresh screenshot.
+- OCR candidate collection uses minimum confidence `0.05`.
+- Mouse control requires action confidence of at least `0.70`.
+- Exact matching is preferred; partial matching is fallback.
+- The default mode is dry-run.
+- Real control requires the explicit `--execute` flag.
+- Mouse movement and clicking use structured `Action` objects.
+- After every click, the script captures a fresh screenshot and locates the target again.
+- Background verification uses the median of multiple sampled button-interior pixels.
+- Very dark pixels are excluded so black text and borders do not affect classification.
+- Expected colors are `#fff4b8` for incomplete and `#c8e6c9` for completed, with RGB tolerance.
+- An incomplete attempt requires the new target center to be at least `100` logical pixels from the previous center.
+- The maximum is three attempts.
+- Cursor restoration runs in `finally`.
+- `crop.get_flattened_data()` is used instead of the deprecated `getdata()` API.
+
+**Experiment Settings and Live Results:**
+
+Screen:
+
+- Pixel size: `2940 x 1912`
+- Logical size: `1470 x 956`
+- Scale: `x=2.00`, `y=2.00`
+
+Successful dry-run:
+
+- Accepted OCR elements: `72`
+- Initial background: `incomplete`
+- Initial median RGB: `(253, 245, 191)`
+- Match type: `exact`
+- Confidence: `0.88`
+- No mouse-control `Action` was created or executed.
+
+Successful three-attempt recovery run:
+
+- Attempt 1 background: `incomplete`
+- Attempt 1 relocation distance: `650.00` logical pixels
+- Attempt 2 background: `incomplete`
+- Attempt 2 relocation distance: `392.46` logical pixels
+- Attempt 3 background: `completed`
+- Completed successfully on attempt `3`.
+- Original cursor position was restored.
+
+Final post-maintenance execute validation:
+
+- Accepted initial OCR elements: `22`
+- Initial background: `incomplete`
+- Initial median RGB: `(253, 245, 191)`
+- Match type: `exact`
+- Confidence: `0.88`
+- Click point: `(735, 772)`
+- Completed successfully on attempt `1`.
+- Completed median RGB: `(205, 228, 202)`
+- Cursor restored to `(624, 899)`.
+- No `DeprecationWarning` occurred.
+
+**Validation:**
+
+- Experiment file compiled successfully with `py_compile`.
+- `git diff --check` passed.
+- The complete automated test suite finished with `227 passed in 0.76s`.
+- Dry-run completed successfully.
+- One-attempt and three-attempt execute paths both completed successfully.
+
+**Safety Measures:**
+
+- Explicit `--execute` gate.
+- Five-second pre-capture countdown.
+- Three-second pre-movement countdown.
+- The browser fixture is opened or reloaded manually, not automatically.
+- PyAutoGUI fail-safe remains enabled.
+- Execution aborts when the initial cursor is in a fail-safe corner.
+- Target point must be inside the logical screen and at least `10` pixels from its edges.
+- Target confidence must be at least `0.70`.
+- Each retry uses a fresh screenshot, OCR pass, coordinate mapping, and target localization.
+- Incomplete attempts must relocate by at least `100` logical pixels before retrying.
+- The experiment never exceeds three attempts.
+- Reached and restored positions must be within one logical pixel.
+- Restoration is attempted in `finally` after mouse movement starts.
+
+**Limitations:**
+
+- The target text is predetermined rather than selected by task reasoning.
+- Duplicate text still lacks contextual disambiguation.
+- OCR remains sensitive to visual contrast and layout.
+- The fixture must be manually opened or reloaded and kept in the foreground.
+- Visual verification depends on the target button background staying close to the expected yellow and green colors.
+- The color sample is tuned for this fixture rather than a general UI-state classifier.
+- This experiment does not yet perform recovery beyond the three-attempt fixture limit.
+
+**Result:**
+
+Experiment 09 demonstrated observe -> locate -> act -> capture fresh observation -> visually verify -> relocate -> retry -> stop on success -> restore cursor.
+
+**Next Step:** Phase 03 Experiment 10

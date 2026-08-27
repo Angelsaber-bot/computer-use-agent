@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phase 03 Experiment 09 — Recovery Retry</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page-bg: #f7f7f7;
+      --text: #111111;
+      --button-bg: #fff4b8;
+      --button-disabled-bg: #c8e6c9;
+      --border: #111111;
+      --focus: #005fcc;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      background: var(--page-bg);
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      min-height: 100%;
+    }
+
+    main {
+      min-height: 100vh;
+      position: relative;
+    }
+
+    #recovery-target {
+      appearance: none;
+      background: var(--button-bg);
+      border: 6px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+      font-size: 56px;
+      font-weight: 900;
+      height: 150px;
+      line-height: 1.1;
+      padding: 24px 36px;
+      position: absolute;
+      text-align: center;
+      width: 700px;
+    }
+
+    #recovery-target.position-a {
+      left: 60px;
+      top: 350px;
+    }
+
+    #recovery-target.position-b {
+      left: 710px;
+      top: 350px;
+    }
+
+    #recovery-target.position-c {
+      left: 385px;
+      top: 570px;
+    }
+
+    #recovery-target:focus-visible {
+      outline: 8px solid var(--focus);
+      outline-offset: 6px;
+    }
+
+    #recovery-target:disabled {
+      background: var(--button-disabled-bg);
+      cursor: default;
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <button id="recovery-target" type="button">RECOVERY_TARGET_09</button>
+  </main>
+
+  <script>
+    (() => {
+      const button = document.getElementById("recovery-target");
+      const positions = ["position-a", "position-b", "position-c"];
+      const requiredAttempts = Math.floor(Math.random() * 3) + 1;
+      let attemptCount = 0;
+      let positionIndex = Math.floor(Math.random() * positions.length);
+
+      const applyPosition = () => {
+        button.classList.remove(...positions);
+        button.classList.add(positions[positionIndex]);
+      };
+
+      const moveToDifferentPosition = () => {
+        const nextPositions = positions
+          .map((position, index) => index)
+          .filter((index) => index !== positionIndex);
+        const nextIndex = Math.floor(Math.random() * nextPositions.length);
+        positionIndex = nextPositions[nextIndex];
+        applyPosition();
+      };
+
+      applyPosition();
+
+      button.addEventListener("click", () => {
+        if (button.disabled) {
+          return;
+        }
+
+        attemptCount += 1;
+
+        if (attemptCount >= requiredAttempts) {
+          button.disabled = true;
+          return;
+        }
+
+        moveToDifferentPosition();
+      });
+    })();
+  </script>
+</body>
+</html>
