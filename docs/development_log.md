@@ -1606,3 +1606,111 @@ Experiment 12 demonstrated the complete flow: observe → Accessibility/OCR → 
 Phase 03 is complete. Phase 04 will turn these perception results into task-dependent target selection and action decisions.
 
 **Next Step:** Phase 04 — UI Grounding and Task Reasoning
+
+## Phase 04: UI Grounding and Task Reasoning
+
+### Experiment 01: Reusable Perception Engine
+
+**Date:** August 28, 2026
+
+**Objective:**
+
+Extract the reusable hybrid observation pipeline from Phase 03 Experiment 12 into a production `PerceptionEngine` without carrying forward target selection, planning, action execution, recovery, or verification logic.
+
+**Extraction Boundary:**
+
+- Moved only the reusable observation sequence: screen capture, RGB image loading, Accessibility collection, OCR recognition, pixel-to-logical OCR coordinate mapping, Accessibility/OCR fusion, warnings, and evidence metadata.
+- Kept fixture text, target validation, click-point calculation, retry/recovery, regional OCR, Canvas color sampling, CLI action flow, mouse movement, keyboard typing, and post-action verification in experiment-only code.
+- The engine observes only and never moves or clicks the mouse, types, pastes, presses keys, opens URLs, switches applications, creates actions, selects task targets, plans, or verifies task completion.
+
+**Production Files:**
+
+- Added `src/computer_agent/perception/engine.py`.
+- Updated `src/computer_agent/perception/__init__.py`.
+- Added `tests/test_perception_engine.py`.
+
+**Experiment Script:**
+
+`experiments/phase04_ui_grounding_task_reasoning/experiment_01_perception_engine.py`
+
+The script reuses the Phase 03 Experiment 12 fixture:
+
+`assets/fixtures/phase03_screen_perception/experiment_12_hybrid_perception.html`
+
+It is import-safe, `--help` safe, macOS-only, manually focused, and observation-only. It does not open the fixture, switch applications, use the tool system, move or click the mouse, type, paste, press keys, run recovery, or execute any action.
+
+**Public API:**
+
+`snapshot = engine.observe()`
+
+`PerceptionEngine` requires injected capture, Accessibility, OCR, fusion, and capture-path dependencies. It does not instantiate `ComputerController`, `MacOSAccessibility`, `TesseractOCR`, or `UIElementFusion` internally.
+
+`PerceptionSnapshot` stores the `ScreenFrame`, a detached RGB image, logical Accessibility elements, logical OCR elements, fused elements, warnings, and computed source counts. It does not duplicate the frame timestamp or screen metadata.
+
+**Partial Failure Semantics:**
+
+- Accessibility failure returns an empty Accessibility tuple, records a warning beginning with `Accessibility observation failed:`, and continues OCR and fusion.
+- OCR recognition or OCR coordinate-mapping failure returns an empty OCR tuple, records a warning beginning with `OCR observation failed:`, and still fuses available Accessibility elements.
+- If both sources fail, fusion is called with two empty tuples and both warnings are returned in deterministic Accessibility-then-OCR order.
+- Screen capture failure, image-open failure, image-size mismatch, and fusion failure remain fail-fast.
+
+**Deterministic Unit Coverage:**
+
+- Complete Accessibility + OCR observation.
+- Accessibility-only partial success.
+- OCR-only partial success.
+- Both sources fail.
+- OCR coordinate-mapping failure as OCR partial-source failure.
+- Image-size mismatch before source calls.
+- Capture failure propagation.
+- Fusion failure propagation.
+- Repeated fresh observations.
+- Computed source counts without mutable stored count state.
+- Constructor independence from controllers, tool registries, tool executors, mouse tools, keyboard tools, browser tools, and application tools.
+
+**Live Result:**
+
+- Screenshot pixel size: `2940 x 1912`
+- Logical screen size: `1470 x 956`
+- Coordinate scale: `x=2.00`, `y=2.00`
+- Capture timestamp: `2026-08-28T17:22:37.208806+00:00`
+- Accessibility element count: `30`
+- Logical OCR element count: `6`
+- Fused element count: `35`
+- Warnings: none
+- Fused element source distribution: `{'accessibility': 29, 'hybrid': 1, 'ocr': 5}`
+- `TARGET_INPUT_12`: observed
+- `NATIVE_BUTTON_12`: observed
+- `CANVAS_ACTION_12`: observed
+- Live acceptance result: passed
+
+**Evidence Screenshot:**
+
+`assets/screenshots/phase04_ui_grounding_task_reasoning/experiment_01_perception_engine.png`
+
+Pillow inspection confirmed the evidence file exists as a `PNG` image with pixel size `2940 x 1912` and mode `RGBA`.
+
+**Validation:**
+
+- `tests/test_perception_engine.py`: `11 passed`
+- Complete automated test suite: `408 passed`
+- `pip check`: no broken requirements
+- `git diff --check` passed
+- Import safety passed.
+- CLI `--help` safety passed.
+
+**Safety:**
+
+- The live script performed observation only.
+- No action was executed.
+- No Phase 03 experiment was rerun.
+- No fixture was added or modified.
+- The evidence screenshot was generated once by the successful live run and was not regenerated during documentation closeout.
+
+**Result:**
+
+Experiment 04.01 completed the reusable perception engine extraction and validated it with deterministic unit tests plus one successful live observation of the Phase 03 Experiment 12 fixture.
+
+Phase 04 is not complete.
+
+**Next Step:** Experiment 04.02 — UI Grounding

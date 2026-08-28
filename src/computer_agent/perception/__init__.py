@@ -6,6 +6,10 @@ from computer_agent.perception.accessibility import (
 from computer_agent.perception.coordinates import (
     ScreenCoordinateMapper,
 )
+from computer_agent.perception.engine import (
+    PerceptionEngine,
+    PerceptionSnapshot,
+)
 from computer_agent.perception.fusion import (
     UIElementFusion,
     normalize_ui_text,
@@ -33,6 +37,8 @@ __all__ = [
     "BoundingBox",
     "ImagePreprocessor",
     "MacOSAccessibility",
+    "PerceptionEngine",
+    "PerceptionSnapshot",
     "ScreenCapture",
     "ScreenCoordinateMapper",
     "ScreenFrame",
