@@ -1,9 +1,15 @@
 import pyperclip
 
-message = "Computer-use agent clipboard test."
 
-pyperclip.copy(message)
-copied_text = pyperclip.paste()
+def main() -> None:
+    message = "Computer-use agent clipboard test."
 
-print(f"Copied: {copied_text}")
-print(f"Success: {copied_text == message}")
+    pyperclip.copy(message)
+    copied_text = pyperclip.paste()
+
+    print(f"Copied: {copied_text}")
+    print(f"Success: {copied_text == message}")
+
+
+if __name__ == "__main__":
+    main()

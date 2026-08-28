@@ -1,18 +1,24 @@
 import time
 import pyautogui
 
-pyautogui.FAILSAFE = True
 
-start = pyautogui.position()
-screen = pyautogui.size()
-center = (screen.width // 2, screen.height // 2)
+def main() -> None:
+    pyautogui.FAILSAFE = True
 
-print(f"Start: {start}")
-print(f"Target: {center}")
+    start = pyautogui.position()
+    screen = pyautogui.size()
+    center = (screen.width // 2, screen.height // 2)
 
-time.sleep(3)
-pyautogui.moveTo(*center, duration=1)
-print(f"Current: {pyautogui.position()}")
+    print(f"Start: {start}")
+    print(f"Target: {center}")
 
-pyautogui.moveTo(*start, duration=1)
-print(f"Final: {pyautogui.position()}")
+    time.sleep(3)
+    pyautogui.moveTo(*center, duration=1)
+    print(f"Current: {pyautogui.position()}")
+
+    pyautogui.moveTo(*start, duration=1)
+    print(f"Final: {pyautogui.position()}")
+
+
+if __name__ == "__main__":
+    main()

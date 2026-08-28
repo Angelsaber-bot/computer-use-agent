@@ -1,15 +1,21 @@
 import time
 import pyautogui
 
-pyautogui.FAILSAFE = True
 
-print("Switch to a scrollable page.")
-time.sleep(5)
+def main() -> None:
+    pyautogui.FAILSAFE = True
 
-pyautogui.scroll(-5)
-print("Scrolled down.")
+    print("Switch to a scrollable page.")
+    time.sleep(5)
 
-time.sleep(2)
+    pyautogui.scroll(-5)
+    print("Scrolled down.")
 
-pyautogui.scroll(5)
-print("Scrolled up.")
+    time.sleep(2)
+
+    pyautogui.scroll(5)
+    print("Scrolled up.")
+
+
+if __name__ == "__main__":
+    main()
