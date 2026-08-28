@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HYBRID_PERCEPTION_FIXTURE_12</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --border: #000000;
+      --background: #f3f3f3;
+      --panel: #ffffff;
+      --yellow: #fff3a3;
+      --green: #b9f4b4;
+      --red: #ffc1c1;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      background: var(--background);
+      color: #000000;
+      font-family: "Courier New", Courier, monospace;
+    }
+
+    body {
+      padding: 18px;
+    }
+
+    main {
+      width: min(100%, 1120px);
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 0 0 14px;
+      font-size: clamp(30px, 4vw, 48px);
+      line-height: 1.05;
+      font-weight: 900;
+      text-align: center;
+      letter-spacing: 0;
+    }
+
+    .fixture-stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 5px solid var(--border);
+      padding: 16px;
+    }
+
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: clamp(22px, 3vw, 34px);
+      line-height: 1.05;
+      font-weight: 900;
+      letter-spacing: 0;
+    }
+
+    .text-input {
+      width: min(100%, 760px);
+      height: 58px;
+      border: 4px solid var(--border);
+      background: #ffffff;
+      color: #000000;
+      font: 900 30px/1 "Courier New", Courier, monospace;
+      padding: 8px 12px;
+      outline-offset: 4px;
+    }
+
+    .native-panel {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 112px;
+    }
+
+    #native-button {
+      min-width: min(100%, 520px);
+      min-height: 70px;
+      border: 5px solid var(--border);
+      background: #ffffff;
+      color: #000000;
+      font: 900 32px/1 "Courier New", Courier, monospace;
+      cursor: pointer;
+    }
+
+    .canvas-shell {
+      width: min(100%, 820px);
+    }
+
+    #visual-action-canvas {
+      display: block;
+      width: 820px;
+      max-width: 100%;
+      height: 180px;
+      border: 5px solid var(--border);
+      background: #ffffff;
+      cursor: pointer;
+    }
+
+    @media (max-width: 720px) {
+      body {
+        padding: 12px;
+      }
+
+      .panel {
+        padding: 12px;
+      }
+
+      .text-input,
+      #native-button {
+        font-size: 24px;
+      }
+
+      #visual-action-canvas {
+        height: 150px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>HYBRID_PERCEPTION_FIXTURE_12</h1>
+
+    <div class="fixture-stack">
+      <section class="panel">
+        <h2>ACCESSIBILITY_ONLY_INPUT</h2>
+        <input
+          id="hybrid-target-input"
+          class="text-input"
+          type="text"
+          aria-label="TARGET_INPUT_12"
+          autocomplete="off"
+          spellcheck="false"
+        >
+      </section>
+
+      <section class="panel native-panel">
+        <button id="native-button" type="button">NATIVE_BUTTON_12</button>
+      </section>
+
+      <section class="panel">
+        <h2>OCR_ONLY_CANVAS_ACTION</h2>
+        <div class="canvas-shell">
+          <canvas id="visual-action-canvas" aria-hidden="true"></canvas>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    (() => {
+      const requiredValue = "HYBRID_INPUT_VALUE_12";
+      const input = document.getElementById("hybrid-target-input");
+      const canvas = document.getElementById("visual-action-canvas");
+      const context = canvas.getContext("2d");
+      const state = {
+        completed: false,
+        label: "CANVAS_ACTION_12",
+        fill: "#fff3a3"
+      };
+      const buttonRect = {
+        x: 46,
+        y: 38,
+        width: 728,
+        height: 104
+      };
+
+      function resizeCanvas() {
+        const ratio = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = Math.round(rect.width * ratio);
+        canvas.height = Math.round(rect.height * ratio);
+        context.setTransform(ratio, 0, 0, ratio, 0, 0);
+        drawCanvas();
+      }
+
+      function currentButtonRect() {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = rect.width / 820;
+        const scaleY = rect.height / 180;
+        return {
+          x: buttonRect.x * scaleX,
+          y: buttonRect.y * scaleY,
+          width: buttonRect.width * scaleX,
+          height: buttonRect.height * scaleY
+        };
+      }
+
+      function drawCanvas() {
+        const rect = canvas.getBoundingClientRect();
+        context.clearRect(0, 0, rect.width, rect.height);
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, rect.width, rect.height);
+
+        const actionRect = currentButtonRect();
+        context.fillStyle = state.fill;
+        context.strokeStyle = "#000000";
+        context.lineWidth = 5;
+        context.fillRect(actionRect.x, actionRect.y, actionRect.width, actionRect.height);
+        context.strokeRect(actionRect.x, actionRect.y, actionRect.width, actionRect.height);
+
+        context.fillStyle = "#000000";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.font = "900 36px Courier New, Courier, monospace";
+        context.fillText(
+          state.label,
+          actionRect.x + actionRect.width / 2,
+          actionRect.y + actionRect.height / 2
+        );
+      }
+
+      function resetFixture() {
+        input.value = "";
+        state.completed = false;
+        state.label = "CANVAS_ACTION_12";
+        state.fill = "#fff3a3";
+        resizeCanvas();
+      }
+
+      function pointIsInsideAction(x, y) {
+        const actionRect = currentButtonRect();
+        return (
+          x >= actionRect.x &&
+          x <= actionRect.x + actionRect.width &&
+          y >= actionRect.y &&
+          y <= actionRect.y + actionRect.height
+        );
+      }
+
+      canvas.addEventListener("pointerup", (event) => {
+        if (state.completed) {
+          return;
+        }
+
+        const rect = canvas.getBoundingClientRect();
+        const localX = event.clientX - rect.left;
+        const localY = event.clientY - rect.top;
+
+        if (!pointIsInsideAction(localX, localY)) {
+          return;
+        }
+
+        if (input.value === requiredValue) {
+          state.completed = true;
+          state.label = "FUSION_VERIFIED_12";
+          state.fill = "#b9f4b4";
+        } else {
+          state.label = "INPUT_REQUIRED_12";
+          state.fill = "#ffc1c1";
+        }
+
+        drawCanvas();
+      });
+
+      window.addEventListener("resize", resizeCanvas);
+      window.addEventListener("load", resetFixture);
+      window.addEventListener("pageshow", resetFixture);
+    })();
+  </script>
+</body>
+</html>

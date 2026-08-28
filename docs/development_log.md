@@ -1485,4 +1485,124 @@ Successful execute result:
 
 Experiment 11 demonstrated a guarded semantic input workflow from Accessibility-based field discovery through structured clicking, verified focus, structured typing, exact value verification, invariant protection, and cursor restoration.
 
-**Next Step:** Phase 03 Experiment 12
+### Experiment 12: Hybrid Accessibility and OCR Perception
+
+**Date:** August 27, 2026
+
+**Objective:**
+
+Demonstrate a complete hybrid perception/action loop where different controls require Accessibility, fused Accessibility+OCR, or OCR-only grounding.
+
+**Files:**
+
+- Experiment script: `experiments/phase03_screen_perception/experiment_12_hybrid_perception.py`
+- Fixture: `assets/fixtures/phase03_screen_perception/experiment_12_hybrid_perception.html`
+- Before screenshot: `assets/screenshots/phase03_screen_perception/experiment_12_hybrid_perception_before.png`
+- Plan screenshot: `assets/screenshots/phase03_screen_perception/experiment_12_hybrid_perception_plan.png`
+- After screenshot: `assets/screenshots/phase03_screen_perception/experiment_12_hybrid_perception_after.png`
+
+**Reusable Implementation:**
+
+- Configurable Tesseract PSM values `0..13`, with default PSM `11`.
+- Optional word grouping by OCR line.
+- Conservative minimum line confidence.
+- `recognize_region()` with full-image coordinate restoration.
+- `normalize_ui_text()`.
+- `smaller_area_overlap_ratio()`.
+- `UIElementFusion`.
+- Semantic metadata preservation.
+- Accessibility-first actionable bounds.
+- OCR-only preservation.
+- Overlapping duplicate removal.
+
+**Live Target Results:**
+
+`TARGET_INPUT_12`:
+
+- Source: `accessibility`
+- Type: `text_field`
+- Identifier: `hybrid-target-input`
+- Initial value: empty
+- Box: `x=196, y=275, width=760, height=59`
+
+`NATIVE_BUTTON_12`:
+
+- Source: `hybrid`
+- Type: `button`
+- Identifier: `native-button`
+- Returned exactly once.
+- Box: `x=475, y=389, width=520, height=71`
+
+`CANVAS_ACTION_12`:
+
+- Source: `ocr`
+- Initial confidence: `0.95`
+- Box: `x=434, y=629, width=340, height=45`
+
+**Execute Results:**
+
+- Original cursor: `(127, 532)`
+- Initial observation attempt 1 saw Canvas confidence `0.50`.
+- Retry recovered to `0.95` on attempt 2.
+- Input click point: `(576, 304)`
+- Focus verified through Accessibility.
+- Typed `HYBRID_INPUT_VALUE_12`.
+- Post-typing full-screen Canvas confidence dropped to `0.34`.
+- Dynamic regional PSM 7 recovered it to `0.95`.
+- Recovered box: `x=434, y=637, width=340, height=37`
+- Overlap ratio: `1.00`
+- Canvas click point: `(604, 656)`
+- Canvas was clicked exactly once.
+- Completion OCR: `FUSION VERIFIED 12`
+- Completion confidence: `0.68`
+- Completed median RGB: `(197, 242, 186)`
+- Expected RGB: `(197, 243, 186)`
+- Composite verification passed.
+- Input value remained `HYBRID_INPUT_VALUE_12`.
+- Native button remained exactly one hybrid element.
+- Cursor restored to `(127, 532)`.
+
+**Validation:**
+
+- `tests/test_ocr.py`: `47 passed`
+- `tests/test_perception_fusion.py`: `24 passed`
+- Complete suite: `341 passed in 0.65s`
+- Experiment script compiled successfully.
+- `git diff --check` passed.
+- Dry-run passed.
+- Live execute passed.
+- Before, plan, and after screenshots visually verified.
+
+**Safety:**
+
+- Dry-run default.
+- Explicit `--execute`.
+- Structured `Action` objects only.
+- No direct pyautogui calls.
+- Fail-safe enabled.
+- Fresh observation before actions.
+- No hardcoded target coordinates, crop coordinates, or Retina scale.
+- Action OCR threshold stayed `0.70`.
+- Regional recovery derived from the last accepted target.
+- Canvas clicked only once.
+- Completion required OCR + green visual state + Accessibility input value.
+- Color alone could not declare success.
+- Cursor restored in `finally`.
+
+**Limitations:**
+
+- macOS Accessibility is platform-specific.
+- Chrome Accessibility may require the read-only application-role probe.
+- Full-screen Tesseract confidence can change when focus styling changes.
+- Canvas action semantics still come from OCR text/task context.
+- Completed color classification is fixture-specific.
+- Foreground fixture switching is manual.
+- The experiment uses predetermined target names rather than task reasoning.
+
+**Result:**
+
+Experiment 12 demonstrated the complete flow: observe → Accessibility/OCR → coordinate mapping → fusion → semantic input action → fresh observation → regional OCR recovery → OCR-only Canvas action → fresh observation → composite verification → cursor restoration.
+
+Phase 03 is complete. Phase 04 will turn these perception results into task-dependent target selection and action decisions.
+
+**Next Step:** Phase 04 — UI Grounding and Task Reasoning

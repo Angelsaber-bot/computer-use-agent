@@ -6,6 +6,11 @@ from computer_agent.perception.accessibility import (
 from computer_agent.perception.coordinates import (
     ScreenCoordinateMapper,
 )
+from computer_agent.perception.fusion import (
+    UIElementFusion,
+    normalize_ui_text,
+    smaller_area_overlap_ratio,
+)
 from computer_agent.perception.models import (
     BoundingBox,
     ScreenFrame,
@@ -33,5 +38,8 @@ __all__ = [
     "ScreenFrame",
     "TesseractOCR",
     "UIElement",
+    "UIElementFusion",
     "TextTargetLocator",
+    "normalize_ui_text",
+    "smaller_area_overlap_ratio",
 ]
