@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PHASE04_UI_GROUNDING_FIXTURE_02</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page-bg: #f4f4f4;
+      --panel-bg: #ffffff;
+      --text: #111111;
+      --border: #111111;
+      --disabled-bg: #d9d9d9;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+    }
+
+    body {
+      background: var(--page-bg);
+      color: var(--text);
+      font-family: "Courier New", Courier, monospace;
+      padding: 16px;
+    }
+
+    main {
+      margin: 0 auto;
+      max-width: 1320px;
+    }
+
+    h1 {
+      font-size: 34px;
+      font-weight: 900;
+      line-height: 1.05;
+      margin: 0 0 12px;
+      text-align: center;
+    }
+
+    .case-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .case-panel {
+      background: var(--panel-bg);
+      border: 4px solid var(--border);
+      padding: 12px;
+    }
+
+    .case-panel h2 {
+      font-size: 20px;
+      font-weight: 900;
+      line-height: 1.1;
+      margin: 0 0 10px;
+    }
+
+    .control-row {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    button,
+    input[type="text"] {
+      background: #ffffff;
+      border: 4px solid var(--border);
+      color: var(--text);
+      font: 900 22px/1 "Courier New", Courier, monospace;
+      min-height: 48px;
+      padding: 8px 12px;
+    }
+
+    button {
+      min-width: 220px;
+    }
+
+    input[type="text"] {
+      min-width: min(100%, 360px);
+    }
+
+    button:disabled,
+    input[type="text"]:disabled {
+      background: var(--disabled-bg);
+      color: var(--text);
+      opacity: 1;
+    }
+
+    label {
+      display: block;
+      font-size: 22px;
+      font-weight: 900;
+      line-height: 1.1;
+      margin: 0 0 8px;
+    }
+
+    .canvas-panel {
+      grid-column: 1 / -1;
+    }
+
+    #ocr-only-canvas-02 {
+      background: #ffffff;
+      border: 4px solid var(--border);
+      display: block;
+      height: 150px;
+      width: min(100%, 1000px);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>PHASE04_UI_GROUNDING_FIXTURE_02</h1>
+
+    <div class="case-grid">
+      <section class="case-panel" aria-label="Identifier target case">
+        <h2>EXACT_IDENTIFIER_CASE_02</h2>
+        <div class="control-row">
+          <button id="identifier-decoy-02" type="button">IDENTIFIER_TARGET_02</button>
+          <button id="identifier-target-02" type="button">IDENTIFIER_TARGET_02</button>
+        </div>
+      </section>
+
+      <section class="case-panel" aria-label="Role filter case">
+        <h2>ROLE_FILTER_CASE_02</h2>
+        <div class="control-row">
+          <button id="role-button-target-02" type="button">ROLE_TARGET_02</button>
+          <div>
+            <label for="role-text-field-decoy-02">ROLE_TARGET_02</label>
+            <input
+              id="role-text-field-decoy-02"
+              type="text"
+              aria-label="ROLE_TARGET_02"
+              value=""
+              autocomplete="off"
+              spellcheck="false"
+            >
+          </div>
+        </div>
+      </section>
+
+      <section class="case-panel" aria-label="Disabled only case">
+        <h2>DISABLED_ONLY_CASE_02</h2>
+        <button id="disabled-only-02" type="button" disabled>DISABLED_ONLY_02</button>
+      </section>
+
+      <section class="case-panel" aria-label="Blocked identifier case">
+        <h2>BLOCKED_IDENTIFIER_CASE_02</h2>
+        <div class="control-row">
+          <button id="blocked-identifier-target-02" type="button" disabled>BLOCKED_IDENTIFIER_02</button>
+          <button id="blocked-identifier-decoy-02" type="button">BLOCKED_IDENTIFIER_02</button>
+        </div>
+      </section>
+
+      <section class="case-panel" aria-label="Ambiguous target case">
+        <h2>AMBIGUOUS_CASE_02</h2>
+        <div class="control-row">
+          <button id="ambiguous-alpha-02" type="button" aria-label="AMBIGUOUS_TARGET_02">AMBIGUOUS_ALPHA_02</button>
+          <button id="ambiguous-beta-02" type="button" aria-label="AMBIGUOUS_TARGET_02">AMBIGUOUS_BETA_02</button>
+        </div>
+      </section>
+
+      <section class="case-panel canvas-panel" aria-label="OCR only canvas case">
+        <h2>OCR_ONLY_CANVAS_CASE_02</h2>
+        <canvas
+          id="ocr-only-canvas-02"
+          width="1000"
+          height="150"
+          aria-hidden="true"
+          role="presentation"
+        ></canvas>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const canvas = document.getElementById("ocr-only-canvas-02");
+    const context = canvas.getContext("2d");
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = "#000000";
+    context.font = "900 48px Courier New, Courier, monospace";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText("OCR_ONLY_TARGET_02", canvas.width / 2, canvas.height / 2);
+  </script>
+</body>
+</html>
