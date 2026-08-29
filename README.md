@@ -68,7 +68,8 @@ Phase 03 Screen Perception is complete.
 ### Phase 04: UI Grounding and Task Reasoning
 
 - [x] Experiment 01: Reusable Perception Engine
-- [ ] Experiment 02: UI Grounding
+- [x] Experiment 02: UI Grounding
+- [ ] Experiment 03: Action Grounding
 
 Phase 04 is in progress. Experiment 04.01 extracted the reusable hybrid observation pipeline from Phase 03 Experiment 12 into `PerceptionEngine`, whose public API is `snapshot = engine.observe()`.
 
@@ -76,6 +77,8 @@ The engine uses injected screen capture, Accessibility, OCR, and fusion dependen
 
 Experiment 04.01 reused the Phase 03 Experiment 12 fixture and saved evidence at `assets/screenshots/phase04_ui_grounding_task_reasoning/experiment_01_perception_engine.png`. The successful live observation reported pixel size `2940 x 1912`, logical screen size `1470 x 956`, scale `x=2.00`, `y=2.00`, timestamp `2026-08-28T17:22:37.208806+00:00`, `30` Accessibility elements, `6` logical OCR elements, `35` fused elements, no warnings, source distribution `{'accessibility': 29, 'hybrid': 1, 'ocr': 5}`, and observed `TARGET_INPUT_12`, `NATIVE_BUTTON_12`, and `CANVAS_ACTION_12`.
 
-The complete automated test suite now finishes with `408 passed`.
+Experiment 04.02 added deterministic UI grounding over observed UI elements. It resolves targets through exact identifier matching, normalized text matching, optional role filtering, enabled-state and confidence eligibility, identifier-tier safety that prevents unsafe text fallback, and deterministic source-priority, distance, and confidence tie-breaking. Grounding returns explicit `resolved`, `ambiguous`, `unsafe`, and `not_found` results. The live harness validates fixture identity from raw Accessibility/OCR evidence and writes a candidate screenshot before promoting it to protected formal evidence only after fixture identity and all acceptance checks pass.
 
-**Next Step:** Phase 04 Experiment 02 — UI Grounding
+The complete automated test suite now finishes with `454 passed`.
+
+**Next Step:** Phase 04 Experiment 03 — Action Grounding

@@ -1714,3 +1714,73 @@ Experiment 04.01 completed the reusable perception engine extraction and validat
 Phase 04 is not complete.
 
 **Next Step:** Experiment 04.02 — UI Grounding
+
+### Experiment 02: UI Grounding
+
+**Date:** August 29, 2026
+
+**Objective:**
+
+Add deterministic UI grounding that selects task targets from reusable perception snapshots without executing actions.
+
+**Delivered Behavior:**
+
+- Exact identifier matching.
+- Normalized text matching.
+- Optional role filtering.
+- Enabled-state and confidence eligibility checks.
+- Identifier-tier safety that prevents unsafe text fallback.
+- Deterministic source-priority, distance, and confidence tie-breaking.
+- Explicit `resolved`, `ambiguous`, `unsafe`, and `not_found` statuses.
+
+**Live Fixture Cases:**
+
+- `IDENTIFIER_TARGET_02`: `resolved`
+- `ROLE_TARGET_02`: `resolved`, with the text-field candidate rejected
+- `DISABLED_ONLY_02`: `unsafe`
+- `BLOCKED_IDENTIFIER_02`: `unsafe`, with no fallback to text matching
+- `AMBIGUOUS_TARGET_02`: `ambiguous`
+- `OCR_ONLY_TARGET_02`: `resolved` from OCR with confidence `0.95`
+- `MISSING_TARGET_02`: `not_found`
+
+All seven live acceptance cases passed.
+
+**Harness Hardening:**
+
+- The visible fixture marker is verified from raw Accessibility/OCR evidence.
+- Observation first writes a candidate screenshot.
+- The candidate is promoted to the formal evidence path only after fixture identity and every acceptance check pass.
+- A wrong foreground window cannot overwrite the formal evidence image.
+
+**Live Observation:**
+
+- Screenshot pixel size: `2940 x 1912`
+- Logical screen size: `1470 x 956`
+- Scale factor: `2`
+- Accessibility elements: `45`
+- OCR elements: `14`
+- Fused elements: `59`
+- Warnings: none
+
+**Validation:**
+
+- Experiment harness tests: `6 passed`
+- Grounding plus harness tests: `46 passed`
+- Complete suite: `454 passed`
+- Live acceptance result: passed
+- Implemented by commit `43cc488` (`feat: add deterministic UI grounding`).
+
+**Safety:**
+
+- The experiment remained observation-only.
+- No action was executed.
+- Evidence promotion is protected by fixture identity and acceptance checks.
+- Runtime target selection uses the production grounder; the experiment harness verifies expected outcomes and evidence handling.
+
+**Result:**
+
+Experiment 04.02 completed deterministic UI grounding with protected live evidence and explicit target-resolution statuses.
+
+Phase 04 is not complete.
+
+**Next Step:** Phase 04 Experiment 03 — Action Grounding
