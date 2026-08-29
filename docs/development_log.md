@@ -1784,3 +1784,96 @@ Experiment 04.02 completed deterministic UI grounding with protected live eviden
 Phase 04 is not complete.
 
 **Next Step:** Phase 04 Experiment 03 — Action Grounding
+
+### Experiment 03: Action Grounding
+
+**Date:** August 29, 2026
+
+**Objective:**
+
+Convert deterministic UI grounding results into safe, structured, unexecuted click Actions.
+
+**Production Contract:**
+
+- Added `ActionGroundingStatus` with `ready` and `blocked`.
+- Added immutable `ActionGroundingResult`.
+- Added `ActionGrounder.ground_click(...)`.
+- Reused the existing `computer_agent.core.models.Action`.
+- A resolved target can produce:
+
+```python
+Action(
+    tool_name="click_mouse",
+    arguments={"x": x, "y": y},
+    reason="Click the UI element resolved by deterministic grounding.",
+)
+```
+
+- `ambiguous`, `unsafe`, and `not_found` grounding results cannot produce an Action.
+- Coordinates use exact integer floor-center conversion.
+- Logical screen size is validated.
+- The default one-pixel safe edge margin blocks outer-edge coordinates.
+- Screens without a usable safe interior are blocked.
+- No executor, controller, desktop operation, verification, retry, recovery, planner, or LLM was added.
+
+**Live Experiment:**
+
+- Reused the existing Experiment 02 fixture unchanged.
+- Performed exactly one observation.
+- Fixture marker was verified from raw Accessibility/OCR evidence.
+- Candidate evidence was promoted only after all acceptance checks passed.
+- Formal evidence: `assets/screenshots/phase04_ui_grounding_task_reasoning/experiment_03_action_grounding.png`
+
+**Live Observation:**
+
+- Pixel size: `2940 x 1912`
+- Logical screen size: `1470 x 956`
+- Accessibility elements: `45`
+- OCR elements: `14`
+- Fused elements: `59`
+- Warnings: none
+- Fixture marker observed: true
+
+**Live Cases:**
+
+Resolved case:
+
+- Target: `IDENTIFIER_TARGET_02`
+- Identifier: `identifier-target-02`
+- Grounding: `resolved`
+- Action grounding: `ready`
+- Resolved box: `x=397, y=236, width=297, height=48`
+- Generated tool: `click_mouse`
+- Generated arguments: `{"x": 545, "y": 260}`
+- Action was not executed.
+
+Blocked case:
+
+- Target: `DISABLED_ONLY_02`
+- Grounding: `unsafe`
+- Action grounding: `blocked`
+- Generated Action: none
+
+**Validation:**
+
+- Affected grounding/action/harness tests: `100 passed`
+- Action Grounder focused tests: `50 passed`
+- Experiment 03 harness tests: `10 passed`
+- Complete suite: `514 passed`
+- `pip check`: no broken requirements
+- Import check: passed
+- Live acceptance: passed
+- Execution: skipped
+
+**Safety:**
+
+- The live experiment constructed Actions only.
+- No generated Action was executed.
+- Evidence promotion is protected by fixture identity and acceptance checks.
+- Promotion failures retain candidate evidence and preserve existing formal evidence.
+
+**Result:**
+
+Experiment 04.03 completed Action Grounding, while Phase 04 remains in progress.
+
+**Next Step:** Phase 04 Experiment 04 — Verification

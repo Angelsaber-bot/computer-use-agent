@@ -69,7 +69,8 @@ Phase 03 Screen Perception is complete.
 
 - [x] Experiment 01: Reusable Perception Engine
 - [x] Experiment 02: UI Grounding
-- [ ] Experiment 03: Action Grounding
+- [x] Experiment 03: Action Grounding
+- [ ] Experiment 04: Verification
 
 Phase 04 is in progress. Experiment 04.01 extracted the reusable hybrid observation pipeline from Phase 03 Experiment 12 into `PerceptionEngine`, whose public API is `snapshot = engine.observe()`.
 
@@ -79,6 +80,8 @@ Experiment 04.01 reused the Phase 03 Experiment 12 fixture and saved evidence at
 
 Experiment 04.02 added deterministic UI grounding over observed UI elements. It resolves targets through exact identifier matching, normalized text matching, optional role filtering, enabled-state and confidence eligibility, identifier-tier safety that prevents unsafe text fallback, and deterministic source-priority, distance, and confidence tie-breaking. Grounding returns explicit `resolved`, `ambiguous`, `unsafe`, and `not_found` results. The live harness validates fixture identity from raw Accessibility/OCR evidence and writes a candidate screenshot before promoting it to protected formal evidence only after fixture identity and all acceptance checks pass.
 
-The complete automated test suite now finishes with `454 passed`.
+Experiment 04.03 converts a resolved `GroundingResult` into the existing structured `Action` model, creating `click_mouse` with integer logical-screen coordinates. It applies deterministic floor-center conversion and configurable safe screen-edge margins, returns explicit `ready` or `blocked` results, and never executes the generated Action. The live harness reuses the Experiment 02 fixture and protects formal evidence through candidate-first promotion.
 
-**Next Step:** Phase 04 Experiment 03 — Action Grounding
+The complete automated test suite now finishes with `514 passed`.
+
+**Next Step:** Phase 04 Experiment 04 — Verification
