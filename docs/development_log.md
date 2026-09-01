@@ -2023,3 +2023,190 @@ Phase 04 remains in progress.
 **Next Step:**
 
 Experiment 06 — Structured Planning
+
+### Experiment 06: Structured Planning
+
+**Date:** September 1, 2026
+
+**Objective:**
+
+Add deterministic structured semantic planning for ordered multi-step tasks.
+The goal was to create a production planning boundary that can represent
+explicit task intent without observing the screen, grounding UI elements,
+generating executable Actions, executing tools, verifying outcomes, recovering,
+retrying, using controllers, or invoking an LLM.
+
+**Architecture / Production Boundary:**
+
+Structured Planning owns:
+
+- Ordered semantic task structure.
+- Semantic action target specification.
+- Semantic verification target specification.
+- Bounded attempt policy.
+
+Structured Planning does not own:
+
+- Screen observation.
+- Accessibility or OCR.
+- UI grounding.
+- Screen coordinates.
+- Action generation.
+- Tool execution.
+- Verification execution.
+- Recovery execution.
+- Retry loops.
+- Controllers.
+- `pyautogui`.
+- LLM reasoning.
+
+`StructuredPlanner` is intentionally thin. It provides a stable production
+construction seam, so Experiment 07 can later feed validated semantic steps
+through the same seam. Complexity was not added merely to make the planner
+appear substantial.
+
+**Production Files:**
+
+- `src/computer_agent/planning/__init__.py`
+- `src/computer_agent/planning/models.py`
+- `src/computer_agent/planning/structured_planner.py`
+
+**Experiment:**
+
+`experiments/phase04_ui_grounding_task_reasoning/experiment_06_structured_planning.py`
+
+**Tests:**
+
+- `tests/test_structured_planner.py`
+- `tests/test_experiment_06_structured_planning.py`
+
+**Data Contracts:**
+
+- `PlanOperation` currently contains only `CLICK_TARGET`, whose value is
+  `click_target`.
+- No redundant supported-operation registry is maintained.
+- `PlanStep` contains a human-readable goal, a `PlanOperation`, a semantic
+  action `TargetSpec`, a semantic verification `TargetSpec`, and
+  `max_attempts`.
+- `StructuredPlan` contains a human-readable task goal and an ordered
+  non-empty tuple of `PlanStep` objects.
+- Plans are immutable and slotted.
+- `MAX_PLAN_STEP_ATTEMPTS = 3`
+- `MAX_STRUCTURED_PLAN_STEPS = 20`
+
+**StructuredPlanner Public API:**
+
+`StructuredPlanner.build_plan(task_goal=..., steps=(...))`
+
+The builder constructs the final `StructuredPlan` from explicit semantic
+`PlanStep` objects supplied by code. It does not infer targets from an
+observation and does not create executable Actions.
+
+**Validation / Invariants:**
+
+- `PlanStep.goal` must be a non-empty string.
+- `PlanStep.operation` must be a `PlanOperation`; invalid raw operation values
+  are rejected.
+- `PlanStep.action_target` must be a `TargetSpec`.
+- `PlanStep.verification_target` must be a `TargetSpec`.
+- `PlanStep.max_attempts` must be a non-boolean integer from `1` through `3`.
+- `StructuredPlan.task_goal` must be a non-empty string.
+- `StructuredPlan.steps` must be a tuple.
+- `StructuredPlan.steps` must contain at least one `PlanStep`.
+- `StructuredPlan.steps` must contain no more than `20` steps.
+- Invalid explicit construction inputs raise validation errors directly.
+- No `PlanningStatus` or `PlanningResult` wrapper was added because this layer
+  has no runtime planning attempt outcome.
+
+Plans do not contain executable `Action` objects, screen coordinates,
+`PerceptionSnapshot`, `GroundingResult`, `ToolResult`, verification results, or
+recovery results.
+
+**Formal Headless Experiment:**
+
+Experiment 06 is intentionally headless. It is not a live UI experiment and it
+does not have screenshot evidence. It has no browser fixture, no observation,
+no action execution, and no LLM. Formal evidence consists of deterministic
+direct-run acceptance output plus automated test validation.
+
+The final plan is constructed through `StructuredPlanner.build_plan(...)`, not
+by directly substituting a `StructuredPlan` for the production planner seam.
+
+**Deterministic Formal Plan:**
+
+Task goal:
+
+`Complete the deterministic two-step workflow`
+
+Step 1:
+
+- Goal: `Activate the first target`
+- Operation: `click_target`
+- Action target: `STEP_1_TARGET_06`
+- Verification target: `STEP_1_COMPLETE_06`
+- Max attempts: `2`
+
+Step 2:
+
+- Goal: `Activate the second target`
+- Operation: `click_target`
+- Action target: `STEP_2_TARGET_06`
+- Verification target: `TASK_COMPLETE_06`
+- Max attempts: `2`
+
+**Acceptance Conditions:**
+
+- Returned object must be `StructuredPlan`.
+- Exact task goal.
+- Exactly two steps.
+- Caller order preserved.
+- Both operations are `click_target`.
+- Exact step goals.
+- Exact action `TargetSpec` objects.
+- Exact verification `TargetSpec` objects.
+- Both `max_attempts == 2`.
+
+Acceptance fails closed and prints the failed conditions. A non-`StructuredPlan`
+injected result fails closed. The observation count remains `0`, and the action
+execution count remains `0`.
+
+**Direct-Run Result:**
+
+- Direct experiment execution: passed.
+- Experiment acceptance: passed.
+- Execution: not applicable.
+- Observation count: `0`.
+- Action execution count: `0`.
+- Direct script runs without `sys.path` mutation.
+- `--help` exits `0` without running acceptance.
+- Importing the experiment produces no execution or output.
+
+**Validation:**
+
+- Focused planning plus Experiment 06 tests: `32 passed`
+- Complete automated test suite: `677 passed`
+- `pip check`: no broken requirements
+- `py_compile`: passed
+- `git diff --check`: passed
+- Direct experiment execution: passed
+- Direct `--help`: passed
+
+**Safety:**
+
+- No files are written by the experiment.
+- No browser or application is controlled.
+- No screen observation occurs.
+- No executable Action is created by the plan.
+- No tool execution occurs.
+- No recovery or retry loop occurs.
+- No LLM is used.
+
+**Result:**
+
+Experiment 06 completed deterministic structured semantic planning.
+
+Phase 04 remains in progress.
+
+**Next Step:**
+
+Experiment 07 — LLM Reasoner

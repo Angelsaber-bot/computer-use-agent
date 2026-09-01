@@ -72,6 +72,7 @@ Phase 03 Screen Perception is complete.
 - [x] Experiment 03: Action Grounding
 - [x] Experiment 04: Verification
 - [x] Experiment 05: Recovery and Re-grounding
+- [x] Experiment 06: Structured Planning
 
 Phase 04 is in progress. Experiment 04.01 extracted the reusable hybrid observation pipeline from Phase 03 Experiment 12 into `PerceptionEngine`, whose public API is `snapshot = engine.observe()`.
 
@@ -89,4 +90,8 @@ Experiment 05 added the reusable deterministic `ActionRecovery` with explicit `r
 
 Live Experiment 05 passed in dry-run with `1` observation and `0` executions. Execute mode passed with exactly `3` observations and exactly `2` click executions: the first `ToolResult` succeeded, first verification failed because the target remained `not_found`, recovery returned `retry_ready`, recovery grounding was `resolved`, recovery action grounding was `ready`, the retry `Action` had a new `action_id` and different coordinates, the second `ToolResult` succeeded, final verification was `verified`, and formal evidence was promoted successfully to `assets/screenshots/phase04_ui_grounding_task_reasoning/experiment_05_recovery_regrounding.png`. Current final validation: recovery plus Experiment 05 focused tests `82 passed`, complete suite `645 passed`, `pip check` reported no broken requirements, `git diff --check` passed, and live Experiment 05 acceptance passed.
 
-**Next Step:** Phase 04 Experiment 06 — Structured Planning
+Experiment 06 added deterministic semantic planning under `src/computer_agent/planning/`. The public production models are `PlanOperation`, `PlanStep`, and `StructuredPlan`, and the public builder is `StructuredPlanner.build_plan(...)`. The initial supported operation is `click_target`. Each `PlanStep` contains a human-readable goal, a semantic action `TargetSpec`, a semantic verification `TargetSpec`, and bounded `max_attempts` in `1..3`. `StructuredPlan` contains a human-readable task goal and an ordered non-empty tuple of `PlanStep` objects, with at most `20` steps. Plans are immutable/slotted, invalid explicit construction inputs raise validation errors, and no `PlanningStatus` or `PlanningResult` wrapper was added because this layer has no runtime planning attempt outcome. Plans do not contain executable `Action` objects, screen coordinates, `PerceptionSnapshot`, `GroundingResult`, `ToolResult`, verification results, or recovery results.
+
+The formal Experiment 06 harness is intentionally headless: no browser fixture, screenshot, observation, action execution, or LLM. It constructs the formal final plan through `StructuredPlanner.build_plan(...)`. The deterministic task goal is `Complete the deterministic two-step workflow`. Step 1 is `Activate the first target`, operation `click_target`, action target `STEP_1_TARGET_06`, verification target `STEP_1_COMPLETE_06`, and `max_attempts=2`. Step 2 is `Activate the second target`, operation `click_target`, action target `STEP_2_TARGET_06`, verification target `TASK_COMPLETE_06`, and `max_attempts=2`. Formal direct-run acceptance passed with execution not applicable, observation count `0`, and action execution count `0`. Current final validation: focused planning plus Experiment 06 tests `32 passed`, complete suite `677 passed`, `pip check` reported no broken requirements, `py_compile` passed, `git diff --check` passed, direct experiment execution passed, and direct `--help` passed.
+
+**Next Step:** Phase 04 Experiment 07 — LLM Reasoner
