@@ -70,7 +70,8 @@ Phase 03 Screen Perception is complete.
 - [x] Experiment 01: Reusable Perception Engine
 - [x] Experiment 02: UI Grounding
 - [x] Experiment 03: Action Grounding
-- [ ] Experiment 04: Verification
+- [x] Experiment 04: Verification
+- [x] Experiment 05: Recovery and Re-grounding
 
 Phase 04 is in progress. Experiment 04.01 extracted the reusable hybrid observation pipeline from Phase 03 Experiment 12 into `PerceptionEngine`, whose public API is `snapshot = engine.observe()`.
 
@@ -82,6 +83,10 @@ Experiment 04.02 added deterministic UI grounding over observed UI elements. It 
 
 Experiment 04.03 converts a resolved `GroundingResult` into the existing structured `Action` model, creating `click_mouse` with integer logical-screen coordinates. It applies deterministic floor-center conversion and configurable safe screen-edge margins, returns explicit `ready` or `blocked` results, and never executes the generated Action. The live harness reuses the Experiment 02 fixture and protects formal evidence through candidate-first promotion.
 
-The complete automated test suite now finishes with `514 passed`.
+Experiment 04 added the reusable deterministic `ActionVerifier` for target-appearance postconditions. It consumes a before `PerceptionSnapshot`, an `Action`, a `ToolResult`, an after `PerceptionSnapshot`, and a `TargetSpec`, and returns explicit `verified`, `failed`, or `inconclusive` status. Successful verification requires the before target to be `not_found` and the after target to be `resolved`; tool execution success alone is not task success. Stale or non-new after snapshots fail closed as `inconclusive`. The live fixture required exactly one click: first/before verification target `not_found`, `ToolResult.success == True`, and final verification `verified`. Formal evidence is `assets/screenshots/phase04_ui_grounding_task_reasoning/experiment_04_action_verification.png`. Commit `f8b1f79` (`feat: add deterministic action verification`) completed Experiment 04 with the full suite at `563 passed`.
 
-**Next Step:** Phase 04 Experiment 04 — Verification
+Experiment 05 added the reusable deterministic `ActionRecovery` with explicit `retry_ready`, `not_needed`, `blocked`, and `exhausted` outcomes. Recovery does not execute tools or observe the screen; it consumes the caller-supplied latest `PerceptionSnapshot`. `verified` maps to `not_needed`, `inconclusive` maps to `blocked`, tool execution failure maps to `blocked` without UI re-grounding, and exhausted attempts map to `exhausted`. A successful execution with a failed UI postcondition may re-ground; safe fresh UI grounding plus action grounding returns `retry_ready`, and the retry `Action` is newly generated from the latest snapshot. The experiment-local `live_harness_utils.py` contains non-domain Phase 04 live-harness plumbing; recovery acceptance logic remains local to Experiment 05, and production recovery remains under `src/computer_agent/recovery/`.
+
+Live Experiment 05 passed in dry-run with `1` observation and `0` executions. Execute mode passed with exactly `3` observations and exactly `2` click executions: the first `ToolResult` succeeded, first verification failed because the target remained `not_found`, recovery returned `retry_ready`, recovery grounding was `resolved`, recovery action grounding was `ready`, the retry `Action` had a new `action_id` and different coordinates, the second `ToolResult` succeeded, final verification was `verified`, and formal evidence was promoted successfully to `assets/screenshots/phase04_ui_grounding_task_reasoning/experiment_05_recovery_regrounding.png`. Current final validation: recovery plus Experiment 05 focused tests `82 passed`, complete suite `645 passed`, `pip check` reported no broken requirements, `git diff --check` passed, and live Experiment 05 acceptance passed.
+
+**Next Step:** Phase 04 Experiment 06 — Structured Planning

@@ -1877,3 +1877,149 @@ Blocked case:
 Experiment 04.03 completed Action Grounding, while Phase 04 remains in progress.
 
 **Next Step:** Phase 04 Experiment 04 — Verification
+
+### Experiment 04: Verification
+
+**Date:** August 31, 2026
+
+**Objective:**
+
+Add deterministic verification for target-appearance postconditions after an executed structured Action, while keeping task success separate from tool execution success.
+
+**Production Files:**
+
+- `src/computer_agent/verification/__init__.py`
+- `src/computer_agent/verification/models.py`
+- `src/computer_agent/verification/action_verifier.py`
+
+**Verification Contract:**
+
+- Public verifier: `ActionVerifier.verify_target_appeared(...)`
+- Inputs: before `PerceptionSnapshot`, `Action`, `ToolResult`, after `PerceptionSnapshot`, and `TargetSpec`.
+- Statuses: `verified`, `failed`, and `inconclusive`.
+- `verified` requires before grounding `not_found` and after grounding `resolved`.
+- A successful `ToolResult` alone is not task success.
+- A failed `ToolResult` returns `failed`.
+- Equal or older after snapshots close as `inconclusive`.
+- If the target already existed before the action, or either grounding state is ambiguous or unsafe, verification is `inconclusive`.
+- If the target was absent before and remains absent after a successful action, verification is `failed`.
+
+**Live Fixture and Harness:**
+
+The Experiment 04 fixture exposed `ACTION_TARGET_04` as the click target and `VERIFICATION_TARGET_04` as the postcondition. The live harness performed a before observation, grounded one click Action, optionally executed it only under `--execute`, performed an after observation, then verified the target-appearance postcondition.
+
+During live testing, visible `VERIFICATION_TARGET_04` initially appeared visually but was not observed by the configured perception path. The issue was fixture exposure to the existing perception path, not a verifier defect. The focused fixture correction made the button update both visible text and `aria-label` to `VERIFICATION_TARGET_04` after the click, so the dynamic state was available to Accessibility.
+
+**Final Live Result:**
+
+- Live fixture required exactly one click.
+- First/before verification target: `not_found`
+- `ToolResult.success`: `True`
+- Final verification: `verified`
+- Formal evidence: `assets/screenshots/phase04_ui_grounding_task_reasoning/experiment_04_action_verification.png`
+
+**Validation:**
+
+- Focused verifier and Experiment 04 harness tests passed.
+- Complete automated test suite: `563 passed`
+- Commit: `f8b1f79` (`feat: add deterministic action verification`)
+
+**Safety:**
+
+- Dry-run remained the default.
+- Execution required explicit `--execute`.
+- Verification used production grounding behavior instead of experiment-local reimplementation.
+- Candidate evidence was promoted only after fixture identity and verification acceptance passed.
+
+**Result:**
+
+Experiment 04 completed deterministic post-action verification while keeping Phase 04 deterministic and separating execution success from task success.
+
+**Next Step:** Experiment 05 — Recovery and Re-grounding
+
+### Experiment 05: Recovery and Re-grounding
+
+**Date:** September 1, 2026
+
+**Objective:**
+
+Add deterministic recovery that can prepare one safe retry Action from a fresh caller-supplied snapshot after successful tool execution but failed UI verification.
+
+**Production Files:**
+
+- `src/computer_agent/recovery/__init__.py`
+- `src/computer_agent/recovery/models.py`
+- `src/computer_agent/recovery/action_recovery.py`
+
+**Public API:**
+
+`ActionRecovery.prepare_retry(...)`
+
+**Deterministic Recovery Decision Table:**
+
+- `verified` verification -> `not_needed`
+- `inconclusive` verification -> `blocked`
+- Tool execution failure -> `blocked`, with no UI re-grounding
+- Successful execution with failed UI postcondition and exhausted attempts -> `exhausted`
+- Successful execution with failed UI postcondition, fresh safe UI grounding, and ready action grounding -> `retry_ready`
+- Fresh grounding that is `not_found`, `ambiguous`, or `unsafe` -> `blocked`
+- Fresh action grounding that is not `ready` -> `blocked`
+
+Recovery consumes the caller-supplied latest `PerceptionSnapshot`; it does not observe the screen itself. Production recovery contains no LLM, planning, observation, tool execution, controller, or retry loop. The distinction is explicit: a tool execution failure is terminal for deterministic recovery, while a successful execution whose UI postcondition failed may re-ground and prepare a retry.
+
+**Live Fixture and Harness:**
+
+The Experiment 05 fixture is a deterministic state machine: initial position A, first click moves the target to position B without completing the task, and second click exposes `VERIFICATION_TARGET_05`.
+
+Live execute flow:
+
+`Obs1 -> Action1 -> Obs2 -> FAILED -> ActionRecovery using Obs2 -> RETRY_READY -> Action2 -> Obs3 -> VERIFIED`
+
+The harness binds each observation to its expected capture path before using it. Candidate-first formal evidence protection keeps existing formal evidence intact until fixture identity, verification, recovery, observation-count, execution-count, and promotion checks pass.
+
+The experiment-local `live_harness_utils.py` contains non-domain Phase 04 live-harness plumbing. Recovery acceptance logic remains local to Experiment 05, and production recovery remains under `src/computer_agent/recovery/`.
+
+**Import Safety:**
+
+A direct-script import bug was found before the first dry-run: the absolute `experiments...` helper import failed under direct execution. The fix uses a relative helper import in package mode and a sibling helper import in direct script mode, with no `sys.path` manipulation. A safe direct `--help` regression test covers this path.
+
+**Live Results:**
+
+Dry-run:
+
+- Observation count: `1`
+- Execution count: `0`
+- Result: passed
+
+Execute:
+
+- Observation count: `3`
+- Execution count: `2`
+- First `ToolResult.success`: `True`
+- First verification: `failed` because the target remained `not_found`
+- Recovery status: `retry_ready`
+- Recovery grounding: `resolved`
+- Recovery action grounding: `ready`
+- Retry Action used a new `action_id` and different coordinates
+- Second `ToolResult.success`: `True`
+- Final verification: `verified`
+- Formal evidence promoted successfully
+- Formal evidence: `assets/screenshots/phase04_ui_grounding_task_reasoning/experiment_05_recovery_regrounding.png`
+
+**Validation:**
+
+- Recovery plus Experiment 05 focused tests: `82 passed`
+- Complete automated test suite: `645 passed`
+- `pip check`: no broken requirements
+- `git diff --check`: passed
+- Live Experiment 05 acceptance: passed
+
+**Result:**
+
+Experiment 05 completed deterministic recovery and fresh re-grounding through the formal Phase 04 architecture.
+
+Phase 04 remains in progress.
+
+**Next Step:**
+
+Experiment 06 — Structured Planning
