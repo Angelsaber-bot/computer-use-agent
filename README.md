@@ -73,6 +73,7 @@ Phase 03 Screen Perception is complete.
 - [x] Experiment 04: Verification
 - [x] Experiment 05: Recovery and Re-grounding
 - [x] Experiment 06: Structured Planning
+- [x] Experiment 07: LLM Reasoner
 
 Phase 04 is in progress. Experiment 04.01 extracted the reusable hybrid observation pipeline from Phase 03 Experiment 12 into `PerceptionEngine`, whose public API is `snapshot = engine.observe()`.
 
@@ -94,4 +95,10 @@ Experiment 06 added deterministic semantic planning under `src/computer_agent/pl
 
 The formal Experiment 06 harness is intentionally headless: no browser fixture, screenshot, observation, action execution, or LLM. It constructs the formal final plan through `StructuredPlanner.build_plan(...)`. The deterministic task goal is `Complete the deterministic two-step workflow`. Step 1 is `Activate the first target`, operation `click_target`, action target `STEP_1_TARGET_06`, verification target `STEP_1_COMPLETE_06`, and `max_attempts=2`. Step 2 is `Activate the second target`, operation `click_target`, action target `STEP_2_TARGET_06`, verification target `TASK_COMPLETE_06`, and `max_attempts=2`. Formal direct-run acceptance passed with execution not applicable, observation count `0`, and action execution count `0`. Current final validation: focused planning plus Experiment 06 tests `32 passed`, complete suite `677 passed`, `pip check` reported no broken requirements, `py_compile` passed, `git diff --check` passed, direct experiment execution passed, and direct `--help` passed.
 
-**Next Step:** Phase 04 Experiment 07 — LLM Reasoner
+Experiment 07 added provider-neutral LLM reasoning under `src/computer_agent/reasoning/`. `LLMClient` is the provider boundary, `LLMReasoner` owns strict JSON parsing and exact-key semantic validation, and the final plan is constructed through `StructuredPlanner`. The OpenAI adapter uses the Responses API with strict Structured Outputs and `store=False` on `openai==3.6.0`. Model output remains untrusted: code owns parsing, schema validation, canonical element-type validation, and planner construction. The LLM layer cannot produce executable `Action` objects, screen coordinates, observations, UI grounding, tool execution, verification, recovery, or an agent loop.
+
+The canonical reasoning element-type vocabulary is `button`, `checkbox`, `popup_button`, `radio_button`, `text_field`, and `text`. Empty `element_types` is valid and means no element-type grounding restriction. Separate live validation with `gpt-5.6-terra` first exposed unsupported-role hallucination (`link`, `menuitem`, `navigation item`, `heading`, and `page title`) that current perception cannot produce; after adding the canonical vocabulary and empty fallback policy, the second live call for `Open Settings.` returned `ready` with an empty element-type fallback. No UI execution occurred in Experiment 07.
+
+The formal Experiment 07 harness is headless and offline by default. It uses a deterministic fake LLM client, makes no live API request, observes no screen state, creates no fixture or screenshot, performs no UI grounding, creates no executable actions, and performs no verification or recovery. Its formal task is `Complete the deterministic LLM reasoning workflow`, producing two `click_target` semantic steps with `max_attempts=3`, empty element types, and targets `STEP_1_TARGET_07`, `STEP_1_COMPLETE_07`, `STEP_2_TARGET_07`, and `TASK_COMPLETE_07`. Current final validation: focused Experiment 07 reasoning tests `135 passed`, complete suite `793 passed`, `pip check` reported no broken requirements, `py_compile` passed, `git diff --check` passed, direct experiment execution passed, and direct `--help` passed.
+
+**Next Step:** Phase 04 Experiment 08 — Agent Loop. Experiment 08 will consume `StructuredPlan` and execute deterministic `observe -> ground -> act -> verify -> recover` behavior.

@@ -2210,3 +2210,242 @@ Phase 04 remains in progress.
 **Next Step:**
 
 Experiment 07 — LLM Reasoner
+
+### Experiment 07: LLM Reasoner
+
+**Date:** September 2, 2026
+
+**Objective:**
+
+Add the Phase 04 LLM reasoning boundary and close it out with a formal,
+headless harness. The experiment demonstrates the narrow semantic path from
+natural-language task intent to an LLM client boundary, `LLMReasoner`, strict
+semantic validation, `StructuredPlanner`, and final `StructuredPlan`.
+
+**Architecture / Production Boundary:**
+
+Experiment 07 added provider-neutral reasoning under
+`src/computer_agent/reasoning/`.
+
+Production reasoning owns:
+
+- `LLMClient`, a provider-neutral text-generation protocol.
+- `LLMReasoner`, which builds deterministic prompts and treats provider output
+  as untrusted.
+- `ReasoningStatus` and `ReasoningResult`.
+- Strict JSON parsing, duplicate-key rejection, exact top-level, step, and
+  target-key validation.
+- Canonical element-type validation.
+- Conversion into semantic `PlanStep` objects.
+- Final construction through `StructuredPlanner`.
+
+Production reasoning does not own:
+
+- Screen observation.
+- Perception.
+- UI grounding.
+- Action grounding.
+- Executable `Action` objects.
+- Screen coordinates.
+- Mouse or keyboard execution.
+- Verification.
+- Recovery.
+- Retry behavior.
+- Agent loops.
+
+**OpenAI Adapter:**
+
+`OpenAILLMClient` adapts the provider-neutral boundary to the OpenAI Responses
+API. It uses `openai==3.6.0`, strict Structured Outputs through a JSON schema,
+and `store=False`. Importing the module does not construct `OpenAI()`; the SDK
+client is constructed only when `OpenAILLMClient` is instantiated without an
+injected client. Tests use injected fake SDK clients and never call the network.
+
+Model output remains untrusted even with strict Structured Outputs. The
+provider adapter supplies a schema, but code still owns JSON parsing, exact-key
+validation, canonical element-type validation, bounded `max_attempts`, and
+`StructuredPlanner` construction.
+
+**Canonical Element Types:**
+
+The supported LLM element-type vocabulary is:
+
+- `button`
+- `checkbox`
+- `popup_button`
+- `radio_button`
+- `text_field`
+- `text`
+
+Empty `element_types` is valid and means no element-type grounding restriction.
+This provides a safe fallback when the model cannot identify a UI role that the
+current perception layer can actually produce.
+
+**Live Provider Evidence:**
+
+Two real `gpt-5.6-terra` calls were performed manually before this formal
+closeout task. No live API request was made during the formal harness closeout.
+
+The first live call returned `ready`, but generated unsupported speculative UI
+roles including `link`, `menuitem`, `navigation item`, `heading`, and
+`page title`. That exposed a real integration issue because `UIGrounder` treats
+`TargetSpec.element_types` as a hard compatibility filter, while current
+perception cannot produce those roles.
+
+The production reasoning policy was corrected by adding the canonical
+element-type vocabulary and telling the model to use empty `element_types` when
+the UI role is uncertain.
+
+The second live call used the task `Open Settings.` and succeeded:
+
+- Status: `ready`
+- Reason: `structured plan ready`
+- Supported element types: `button`, `checkbox`, `popup_button`,
+  `radio_button`, `text_field`, `text`
+- Task goal: `Open Settings.`
+- Step count: `1`
+- Step goal: `Open the Settings interface.`
+- Operation: `click_target`
+- Action target: `Settings`
+- Action element types: empty
+- Verification target: `Settings`
+- Verification element types: empty
+- Max attempts: `3`
+
+The successful second live call showed that the model used the empty role
+fallback rather than inventing an unsupported role. No UI execution occurred in
+Experiment 07.
+
+**Production Files:**
+
+- `src/computer_agent/reasoning/__init__.py`
+- `src/computer_agent/reasoning/llm_client.py`
+- `src/computer_agent/reasoning/llm_reasoner.py`
+- `src/computer_agent/reasoning/models.py`
+- `src/computer_agent/reasoning/openai_client.py`
+
+**Experiment:**
+
+`experiments/phase04_ui_grounding_task_reasoning/experiment_07_llm_reasoner.py`
+
+The formal harness is intentionally headless:
+
+- No fixture.
+- No screenshot.
+- No perception.
+- No UI grounding.
+- No action grounding.
+- No action execution.
+- No mouse or keyboard operation.
+- No verification.
+- No recovery.
+- No agent loop.
+
+The default mode is deterministic and offline. It injects a small experiment
+owned fake LLM client that returns JSON text for a simple two-step semantic
+plan. The fake does not parse, validate, or build plans; production
+`LLMReasoner` and `StructuredPlanner` do that work.
+
+Optional `--live` mode was not included. Live provider validation was performed
+separately and is documented above.
+
+**Deterministic Formal Task:**
+
+`Complete the deterministic LLM reasoning workflow`
+
+Step 1:
+
+- Goal: `Activate the first reasoning target`
+- Operation: `click_target`
+- Action target: `STEP_1_TARGET_07`
+- Action element types: empty
+- Verification target: `STEP_1_COMPLETE_07`
+- Verification element types: empty
+- Max attempts: `3`
+
+Step 2:
+
+- Goal: `Activate the second reasoning target`
+- Operation: `click_target`
+- Action target: `STEP_2_TARGET_07`
+- Action element types: empty
+- Verification target: `TASK_COMPLETE_07`
+- Verification element types: empty
+- Max attempts: `3`
+
+**Acceptance Conditions:**
+
+- `ReasoningStatus.READY`.
+- Result plan is a `StructuredPlan`.
+- Exact task goal.
+- Exactly two steps.
+- Exact step order.
+- Exact goals.
+- Exact operations.
+- Exact action target text.
+- Exact verification target text.
+- Exact `max_attempts`.
+- Exact element types.
+- No executable `Action` objects.
+- No x, y, coordinate, or reference-point authority.
+- Fake client called exactly once.
+- LLM provider is deterministic fake.
+- Live API request is `no`.
+- Observation count is `0`.
+- Action execution count is `0`.
+
+Failures return non-zero and print the failed conditions.
+
+**Tests:**
+
+`tests/test_experiment_07_llm_reasoner.py`
+
+The tests cover deterministic success, exact plan content, exact step order,
+exact target texts, exact operations, exact max attempts, exact element types,
+fake-client call count, malformed provider output, blocked reasoning results,
+wrong task goal, wrong step count, wrong order, wrong action target, wrong
+verification target, wrong max attempts, absence of executable Actions and
+coordinate authority, `--help`, import safety, and direct deterministic script
+execution.
+
+**Direct-Run Result:**
+
+- Direct experiment execution: passed.
+- Experiment acceptance: passed.
+- LLM provider: deterministic fake.
+- Live API request: `no`.
+- Observation count: `0`.
+- Action execution count: `0`.
+- Direct `--help`: passed.
+- Importing the experiment produces no execution or output.
+
+**Validation:**
+
+- Focused Experiment 07 reasoning tests: `135 passed`
+- Complete automated test suite: `793 passed`
+- `pip check`: no broken requirements
+- `py_compile`: passed
+- `git diff --check`: passed
+- Direct experiment execution: passed
+- Direct `--help`: passed
+
+**Safety:**
+
+- No API key, credential, billing, or payment details are stored or printed.
+- No test performs a network request.
+- No live provider call was made during this closeout task.
+- No UI execution occurred.
+- LLM reasoning produces only semantic `StructuredPlan` data.
+- Experiment 08 will consume `StructuredPlan` and execute the deterministic
+  `observe -> ground -> act -> verify -> recover` behavior.
+
+**Result:**
+
+Experiment 07 completed provider-neutral LLM reasoning and the formal headless
+acceptance harness.
+
+Phase 04 remains in progress.
+
+**Next Step:**
+
+Experiment 08 — Agent Loop
