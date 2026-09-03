@@ -75,6 +75,7 @@ Phase 03 Screen Perception is complete.
 - [x] Experiment 06: Structured Planning
 - [x] Experiment 07: LLM Reasoner
 - [x] Experiment 08: Agent Loop
+- [x] Experiment 09: Dynamic UI
 
 Phase 04 is in progress. Experiment 04.01 extracted the reusable hybrid observation pipeline from Phase 03 Experiment 12 into `PerceptionEngine`, whose public API is `snapshot = engine.observe()`.
 
@@ -106,4 +107,8 @@ Experiment 08 added the deterministic production `AgentLoop` orchestration layer
 
 The formal Experiment 08 harness uses a deterministic pre-built two-step `StructuredPlan`; it does not accept arbitrary natural-language tasks directly. Experiment 07 produces `StructuredPlan` from LLM reasoning, while Experiment 08 consumes a `StructuredPlan` for deterministic execution. Coordinates are not hardcoded in the plan or harness; they come from current UI grounding through `ActionGrounder` and `ActionRecovery`. The live fixture intentionally required recovery: the first click moved `STEP_1_TARGET_08`, recovery re-grounded it, and the retry clicked different observed runtime coordinates. A first live run exposed a fixture/perception contract mismatch because `<div role="status">` completion markers were not exposed by current perception; the fixture was minimally corrected to create enabled native button completion markers with exact labels/text, `tabindex=-1`, `pointer-events:none`, and no click handlers. No production perception expansion was needed. The second live run completed with status `completed`, state `succeeded`, `2 / 2` completed plan steps, `3` successful `click_mouse` executions, and recovery retry demonstrated. Formal evidence is `assets/screenshots/phase04_ui_grounding_task_reasoning/experiment_08_agent_loop.png`.
 
-**Next Step:** Phase 04 Experiment 09 — Dynamic UI.
+Experiment 09 completed the first formal Reasoner -> StructuredPlan -> AgentLoop integration. A natural-language task is passed to a deterministic fake LLM provider, production `LLMReasoner` validates the provider output into the exact `StructuredPlan`, and production `AgentLoop` executes that plan against a bounded three-state dynamic fixture. Formal acceptance remains deterministic and offline: it uses the fake provider once, makes no live API request, and does not claim arbitrary natural-language execution beyond the bounded semantic planning contract. The live fixture changes from an initial control, to a reflowed second state, to a foreground modal state containing a semantic decoy. The final live run completed `3 / 3` semantic steps with exactly `3` successful `click_mouse` actions, no recovery retry, and runtime-grounded click coordinates rather than plan constants. No production-code changes were required. Formal evidence is `assets/screenshots/phase04_ui_grounding_task_reasoning/experiment_09_dynamic_ui.png`.
+
+Final Experiment 09 validation: focused Experiment 09 tests `36 passed`; Experiment 07 regression `90 passed`; Experiment 08 regression `78 passed`; complete suite `907 passed`; `pip check` reported no broken requirements in the project virtual environment; `py_compile` passed; `git diff --check` passed; dry-run passed; direct `--help` passed; live Experiment 09 acceptance passed.
+
+**Next Step:** Phase 04 Experiment 10 — Cross-Application Agent.

@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PHASE04_DYNAMIC_UI_FIXTURE_09</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page-bg: #f3f5f7;
+      --panel-bg: #ffffff;
+      --text: #111111;
+      --border: #111111;
+      --status-bg: #eef2ff;
+      --stage-bg: #fbfcfd;
+      --zone-a: #f7efe0;
+      --zone-b: #e6f4f1;
+      --modal-backdrop: rgba(17, 17, 17, 0.58);
+      --modal-bg: #ffffff;
+      --target-bg: #ffffff;
+      --cancel-bg: #fff4f2;
+      --confirm-bg: #e8f8ed;
+      --complete-bg: #d8f3dc;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      background: var(--page-bg);
+      color: var(--text);
+      font-family: "Courier New", Courier, monospace;
+    }
+
+    main {
+      position: relative;
+      width: 1040px;
+      min-height: 720px;
+      margin: 0 auto;
+      padding: 24px;
+      background: var(--panel-bg);
+      border: 4px solid var(--border);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 32px;
+      line-height: 1.1;
+      text-align: center;
+    }
+
+    #status-09 {
+      margin-top: 20px;
+      padding: 12px;
+      background: var(--status-bg);
+      border: 3px solid var(--border);
+      font-size: 22px;
+      font-weight: 900;
+    }
+
+    #stage-09 {
+      position: relative;
+      height: 560px;
+      margin-top: 20px;
+      overflow: hidden;
+      background: var(--stage-bg);
+      border: 4px dashed var(--border);
+    }
+
+    .stage-panel {
+      position: relative;
+      height: 100%;
+      padding: 24px;
+    }
+
+    .start-panel {
+      background: linear-gradient(
+        135deg,
+        #ffffff 0%,
+        #ffffff 58%,
+        var(--zone-b) 58%,
+        var(--zone-b) 100%
+      );
+    }
+
+    .continue-panel {
+      display: grid;
+      grid-template-columns: 315px 1fr;
+      gap: 28px;
+      background: var(--zone-a);
+    }
+
+    .context-column,
+    .action-column,
+    .complete-panel {
+      border: 3px solid var(--border);
+      background: #ffffff;
+    }
+
+    .context-column {
+      padding: 20px;
+    }
+
+    .context-column h2,
+    .modal-card h2 {
+      margin: 0 0 16px;
+      font-size: 24px;
+      line-height: 1.1;
+    }
+
+    .context-column p,
+    .action-column p,
+    .modal-card p {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.35;
+    }
+
+    .action-column {
+      position: relative;
+      background: var(--zone-b);
+      padding: 20px;
+    }
+
+    button,
+    .completion-marker {
+      min-width: 360px;
+      min-height: 68px;
+      padding: 16px 20px;
+      border: 4px solid var(--border);
+      color: var(--text);
+      font: 900 28px/1 "Courier New", Courier, monospace;
+    }
+
+    button {
+      background: var(--target-bg);
+      cursor: pointer;
+    }
+
+    #dynamic-start-09 {
+      position: absolute;
+      left: 70px;
+      top: 100px;
+    }
+
+    #dynamic-continue-09 {
+      position: absolute;
+      right: 42px;
+      bottom: 44px;
+    }
+
+    .modal-layer {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      background: var(--modal-backdrop);
+      border: 0;
+    }
+
+    .modal-card {
+      width: min(880px, calc(100% - 64px));
+      padding: 28px;
+      background: var(--modal-bg);
+      border: 4px solid var(--border);
+      box-shadow: 12px 12px 0 #111111;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: space-between;
+      gap: 22px;
+      margin-top: 28px;
+    }
+
+    #dynamic-cancel-09,
+    #dynamic-confirm-09 {
+      min-width: 360px;
+      white-space: nowrap;
+    }
+
+    #dynamic-cancel-09 {
+      background: var(--cancel-bg);
+    }
+
+    #dynamic-confirm-09 {
+      background: var(--confirm-bg);
+    }
+
+    .complete-panel {
+      position: relative;
+      height: 100%;
+      background: #f4fff7;
+    }
+
+    #dynamic-complete-09 {
+      left: 330px;
+      top: 220px;
+      background: var(--complete-bg);
+      cursor: default;
+      position: absolute;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <main aria-label="PHASE04_DYNAMIC_UI_FIXTURE_09">
+    <h1>Phase 04 Experiment 09: Dynamic UI</h1>
+
+    <p id="status-09">
+      Ready for the first deterministic transition.
+    </p>
+
+    <div
+      id="stage-09"
+      aria-label="Experiment 09 dynamic interaction stage"
+    >
+      <section class="stage-panel start-panel" aria-label="Initial dynamic workspace">
+        <button
+          id="dynamic-start-09"
+          type="button"
+          aria-label="DYNAMIC_START_09"
+        >DYNAMIC_START_09</button>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const stage = document.getElementById("stage-09");
+    const status = document.getElementById("status-09");
+
+    function makeButton(id, label) {
+      const button = document.createElement("button");
+      button.id = id;
+      button.type = "button";
+      button.setAttribute("aria-label", label);
+      button.textContent = label;
+      return button;
+    }
+
+    function renderContinueState() {
+      const panel = document.createElement("section");
+      panel.className = "stage-panel continue-panel";
+      panel.setAttribute("aria-label", "Reflowed dynamic workspace");
+
+      const contextColumn = document.createElement("div");
+      contextColumn.className = "context-column";
+      contextColumn.innerHTML = `
+        <h2>Second State</h2>
+        <p>The workspace has changed from one open area into separate lanes.</p>
+      `;
+
+      const actionColumn = document.createElement("div");
+      actionColumn.className = "action-column";
+      actionColumn.innerHTML = "<p>Only the lower-right control can advance.</p>";
+
+      const button = makeButton(
+        "dynamic-continue-09",
+        "DYNAMIC_CONTINUE_09"
+      );
+      button.addEventListener("click", renderModalState);
+      actionColumn.appendChild(button);
+
+      panel.append(contextColumn, actionColumn);
+      stage.replaceChildren(panel);
+      status.textContent = "Second state ready after synchronous reflow.";
+    }
+
+    function renderModalState() {
+      const basePanel = document.createElement("section");
+      basePanel.className = "stage-panel continue-panel";
+      basePanel.setAttribute("aria-label", "Foreground confirmation workspace");
+
+      const contextColumn = document.createElement("div");
+      contextColumn.className = "context-column";
+      contextColumn.innerHTML = `
+        <h2>Third State</h2>
+        <p>The prior action area is blocked by a foreground layer.</p>
+      `;
+
+      const actionColumn = document.createElement("div");
+      actionColumn.className = "action-column";
+      actionColumn.innerHTML = "<p>Foreground controls now define the task.</p>";
+
+      const layer = document.createElement("div");
+      layer.className = "modal-layer";
+      layer.setAttribute("role", "dialog");
+      layer.setAttribute("aria-label", "Experiment 09 confirmation dialog");
+
+      const card = document.createElement("section");
+      card.className = "modal-card";
+      card.innerHTML = `
+        <h2>Confirm Foreground Step</h2>
+        <p>Choose the confirming control to finish this deterministic workflow.</p>
+      `;
+
+      const actions = document.createElement("div");
+      actions.className = "modal-actions";
+
+      const cancel = makeButton("dynamic-cancel-09", "DYNAMIC_CANCEL_09");
+      cancel.addEventListener("click", () => {
+        status.textContent = "Decoy selected; foreground state remains active.";
+      });
+
+      const confirm = makeButton("dynamic-confirm-09", "DYNAMIC_CONFIRM_09");
+      confirm.addEventListener("click", renderCompleteState);
+
+      actions.append(cancel, confirm);
+      card.appendChild(actions);
+      layer.appendChild(card);
+      basePanel.append(contextColumn, actionColumn, layer);
+      stage.replaceChildren(basePanel);
+      status.textContent = "Foreground confirmation state ready.";
+    }
+
+    function renderCompleteState() {
+      const panel = document.createElement("section");
+      panel.className = "stage-panel complete-panel";
+      panel.setAttribute("aria-label", "Completed dynamic workspace");
+
+      const completion = makeButton(
+        "dynamic-complete-09",
+        "DYNAMIC_COMPLETE_09"
+      );
+      completion.className = "completion-marker";
+      completion.tabIndex = -1;
+
+      panel.appendChild(completion);
+      stage.replaceChildren(panel);
+      status.textContent = "Workflow complete.";
+    }
+
+    document
+      .getElementById("dynamic-start-09")
+      .addEventListener("click", renderContinueState);
+  </script>
+</body>
+</html>

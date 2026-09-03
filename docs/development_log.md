@@ -2752,6 +2752,150 @@ the formal live UI harness.
 
 Phase 04 remains in progress.
 
+### Experiment 09: Dynamic UI
+
+**Date:** September 3, 2026
+
+**Objective:**
+
+Complete the first formal integration from natural-language task intent through
+deterministic LLM reasoning, validated semantic planning, production
+`AgentLoop` execution, runtime UI grounding, and verified task completion on a
+bounded dynamic local fixture.
+
+This remains a deterministic local fixture experiment. It does not demonstrate
+general real-world website support, Canvas/Khan support, live OpenAI execution,
+or arbitrary natural-language execution beyond the bounded semantic planning
+contract validated by `LLMReasoner`.
+
+**Architecture:**
+
+The confirmed architecture is:
+
+`Natural-language task -> deterministic fake LLM provider output -> production LLMReasoner -> validated StructuredPlan -> production AgentLoop -> dynamically changing three-state UI -> verified task completion`
+
+Experiment 09 composes existing production interfaces. No production code was
+changed.
+
+**Formal Task:**
+
+`Complete the deterministic dynamic UI workflow`
+
+Semantic workflow:
+
+1. Action target: `DYNAMIC_START_09`; verification target:
+   `DYNAMIC_CONTINUE_09`
+2. Action target: `DYNAMIC_CONTINUE_09`; verification target:
+   `DYNAMIC_CONFIRM_09`
+3. Action target: `DYNAMIC_CONFIRM_09`; verification target:
+   `DYNAMIC_COMPLETE_09`
+
+All three semantic steps use `click_target` planning and are ultimately
+executed as structured `click_mouse` Actions by the existing grounding and tool
+execution path.
+
+**Dynamic Fixture Behavior:**
+
+The local fixture exercises three changing UI states:
+
+- Initial control for `DYNAMIC_START_09`.
+- Reflowed second state exposing `DYNAMIC_CONTINUE_09` in a different layout.
+- Foreground modal state exposing `DYNAMIC_CONFIRM_09` while also presenting a
+  semantic decoy.
+
+The final completion marker is `DYNAMIC_COMPLETE_09`. Coordinates are not
+stored in the plan or treated as stable expected values; live click locations
+are evidence of runtime grounding.
+
+**Reasoning Integration:**
+
+The formal harness begins from the natural-language task and uses a
+deterministic fake LLM provider. The fake provider is called exactly once and
+returns bounded semantic JSON. Production `LLMReasoner` owns parsing,
+validation, semantic target construction, and final construction of the
+`StructuredPlan`.
+
+Formal acceptance makes no live API request.
+
+**AgentLoop Integration:**
+
+The exact reasoned `StructuredPlan` is passed into production `AgentLoop`.
+Experiment 09 differs from Experiment 08 in two important ways:
+
+- Experiment 08 consumed a pre-built `StructuredPlan`; Experiment 09 creates the
+  plan through `LLMReasoner` first.
+- Experiment 08 intentionally demonstrated recovery/retry; Experiment 09
+  intentionally does not force recovery.
+
+The live run completed without retry: three semantic steps produced exactly
+three physical click executions.
+
+**Formal Offline Testing Behavior:**
+
+Default execution remains dry-run and deterministic. The offline acceptance path
+uses the fake LLM provider, performs no live OpenAI request, and validates the
+reasoned semantic plan and dry-run behavior without live mouse execution.
+
+The direct dry-run passed, and direct `--help` passed.
+
+**Manual Live Execution Result:**
+
+- Reasoning acceptance: passed
+- Deterministic fake LLM call count: `1`
+- Live API request: `no`
+- AgentLoop status: `completed`
+- AgentState status: `succeeded`
+- Completed plan steps: `3 / 3`
+- Action executions: `3`
+- Executed tools: all `click_mouse`
+- Tool results: all succeeded
+- Recovery retry demonstrated: `no`
+- Experiment acceptance: passed
+
+Runtime click coordinates were observed during the live run, but they are not
+documented as stable expected values. They only prove that coordinates came from
+runtime UI grounding rather than plan constants.
+
+**Evidence Screenshot:**
+
+`assets/screenshots/phase04_ui_grounding_task_reasoning/experiment_09_dynamic_ui.png`
+
+**Validation:**
+
+- Focused Experiment 09 tests: `36 passed`
+- Experiment 07 regression: `90 passed`
+- Experiment 08 regression: `78 passed`
+- Complete automated test suite: `907 passed`
+- Project virtual environment `pip check`: no broken requirements
+- `py_compile`: passed
+- `git diff --check`: passed
+- Direct dry-run: passed
+- Direct `--help`: passed
+- Live Experiment 09 acceptance: passed
+
+**Production Changes:**
+
+None. Experiment 09 successfully composed the existing production reasoning,
+planning, grounding, verification, recovery policy, tool execution, and
+`AgentLoop` interfaces.
+
+**Safety:**
+
+- Formal acceptance is deterministic and offline.
+- The fake LLM provider is used for acceptance.
+- No live OpenAI request is made.
+- Default direct execution is dry-run.
+- No recovery retry is forced or demonstrated.
+- No production ranking, safety, selection, grounding, verification, recovery,
+  or loop logic is reimplemented in acceptance code.
+
+**Result:**
+
+Experiment 09 completed the bounded dynamic UI integration from deterministic
+LLM reasoning to `StructuredPlan` to production `AgentLoop`.
+
+Phase 04 remains in progress.
+
 **Next Step:**
 
-Experiment 09 — Dynamic UI
+Experiment 10 — Cross-Application Agent
