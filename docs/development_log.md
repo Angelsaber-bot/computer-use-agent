@@ -2446,6 +2446,312 @@ acceptance harness.
 
 Phase 04 remains in progress.
 
+### Experiment 08: Agent Loop
+
+**Date:** September 2, 2026
+
+**Objective:**
+
+Add the deterministic production agent-loop orchestration layer and close it
+out with a live UI harness that consumes an existing `StructuredPlan`.
+
+Experiment 08 does not accept arbitrary natural-language tasks directly. The
+division remains explicit: Experiment 07 produces a `StructuredPlan` from LLM
+reasoning, and Experiment 08 consumes a `StructuredPlan` for deterministic
+execution.
+
+**Production Architecture:**
+
+Added deterministic agent orchestration under `src/computer_agent/agent/`:
+
+- `AgentLoopStatus`
+- `AgentLoopResult`
+- `AgentLoop`
+
+`AgentLoop` consumes a `StructuredPlan` and creates an `AgentState` from
+`plan.task_goal`. It supports only `PlanOperation.CLICK_TARGET` and fails
+visibly for unsupported future operations.
+
+The loop itself does not call an LLM, OpenAI, natural-language planning, or any
+provider API. It does not generate coordinates. Coordinates come from current UI
+grounding through `ActionGrounder` on the initial attempt and from
+`ActionRecovery` on retry attempts.
+
+**Execution Flow:**
+
+For each semantic `PlanStep`, `AgentLoop` orchestrates:
+
+`PerceptionEngine.observe() -> UIGrounder.ground(...) -> ActionGrounder.ground_click(...) -> ToolExecutor.execute(...) -> AgentState.record_step(...) -> PerceptionEngine.observe() -> ActionVerifier.verify_target_appeared(...)`
+
+If verification succeeds, the current semantic plan step is complete and
+`completed_plan_steps` is incremented.
+
+If verification fails or is inconclusive, the loop calls
+`ActionRecovery.prepare_retry(...)` with the latest snapshot, completed attempt
+count, and the step's `max_attempts`.
+
+Initial UI grounding outcomes other than `resolved` fail closed as
+`AgentLoopStatus.BLOCKED`. Initial action-grounding outcomes other than `ready`
+also fail closed as `blocked`. Existing recovery policy owns
+`inconclusive`, failed `ToolResult`, `blocked`, `exhausted`, and
+`retry_ready` semantics; the loop does not duplicate that policy.
+
+On `retry_ready`, the loop uses `ActionRecovery`'s supplied Action directly. It
+does not call `UIGrounder` again and does not call `ActionGrounder` again. The
+retry `before_snapshot` is the previous attempt's `after_snapshot`, preserving
+the correct verification pairing.
+
+`AgentState.steps` records actual Action executions. `completed_plan_steps`
+records verified semantic `PlanStep` completion. In the final live run,
+`AgentState.steps` contained three click attempts while
+`completed_plan_steps == 2`.
+
+**Result Model:**
+
+`AgentLoopResult` is immutable and slotted. It validates:
+
+- Status is `completed`, `blocked`, or `exhausted`.
+- `plan` is a `StructuredPlan`.
+- `state` is an `AgentState`.
+- `completed_plan_steps` is a non-boolean integer within the plan length.
+- `reason` is non-empty.
+- `completed` requires all plan steps complete and `AgentState.succeeded`.
+- `blocked` and `exhausted` require `AgentState.failed`.
+
+**Dependency Composition Correction:**
+
+Review found a partial-dependency-injection issue before closeout. A custom
+grounder could be injected while default verifier/recovery silently created
+separate production grounders. The constructor was corrected so the all-default
+case shares the exact same `UIGrounder` across initial grounding, verifier, and
+recovery, and shares the exact same `ActionGrounder` across initial action
+grounding and recovery. Custom grounders or action grounders now require
+explicit verifier/recovery dependencies rather than silent replacement.
+
+**Formal Live Harness:**
+
+`experiments/phase04_ui_grounding_task_reasoning/experiment_08_agent_loop.py`
+
+Default mode is safe and offline:
+
+- Builds the deterministic plan.
+- Prints fixture and plan details.
+- Performs no observation.
+- Takes no screenshot.
+- Constructs no live executor path.
+- Executes no mouse action.
+
+Live execution requires explicit `--execute`. The harness tells the user to
+open the local fixture manually in Chrome or Safari, keep it visible and
+focused, and waits before invoking the production loop. It reuses existing
+Phase 04 live wiring through `live_harness_utils.py`:
+
+- `build_live_perception_engine`
+- `build_live_tool_executor`
+
+The live `AgentLoop` is created as:
+
+```python
+AgentLoop(
+    perception_engine=real_perception_engine,
+    executor=real_tool_executor,
+)
+```
+
+This exercises the production default shared `UIGrounder`,
+`ActionGrounder`, `ActionVerifier`, and `ActionRecovery`.
+
+**Deterministic Formal Plan:**
+
+Task goal:
+
+`Complete the deterministic Agent Loop workflow`
+
+Step 1:
+
+- Goal: `Recover and complete the first UI target`
+- Operation: `click_target`
+- Action target: `STEP_1_TARGET_08`
+- Verification target: `STEP_1_COMPLETE_08`
+- Max attempts: `2`
+
+Step 2:
+
+- Goal: `Complete the final UI target`
+- Operation: `click_target`
+- Action target: `STEP_2_TARGET_08`
+- Verification target: `TASK_COMPLETE_08`
+- Max attempts: `1`
+
+The plan contains no executable `Action` objects and no coordinates.
+
+**Fixture:**
+
+`assets/fixtures/phase04_ui_grounding_task_reasoning/experiment_08_agent_loop.html`
+
+Initial state contains exactly one actionable button with visible text and
+`aria-label`:
+
+`STEP_1_TARGET_08`
+
+The first click succeeds at the tool level but does not create
+`STEP_1_COMPLETE_08`. It keeps exactly one `STEP_1_TARGET_08` target visible
+and moves it to a deterministic, clearly different location. This forces
+verification to return `failed`, causing recovery to re-ground the moved target
+and prepare a retry Action.
+
+The second click removes the step-one action target, creates
+`STEP_1_COMPLETE_08`, and creates the actionable `STEP_2_TARGET_08` button.
+The third click removes the final target and creates `TASK_COMPLETE_08`.
+
+**Live Failure, Diagnosis, and Fixture Correction:**
+
+The first real live execution intentionally exercised recovery:
+
+- Attempt 1: `click_mouse {'x': 499, 'y': 438}`, `ToolResult.success=True`
+- First click moved `STEP_1_TARGET_08`.
+- Recovery re-grounded the moved target.
+- Attempt 2: `click_mouse {'x': 1033, 'y': 704}`,
+  `ToolResult.success=True`
+
+The first and second click coordinates were observed runtime values and were
+not hardcoded. Their difference proved real re-grounding and execution of the
+recovery-supplied retry Action.
+
+After attempt 2, the browser visibly transitioned to:
+
+- `STEP_1_COMPLETE_08`
+- `STEP_2_TARGET_08`
+
+However the loop ended `exhausted` because verification still returned
+`failed`. A diagnostic observation on the already-transitioned page showed:
+
+`STEP_1_COMPLETE_08`:
+
+- Accessibility: absent
+- OCR: absent
+- Fused: absent
+- Grounding: `not_found`
+
+`STEP_2_TARGET_08`:
+
+- Accessibility: button
+- Fused: present
+- Grounding: `resolved`
+
+Root cause: the fixture created completion markers as `<div role="status">`,
+which current `MacOSAccessibility` did not expose, and OCR also failed to
+recognize the marker. This was a fixture/perception contract mismatch, not an
+AgentLoop, recovery, or timing bug.
+
+No production perception, grounding, verifier, recovery, or AgentLoop behavior
+was changed for this issue. The fixture-only correction changed completion
+markers to enabled native buttons with:
+
+- `type="button"`
+- `tabindex="-1"`
+- Exact `aria-label`
+- Exact visible text
+- `pointer-events: none`
+- `cursor: default`
+- No click handlers
+- Not disabled
+
+Follow-up observation diagnostics proved:
+
+`STEP_1_COMPLETE_08`:
+
+- Accessibility: `1`
+- Type: `button`
+- Confidence: `1.0`
+- Enabled: `True`
+- Fused: `1`
+- Grounding: `resolved`
+
+`STEP_2_TARGET_08`:
+
+- Accessibility: `1`
+- Type: `button`
+- Confidence: `1.0`
+- Enabled: `True`
+- Grounding: `resolved`
+
+**Final Live Success:**
+
+The second full live execution succeeded:
+
+- `AgentLoopResult.reason`: `all plan steps completed`
+- Agent loop status: `completed`
+- Agent state: `succeeded`
+- Completed plan steps: `2 / 2`
+- Action executions: `3`
+
+Observed runtime actions:
+
+- Attempt 1: `click_mouse {'x': 499, 'y': 438}`,
+  `ToolResult.success=True`
+- Attempt 2: `click_mouse {'x': 1033, 'y': 704}`,
+  `ToolResult.success=True`
+- Attempt 3: `click_mouse {'x': 749, 'y': 526}`,
+  `ToolResult.success=True`
+
+Experiment acceptance passed, and recovery retry was demonstrated. The
+coordinates above are live evidence from this run, not hardcoded coordinates.
+
+**Evidence Screenshot:**
+
+`assets/screenshots/phase04_ui_grounding_task_reasoning/experiment_08_agent_loop.png`
+
+The screenshot shows the final successful fixture state with
+`STEP_1_COMPLETE_08`, `TASK_COMPLETE_08`, and the workflow-complete status. It
+matches the repository's Phase 04 screenshot evidence convention and is kept as
+formal Experiment 08 evidence.
+
+**Tests:**
+
+- `tests/test_agent_loop.py`
+- `tests/test_experiment_08_agent_loop.py`
+
+The tests cover loop success, multi-step behavior, typed terminal outcomes,
+retry attempt counting, recovery-supplied Actions, no duplicate grounding or
+action grounding on retry, before/after snapshot pairing, result invariants,
+dependency-injection sharing, import safety, dry/default CLI safety, `--help`
+safety, offline execute routing with injected fakes, formal acceptance
+conditions, fixture dynamic state transitions, and the corrected accessible
+completion-marker representation.
+
+No test performs live mouse actions, opens a browser, takes screenshots, or
+calls the network.
+
+**Validation:**
+
+- Experiment 08 targeted tests after fixture correction: `78 passed`
+- Earlier adjacent deterministic stack: `223 passed`
+- Final focused closeout stack: `230 passed`
+- Complete automated test suite: `871 passed`
+- `pip check`: no broken requirements
+- `py_compile`: passed
+- `git diff --check`: passed
+- Dry direct run: passed
+- Direct `--help`: passed
+
+**Safety:**
+
+- `--execute` is required for real UI execution.
+- Default direct execution cannot move or click the mouse.
+- `--help` has no observation or action side effects.
+- Importing the experiment produces no output or execution.
+- No API keys, secrets, billing data, or unrelated machine-sensitive
+  information were stored.
+- No LLM/OpenAI dependency exists in `AgentLoop`.
+
+**Result:**
+
+Experiment 08 completed deterministic Agent Loop production orchestration and
+the formal live UI harness.
+
+Phase 04 remains in progress.
+
 **Next Step:**
 
-Experiment 08 — Agent Loop
+Experiment 09 — Dynamic UI

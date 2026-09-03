@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PHASE04_AGENT_LOOP_FIXTURE_08</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page-bg: #f3f5f7;
+      --panel-bg: #ffffff;
+      --text: #111111;
+      --border: #111111;
+      --target-bg: #ffffff;
+      --status-bg: #eef2ff;
+      --complete-bg: #d8f3dc;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      background: var(--page-bg);
+      color: var(--text);
+      font-family: "Courier New", Courier, monospace;
+      margin: 0;
+      padding: 24px;
+    }
+
+    main {
+      background: var(--panel-bg);
+      border: 4px solid var(--border);
+      margin: 0 auto;
+      min-height: 720px;
+      padding: 24px;
+      position: relative;
+      width: 1040px;
+    }
+
+    h1 {
+      font-size: 32px;
+      font-weight: 900;
+      line-height: 1.1;
+      margin: 0;
+      text-align: center;
+    }
+
+    #status-08 {
+      background: var(--status-bg);
+      border: 3px solid var(--border);
+      font-size: 22px;
+      font-weight: 900;
+      line-height: 1.2;
+      margin: 20px 0 0;
+      padding: 12px;
+    }
+
+    #stage-08 {
+      border: 4px dashed var(--border);
+      height: 560px;
+      margin-top: 20px;
+      position: relative;
+    }
+
+    button,
+    .completion-marker {
+      border: 4px solid var(--border);
+      color: var(--text);
+      font: 900 28px/1 "Courier New", Courier, monospace;
+      min-height: 68px;
+      min-width: 360px;
+      padding: 16px 20px;
+    }
+
+    button {
+      background: var(--target-bg);
+      cursor: pointer;
+      position: absolute;
+    }
+
+    #step-one-target-08 {
+      left: 72px;
+      top: 92px;
+    }
+
+    #step-one-target-08.retry-position {
+      left: 606px;
+      top: 358px;
+    }
+
+    #step-two-target-08 {
+      left: 322px;
+      top: 180px;
+    }
+
+    .completion-marker {
+      background: var(--complete-bg);
+      cursor: default;
+      display: inline-block;
+      pointer-events: none;
+      position: absolute;
+    }
+
+    #step-one-complete-08 {
+      left: 72px;
+      top: 92px;
+    }
+
+    #task-complete-08 {
+      left: 302px;
+      top: 342px;
+    }
+  </style>
+</head>
+<body>
+  <main aria-label="PHASE04_AGENT_LOOP_FIXTURE_08">
+    <h1>Phase 04 Experiment 08: Agent Loop</h1>
+    <p id="status-08">Ready for deterministic Agent Loop execution.</p>
+    <div id="stage-08" aria-label="Experiment 08 interaction stage">
+      <button
+        id="step-one-target-08"
+        type="button"
+        aria-label="STEP_1_TARGET_08"
+      >STEP_1_TARGET_08</button>
+    </div>
+  </main>
+
+  <script>
+    const stage = document.getElementById("stage-08");
+    const status = document.getElementById("status-08");
+    let stepOneClicks = 0;
+
+    function addCompletionMarker(id, text, left, top) {
+      const marker = document.createElement("button");
+      marker.id = id;
+      marker.type = "button";
+      marker.className = "completion-marker";
+      marker.tabIndex = -1;
+      marker.setAttribute("aria-label", text);
+      marker.style.left = left;
+      marker.style.top = top;
+      marker.textContent = text;
+      stage.appendChild(marker);
+      return marker;
+    }
+
+    function addStepTwoTarget() {
+      const button = document.createElement("button");
+      button.id = "step-two-target-08";
+      button.type = "button";
+      button.setAttribute("aria-label", "STEP_2_TARGET_08");
+      button.textContent = "STEP_2_TARGET_08";
+      button.addEventListener("click", () => {
+        button.remove();
+        addCompletionMarker(
+          "task-complete-08",
+          "TASK_COMPLETE_08",
+          "302px",
+          "342px"
+        );
+        status.textContent = "Workflow complete.";
+      });
+      stage.appendChild(button);
+    }
+
+    document
+      .getElementById("step-one-target-08")
+      .addEventListener("click", (event) => {
+        const button = event.currentTarget;
+        stepOneClicks += 1;
+
+        if (stepOneClicks === 1) {
+          button.classList.add("retry-position");
+          button.textContent = "STEP_1_TARGET_08";
+          button.setAttribute("aria-label", "STEP_1_TARGET_08");
+          status.textContent = "First click recorded; target moved.";
+          return;
+        }
+
+        button.remove();
+        addCompletionMarker(
+          "step-one-complete-08",
+          "STEP_1_COMPLETE_08",
+          "72px",
+          "92px"
+        );
+        addStepTwoTarget();
+        status.textContent = "First step complete; final target is ready.";
+      });
+  </script>
+</body>
+</html>
