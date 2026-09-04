@@ -6,7 +6,15 @@ import json
 from typing import Any
 
 from computer_agent.grounding.models import TargetSpec
-from computer_agent.planning.models import PlanOperation, PlanStep, StructuredPlan
+from computer_agent.planning.models import (
+    ActivateAppStep,
+    InsertTextStep,
+    PlanOperation,
+    PlanStep,
+    ReadClipboardStep,
+    SemanticPlanStep,
+    StructuredPlan,
+)
 from computer_agent.planning.structured_planner import StructuredPlanner
 from computer_agent.reasoning.llm_client import LLMClient
 from computer_agent.reasoning.models import (
@@ -21,26 +29,59 @@ Convert the user's task intent into a semantic UI plan.
 Return JSON only, with no markdown, comments, or prose.
 The top-level object must contain exactly:
 {{"task_goal": string, "steps": array}}
-Each step object must contain exactly:
-{{"goal": string, "operation": "click_target", "action_target": target, "verification_target": target, "max_attempts": integer}}
+Only supported semantic operations are allowed: click_target, read_clipboard, activate_app, insert_text.
+Each step must use exactly one operation shape:
+click_target: {{"goal": string, "operation": "click_target", "action_target": target, "verification_target": target, "max_attempts": integer}}
+read_clipboard: {{"goal": string, "operation": "read_clipboard", "value_key": string, "expected_text": string, "max_attempts": integer}}
+activate_app: {{"goal": string, "operation": "activate_app", "app_name": string, "max_attempts": integer}}
+insert_text: {{"goal": string, "operation": "insert_text", "value_key": string, "max_attempts": integer}}
 Each target object must contain exactly:
 {{"text": string, "element_types": array}}
 element_types may contain only: {", ".join(SUPPORTED_REASONING_ELEMENT_TYPES)}.
 If the UI role is uncertain, use an empty element_types array.
 Never invent a role.
-Use only the "click_target" operation.
+click_target identifies semantic UI targets, never coordinates.
+read_clipboard stores the clipboard value into value_key.
+activate_app identifies only the application name.
+insert_text consumes a previously stored runtime value by value_key and must never contain literal text to type.
+Never emit executable Action objects, tool names, raw tool arguments, coordinates, hotkeys, shell commands, AppleScript, or bundle IDs.
 Do not claim to observe the screen, operate the computer, or execute the task.
 """.strip()
 
 _USER_PROMPT_PREFIX = "Task intent:"
 _TOP_LEVEL_KEYS = frozenset(("task_goal", "steps"))
 _SUPPORTED_ELEMENT_TYPES = frozenset(SUPPORTED_REASONING_ELEMENT_TYPES)
-_STEP_KEYS = frozenset(
+_CLICK_TARGET_STEP_KEYS = frozenset(
     (
         "goal",
         "operation",
         "action_target",
         "verification_target",
+        "max_attempts",
+    )
+)
+_READ_CLIPBOARD_STEP_KEYS = frozenset(
+    (
+        "goal",
+        "operation",
+        "value_key",
+        "expected_text",
+        "max_attempts",
+    )
+)
+_ACTIVATE_APP_STEP_KEYS = frozenset(
+    (
+        "goal",
+        "operation",
+        "app_name",
+        "max_attempts",
+    )
+)
+_INSERT_TEXT_STEP_KEYS = frozenset(
+    (
+        "goal",
+        "operation",
+        "value_key",
         "max_attempts",
     )
 )
@@ -138,27 +179,85 @@ def _build_user_prompt(task: str) -> str:
     return f"{_USER_PROMPT_PREFIX}\n{task}"
 
 
-def _parse_step(step_data: object) -> PlanStep:
+def _parse_step(step_data: object) -> SemanticPlanStep:
     _require_object(step_data, "step")
-    _require_exact_keys(step_data, _STEP_KEYS, "step")
 
-    operation_value = step_data["operation"]
-    if operation_value != PlanOperation.CLICK_TARGET.value:
-        raise _ReasoningResponseError("unsupported operation")
+    operation = _parse_operation(step_data.get("operation"))
+    if operation is PlanOperation.CLICK_TARGET:
+        return _parse_click_target_step(step_data)
 
-    max_attempts = step_data["max_attempts"]
-    if isinstance(max_attempts, bool) or not isinstance(max_attempts, int):
-        raise _ReasoningResponseError(
-            "max_attempts must be a JSON integer"
-        )
+    if operation is PlanOperation.READ_CLIPBOARD:
+        return _parse_read_clipboard_step(step_data)
 
+    if operation is PlanOperation.ACTIVATE_APP:
+        return _parse_activate_app_step(step_data)
+
+    if operation is PlanOperation.INSERT_TEXT:
+        return _parse_insert_text_step(step_data)
+
+    raise _ReasoningResponseError("unsupported operation")
+
+
+def _parse_operation(value: object) -> PlanOperation:
+    if not isinstance(value, str) or not value.strip():
+        raise _ReasoningResponseError("operation must be a non-empty string")
+
+    try:
+        return PlanOperation(value)
+    except ValueError as error:
+        raise _ReasoningResponseError("unsupported operation") from error
+
+
+def _parse_click_target_step(step_data: dict[str, Any]) -> PlanStep:
+    _require_exact_keys(step_data, _CLICK_TARGET_STEP_KEYS, "click_target step")
     return PlanStep(
         goal=step_data["goal"],
         operation=PlanOperation.CLICK_TARGET,
         action_target=_parse_target(step_data["action_target"]),
         verification_target=_parse_target(step_data["verification_target"]),
-        max_attempts=max_attempts,
+        max_attempts=_parse_max_attempts(step_data["max_attempts"]),
     )
+
+
+def _parse_read_clipboard_step(step_data: dict[str, Any]) -> ReadClipboardStep:
+    _require_exact_keys(
+        step_data,
+        _READ_CLIPBOARD_STEP_KEYS,
+        "read_clipboard step",
+    )
+    return ReadClipboardStep(
+        goal=step_data["goal"],
+        value_key=step_data["value_key"],
+        expected_text=step_data["expected_text"],
+        max_attempts=_parse_max_attempts(step_data["max_attempts"]),
+    )
+
+
+def _parse_activate_app_step(step_data: dict[str, Any]) -> ActivateAppStep:
+    _require_exact_keys(step_data, _ACTIVATE_APP_STEP_KEYS, "activate_app step")
+    return ActivateAppStep(
+        goal=step_data["goal"],
+        app_name=step_data["app_name"],
+        max_attempts=_parse_max_attempts(step_data["max_attempts"]),
+    )
+
+
+def _parse_insert_text_step(step_data: dict[str, Any]) -> InsertTextStep:
+    _require_exact_keys(step_data, _INSERT_TEXT_STEP_KEYS, "insert_text step")
+    return InsertTextStep(
+        goal=step_data["goal"],
+        value_key=step_data["value_key"],
+        max_attempts=_parse_max_attempts(step_data["max_attempts"]),
+    )
+
+
+def _parse_max_attempts(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise _ReasoningResponseError(
+            "max_attempts must be a JSON integer"
+        )
+
+    return value
 
 
 def _parse_target(target_data: object) -> TargetSpec:

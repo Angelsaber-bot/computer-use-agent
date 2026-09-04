@@ -2894,8 +2894,162 @@ planning, grounding, verification, recovery policy, tool execution, and
 Experiment 09 completed the bounded dynamic UI integration from deterministic
 LLM reasoning to `StructuredPlan` to production `AgentLoop`.
 
-Phase 04 remains in progress.
+### Experiment 10: Cross-Application Agent
 
-**Next Step:**
+**Date:** September 3, 2026
 
-Experiment 10 — Cross-Application Agent
+**Objective:**
+
+Prove that a bounded autonomous agent can transfer runtime state from a browser
+UI into another macOS application through a structured semantic plan.
+
+The formal task was:
+
+`Transfer the deterministic browser fixture value CROSS_APP_TRANSFER_10 into the
+blank TextEdit document.`
+
+This experiment does not demonstrate arbitrary cross-application autonomy,
+general webpage support, or live OpenAI execution. It demonstrates the bounded
+formal path from natural-language intent to deterministic semantic planning,
+production loop execution, application switching, runtime value handling, and
+final editable-value verification.
+
+**Architecture:**
+
+The confirmed architecture is:
+
+`Natural-language task -> deterministic fake LLM -> LLMReasoner -> StructuredPlan -> AgentLoop -> UI grounding / tool execution / verification -> runtime AgentState value flow -> application switching -> final editable-value verification`
+
+Formal acceptance used a deterministic offline fake LLM provider. No live
+OpenAI request was required.
+
+**Semantic Plan:**
+
+Successful semantic sequence:
+
+1. `click_target`
+2. `read_clipboard`
+3. `activate_app`
+4. `insert_text`
+
+The model-facing output remained semantic. The click step named browser fixture
+targets, the clipboard step named a runtime value key plus the expected value
+to verify, the activation step named the application, and the insert step
+referenced only the runtime value key.
+
+`InsertTextStep` did not contain the literal transfer text.
+
+**Runtime Data Flow:**
+
+The successful runtime value path was:
+
+`browser fixture -> system clipboard -> read_from_clipboard ToolResult -> AgentState.context["values"]["transfer_value"] -> paste_text`
+
+The final runtime value was `CROSS_APP_TRANSFER_10`.
+
+**AgentLoop Integration:**
+
+Successful production tool order:
+
+1. `click_mouse`
+2. `read_from_clipboard`
+3. `activate_app`
+4. `paste_text`
+
+Application activation was allowlisted by code with exact app-name matching.
+The successful live run used the existing production
+`ComputerController.activate_app("TextEdit")` primitive through the registered
+`activate_app` tool. The activation primitive itself was not the root bug.
+
+The insert operation was intentionally non-idempotent: it allowed exactly one
+attempt and had no retry path, preventing duplicate paste after a successful
+paste followed by uncertain verification.
+
+Runtime click coordinates are live evidence only. They are not stored in the
+semantic plan, are not hardcoded in the harness, and are not treated as stable
+expected values.
+
+**Formal Live Result:**
+
+PASS.
+
+- `AgentLoopResult.reason`: `all plan steps completed`
+- Agent loop status: `completed`
+- Agent state: `succeeded`
+- Completed plan steps: `4 / 4`
+- Action executions: `4`
+- Semantic retries: `0`
+- Duplicate paste: `no`
+- Runtime transfer value: `CROSS_APP_TRANSFER_10`
+- AgentLoop acceptance: passed
+- Experiment acceptance: passed
+
+Tool attempts:
+
+1. `click_mouse`, `ToolResult.success=True`
+2. `read_from_clipboard`, `ToolResult.success=True`
+3. `activate_app`, arguments `{'app_name': 'TextEdit'}`,
+   `ToolResult.success=True`
+4. `paste_text`, arguments `{'text': 'CROSS_APP_TRANSFER_10'}`,
+   `ToolResult.success=True`
+
+Final TextEdit content verification used macOS Accessibility focused editable
+state and exact value equality, not OCR.
+
+**Evidence Screenshot:**
+
+`assets/screenshots/phase04_ui_grounding_task_reasoning/experiment_10_cross_application_agent.png`
+
+The screenshot was visually inspected during final review. It shows a TextEdit
+document containing exactly `CROSS_APP_TRANSFER_10`, so the current screenshot
+serves as Experiment 10 formal success evidence.
+
+**macOS Frontmost Application Finding:**
+
+Live acceptance exposed a macOS observer issue: in a command-line Python
+process, `NSWorkspace.frontmostApplication` can remain stale after activation
+unless the Cocoa run loop is serviced.
+
+The reusable production observer fix is in `MacOSAccessibility`. The shared
+frontmost application lookup now refreshes AppKit state before reading
+`NSWorkspace.frontmostApplication`, and that lookup is used by both:
+
+- `read_frontmost_application_name()`
+- `read_frontmost_controls()`
+
+This makes post-activation verification current without replacing
+`ComputerController.activate_app`.
+
+**Validation:**
+
+- `tests/test_accessibility.py`: `51 passed`
+- `tests/test_state_verifier.py`: `28 passed`
+- `tests/test_agent_loop.py`: `97 passed`
+- `tests/test_experiment_08_agent_loop.py`: `33 passed`
+- `tests/test_experiment_09_dynamic_ui.py`: `36 passed`
+- `tests/test_experiment_10_cross_application_agent.py`: `39 passed`
+- Focused closeout total: `284 passed`
+- Complete automated test suite: `1127 passed`
+- Project virtual environment `pip check`: no broken requirements
+- `py_compile` for changed Python files: passed
+- `git diff --check`: passed
+- Live Experiment 10 acceptance: passed
+
+**Safety:**
+
+- Default direct execution remains dry-run.
+- Live computer execution requires `--execute`.
+- Formal acceptance is deterministic and offline.
+- No live OpenAI request is required.
+- Application activation is allowlisted by code.
+- Runtime transfer text reaches paste only through verified AgentState context.
+- Experiment acceptance does not reimplement production grounding, ranking,
+  recovery, verification, or execution logic.
+- Production modules do not import from `experiments/`.
+
+**Result:**
+
+Experiment 10 completed Cross-Application Agent.
+
+Phase 04 UI Grounding and Task Reasoning is complete, including the original
+Task Reasoning plus core Autonomous Agent milestone.

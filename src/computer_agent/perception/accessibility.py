@@ -11,6 +11,11 @@ except ImportError:  # pragma: no cover - depends on host platform
     AppKit = None  # type: ignore[assignment]
 
 try:
+    import Foundation
+except ImportError:  # pragma: no cover - depends on host platform
+    Foundation = None  # type: ignore[assignment]
+
+try:
     import ApplicationServices
 except ImportError:  # pragma: no cover - depends on host platform
     ApplicationServices = None  # type: ignore[assignment]
@@ -25,11 +30,14 @@ from computer_agent.perception.models import BoundingBox, UIElement
 
 _ROLE_MAP = {
     "AXTextField": "text_field",
+    "AXTextArea": "text_area",
     "AXButton": "button",
     "AXCheckBox": "checkbox",
     "AXPopUpButton": "popup_button",
     "AXRadioButton": "radio_button",
 }
+
+_APPKIT_STATE_REFRESH_SECONDS = 0.01
 
 
 class MacOSAccessibility:
@@ -123,9 +131,21 @@ class MacOSAccessibility:
 
         return controls
 
+    def read_frontmost_application_name(self) -> str | None:
+        """Return the localized frontmost application name when available."""
+
+        if AppKit is None:
+            return None
+
+        try:
+            application = self._frontmost_workspace_application()
+        except Exception:
+            return None
+
+        return _localized_application_name(application)
+
     def _frontmost_application_element(self) -> Any | None:
-        workspace = AppKit.NSWorkspace.sharedWorkspace()
-        application = workspace.frontmostApplication()
+        application = self._frontmost_workspace_application()
 
         if application is None:
             return None
@@ -133,6 +153,13 @@ class MacOSAccessibility:
         pid = application.processIdentifier()
 
         return ApplicationServices.AXUIElementCreateApplication(pid)
+
+    def _frontmost_workspace_application(self) -> Any | None:
+        if not _refresh_appkit_state():
+            return None
+
+        workspace = AppKit.NSWorkspace.sharedWorkspace()
+        return workspace.frontmostApplication()
 
     def _traverse(
         self,
@@ -209,6 +236,37 @@ def _copy_attribute(
         return value
 
     return result
+
+
+def _refresh_appkit_state() -> bool:
+    if Foundation is None:
+        return False
+
+    try:
+        run_loop = Foundation.NSRunLoop.currentRunLoop()
+        deadline = Foundation.NSDate.dateWithTimeIntervalSinceNow_(
+            _APPKIT_STATE_REFRESH_SECONDS
+        )
+        run_loop.runUntilDate_(deadline)
+    except Exception:
+        return False
+
+    return True
+
+
+def _localized_application_name(application: Any | None) -> str | None:
+    if application is None:
+        return None
+
+    try:
+        name = application.localizedName()
+    except Exception:
+        return None
+
+    if not isinstance(name, str) or not name.strip():
+        return None
+
+    return name.strip()
 
 
 def _iter_children(children: Any) -> tuple[Any, ...]:

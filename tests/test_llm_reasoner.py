@@ -8,10 +8,14 @@ import pytest
 from computer_agent.core.models import Action
 from computer_agent.grounding import TargetSpec
 from computer_agent.planning import (
+    ActivateAppStep,
+    InsertTextStep,
     MAX_PLAN_STEP_ATTEMPTS,
     MAX_STRUCTURED_PLAN_STEPS,
     PlanOperation,
     PlanStep,
+    ReadClipboardStep,
+    SemanticPlanStep,
     StructuredPlan,
     StructuredPlanner,
 )
@@ -55,7 +59,7 @@ class RecordingPlanner(StructuredPlanner):
         self,
         *,
         task_goal: str,
-        steps: tuple[PlanStep, ...],
+        steps: tuple[SemanticPlanStep, ...],
     ) -> StructuredPlan:
         self.calls.append(
             {
@@ -75,7 +79,7 @@ class FailingPlanner(StructuredPlanner):
         self,
         *,
         task_goal: str,
-        steps: tuple[PlanStep, ...],
+        steps: tuple[SemanticPlanStep, ...],
     ) -> StructuredPlan:
         raise ValueError("planner validation failed")
 
@@ -85,7 +89,7 @@ class InternalErrorPlanner(StructuredPlanner):
         self,
         *,
         task_goal: str,
-        steps: tuple[PlanStep, ...],
+        steps: tuple[SemanticPlanStep, ...],
     ) -> StructuredPlan:
         raise RuntimeError("planner implementation failed")
 
@@ -121,6 +125,71 @@ def _step_json(
         "verification_target": verification_target,
         "max_attempts": max_attempts,
     }
+
+
+def _read_clipboard_step_json(
+    *,
+    goal: object = "Read copied transfer value",
+    value_key: object = "transfer_value",
+    expected_text: object = "CROSS_APP_TRANSFER_10",
+    max_attempts: object = 1,
+) -> dict[str, object]:
+    return {
+        "goal": goal,
+        "operation": "read_clipboard",
+        "value_key": value_key,
+        "expected_text": expected_text,
+        "max_attempts": max_attempts,
+    }
+
+
+def _activate_app_step_json(
+    *,
+    goal: object = "Switch to TextEdit",
+    app_name: object = "TextEdit",
+    max_attempts: object = 1,
+) -> dict[str, object]:
+    return {
+        "goal": goal,
+        "operation": "activate_app",
+        "app_name": app_name,
+        "max_attempts": max_attempts,
+    }
+
+
+def _insert_text_step_json(
+    *,
+    goal: object = "Insert the verified transfer value",
+    value_key: object = "transfer_value",
+    max_attempts: object = 1,
+) -> dict[str, object]:
+    return {
+        "goal": goal,
+        "operation": "insert_text",
+        "value_key": value_key,
+        "max_attempts": max_attempts,
+    }
+
+
+def _cross_app_steps_json() -> list[dict[str, object]]:
+    return [
+        _step_json(
+            goal="Copy the transfer value from the browser fixture",
+            action_target=_target_json(
+                "COPY_TRANSFER_VALUE_10",
+                ("button",),
+            ),
+            verification_target=_target_json(
+                "TRANSFER_COPIED_10",
+                ("button",),
+            ),
+        ),
+        _read_clipboard_step_json(
+            goal="Read and verify the copied transfer value",
+        ),
+        _activate_app_step_json(),
+        _insert_text_step_json(),
+    ]
 
 
 def _response(
@@ -170,6 +239,19 @@ def _duplicate_nested_target_key_response() -> str:
     )
 
 
+def _duplicate_runtime_step_key_response() -> str:
+    return (
+        '{"task_goal": "Read clipboard", "steps": ['
+        '{"goal": "Read", '
+        '"operation": "read_clipboard", '
+        '"value_key": "transfer_value", '
+        '"value_key": "duplicate_value", '
+        '"expected_text": "CROSS_APP_TRANSFER_10", '
+        '"max_attempts": 1}'
+        ']}'
+    )
+
+
 def _reason(
     response: object,
     *,
@@ -200,6 +282,126 @@ def test_valid_one_step_response_returns_ready_plan():
     assert len(result.plan.steps) == 1
     assert result.reason.strip()
     assert len(client.calls) == 1
+
+
+def test_valid_existing_click_target_response_remains_ready_plan_step():
+    result, client, _reasoner = _reason(_response())
+
+    assert result.status is ReasoningStatus.READY
+    assert isinstance(result.plan.steps[0], PlanStep)
+    assert result.plan.steps[0].operation is PlanOperation.CLICK_TARGET
+    assert result.plan.steps[0].action_target.text == "Settings"
+    assert result.plan.steps[0].verification_target.text == "Settings panel"
+    assert len(client.calls) == 1
+
+
+def test_valid_read_clipboard_response_returns_typed_step():
+    result, client, _reasoner = _reason(
+        _response(steps=[_read_clipboard_step_json(max_attempts=2)])
+    )
+
+    assert result.status is ReasoningStatus.READY
+    step = result.plan.steps[0]
+    assert isinstance(step, ReadClipboardStep)
+    assert step.operation is PlanOperation.READ_CLIPBOARD
+    assert step.goal == "Read copied transfer value"
+    assert step.value_key == "transfer_value"
+    assert step.expected_text == "CROSS_APP_TRANSFER_10"
+    assert step.max_attempts == 2
+    assert len(client.calls) == 1
+
+
+def test_valid_activate_app_response_returns_typed_step():
+    result, client, _reasoner = _reason(
+        _response(steps=[_activate_app_step_json(max_attempts=2)])
+    )
+
+    assert result.status is ReasoningStatus.READY
+    step = result.plan.steps[0]
+    assert isinstance(step, ActivateAppStep)
+    assert step.operation is PlanOperation.ACTIVATE_APP
+    assert step.goal == "Switch to TextEdit"
+    assert step.app_name == "TextEdit"
+    assert step.max_attempts == 2
+    assert len(client.calls) == 1
+
+
+def test_valid_insert_text_response_returns_typed_step():
+    result, client, _reasoner = _reason(
+        _response(steps=[_insert_text_step_json(max_attempts=2)])
+    )
+
+    assert result.status is ReasoningStatus.READY
+    step = result.plan.steps[0]
+    assert isinstance(step, InsertTextStep)
+    assert step.operation is PlanOperation.INSERT_TEXT
+    assert step.goal == "Insert the verified transfer value"
+    assert step.value_key == "transfer_value"
+    assert step.max_attempts == 2
+    assert len(client.calls) == 1
+
+
+def test_valid_mixed_four_step_cross_app_response_preserves_exact_order():
+    result, client, _reasoner = _reason(
+        _response(
+            task_goal=(
+                "Transfer the deterministic browser fixture value "
+                "CROSS_APP_TRANSFER_10 into the blank TextEdit document."
+            ),
+            steps=_cross_app_steps_json(),
+        )
+    )
+
+    assert result.status is ReasoningStatus.READY
+    assert result.plan.task_goal == (
+        "Transfer the deterministic browser fixture value "
+        "CROSS_APP_TRANSFER_10 into the blank TextEdit document."
+    )
+    first, second, third, fourth = result.plan.steps
+    assert isinstance(first, PlanStep)
+    assert isinstance(second, ReadClipboardStep)
+    assert isinstance(third, ActivateAppStep)
+    assert isinstance(fourth, InsertTextStep)
+    assert tuple(step.operation for step in result.plan.steps) == (
+        PlanOperation.CLICK_TARGET,
+        PlanOperation.READ_CLIPBOARD,
+        PlanOperation.ACTIVATE_APP,
+        PlanOperation.INSERT_TEXT,
+    )
+    assert first.action_target.text == "COPY_TRANSFER_VALUE_10"
+    assert first.verification_target.text == "TRANSFER_COPIED_10"
+    assert second.expected_text == "CROSS_APP_TRANSFER_10"
+    assert third.app_name == "TextEdit"
+    assert len(client.calls) == 1
+
+
+def test_runtime_value_key_is_preserved_between_read_and_insert_steps():
+    result, _client, _reasoner = _reason(
+        _response(steps=_cross_app_steps_json())
+    )
+
+    read_step = result.plan.steps[1]
+    insert_step = result.plan.steps[3]
+    assert isinstance(read_step, ReadClipboardStep)
+    assert isinstance(insert_step, InsertTextStep)
+    assert read_step.value_key == "transfer_value"
+    assert insert_step.value_key == "transfer_value"
+
+
+def test_insert_text_step_does_not_contain_literal_payload_from_plan():
+    result, _client, _reasoner = _reason(
+        _response(steps=_cross_app_steps_json())
+    )
+
+    step = result.plan.steps[3]
+    assert isinstance(step, InsertTextStep)
+    assert "text" not in step.__dataclass_fields__
+    assert "text_to_type" not in step.__dataclass_fields__
+    assert "expected_text" not in step.__dataclass_fields__
+    assert "CROSS_APP_TRANSFER_10" not in {
+        getattr(step, field_name)
+        for field_name in step.__dataclass_fields__
+    }
 
 
 def test_valid_ordered_two_step_response_returns_ready_plan():
@@ -530,6 +732,10 @@ def test_empty_caller_task_is_rejected(task: str):
             "unsupported operation",
         ),
         (
+            _response(steps=[_step_json(operation="future_operation")]),
+            "unknown operation",
+        ),
+        (
             _response(steps=[_step_json(action_target="Settings")]),
             "target not object",
         ),
@@ -617,6 +823,192 @@ def test_empty_caller_task_is_rejected(task: str):
                 ]
             ),
             "max_attempts over bound",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        key: value
+                        for key, value in _read_clipboard_step_json().items()
+                        if key != "value_key"
+                    }
+                ]
+            ),
+            "read_clipboard missing value_key",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        **_read_clipboard_step_json(),
+                        "note": "extra",
+                    }
+                ]
+            ),
+            "read_clipboard extra key",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        **_step_json(operation="read_clipboard"),
+                    }
+                ]
+            ),
+            "click-only keys on read_clipboard",
+        ),
+        (
+            _response(
+                steps=[
+                    _read_clipboard_step_json(
+                        value_key="transfer-value",
+                    )
+                ]
+            ),
+            "malformed read_clipboard value_key",
+        ),
+        (
+            _response(
+                steps=[
+                    _insert_text_step_json(
+                        value_key="transfer.value",
+                    )
+                ]
+            ),
+            "malformed insert_text value_key",
+        ),
+        (
+            _response(
+                steps=[
+                    _read_clipboard_step_json(
+                        expected_text="",
+                    )
+                ]
+            ),
+            "empty expected_text",
+        ),
+        (
+            _response(
+                steps=[
+                    _activate_app_step_json(
+                        app_name="",
+                    )
+                ]
+            ),
+            "empty app_name",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        key: value
+                        for key, value in _activate_app_step_json().items()
+                        if key != "app_name"
+                    }
+                ]
+            ),
+            "activate_app missing app_name",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        **_activate_app_step_json(),
+                        "bundle_id": "com.apple.TextEdit",
+                    }
+                ]
+            ),
+            "activate_app executable detail",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        key: value
+                        for key, value in _insert_text_step_json().items()
+                        if key != "value_key"
+                    }
+                ]
+            ),
+            "insert_text missing value_key",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        **_insert_text_step_json(),
+                        "expected_text": "CROSS_APP_TRANSFER_10",
+                    }
+                ]
+            ),
+            "expected_text supplied to insert_text",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        **_insert_text_step_json(),
+                        "text": "CROSS_APP_TRANSFER_10",
+                    }
+                ]
+            ),
+            "text supplied to insert_text",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        **_insert_text_step_json(),
+                        "text_to_type": "CROSS_APP_TRANSFER_10",
+                    }
+                ]
+            ),
+            "text_to_type supplied to insert_text",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        **_insert_text_step_json(),
+                        "tool_name": "paste_text",
+                    }
+                ]
+            ),
+            "raw tool_name",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        **_insert_text_step_json(),
+                        "arguments": {"text": "CROSS_APP_TRANSFER_10"},
+                    }
+                ]
+            ),
+            "raw arguments",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        **_insert_text_step_json(),
+                        "hotkey": ["command", "v"],
+                    }
+                ]
+            ),
+            "raw hotkey",
+        ),
+        (
+            _response(steps=[_insert_text_step_json(max_attempts=True)]),
+            "insert_text bool max_attempts",
+        ),
+        (
+            _response(steps=[_activate_app_step_json(max_attempts=0)]),
+            "activate_app zero max_attempts",
+        ),
+        (
+            _duplicate_runtime_step_key_response(),
+            "duplicate runtime step key",
         ),
     ],
 )

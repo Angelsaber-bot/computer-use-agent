@@ -16,6 +16,14 @@ class ActionVerificationStatus(str, Enum):
     INCONCLUSIVE = "inconclusive"
 
 
+class StateVerificationStatus(str, Enum):
+    """Possible outcomes of verifying observed application state."""
+
+    VERIFIED = "verified"
+    FAILED = "failed"
+    INCONCLUSIVE = "inconclusive"
+
+
 @dataclass(frozen=True, slots=True)
 class ActionVerificationResult:
     """Explicit result of deterministic action verification."""
@@ -56,3 +64,22 @@ class ActionVerificationResult:
                 raise ValueError(
                     "VERIFIED results require after_grounding to be RESOLVED"
                 )
+
+
+@dataclass(frozen=True, slots=True)
+class StateVerificationResult:
+    """Explicit result of deterministic state verification."""
+
+    status: StateVerificationStatus
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, StateVerificationStatus):
+            raise ValueError(
+                "status must be a StateVerificationStatus"
+            )
+
+        if not isinstance(self.reason, str) or not self.reason.strip():
+            raise ValueError(
+                "reason must be a non-empty string"
+            )

@@ -2,17 +2,36 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Collection
+import math
+import time
+
 from computer_agent.agent.loop_models import AgentLoopResult, AgentLoopStatus
 from computer_agent.agent.state import AgentState
+from computer_agent.core.models import Action, ToolResult
 from computer_agent.grounding.action_grounder import ActionGrounder
 from computer_agent.grounding.action_models import ActionGroundingStatus
 from computer_agent.grounding.models import GroundingStatus
 from computer_agent.grounding.ui_grounder import UIGrounder
-from computer_agent.planning.models import PlanOperation, PlanStep, StructuredPlan
+from computer_agent.planning.models import (
+    ActivateAppStep,
+    InsertTextStep,
+    PlanOperation,
+    PlanStep,
+    ReadClipboardStep,
+    StructuredPlan,
+)
 from computer_agent.recovery.action_recovery import ActionRecovery
 from computer_agent.recovery.models import RecoveryStatus
 from computer_agent.verification.action_verifier import ActionVerifier
-from computer_agent.verification.models import ActionVerificationStatus
+from computer_agent.verification.models import (
+    ActionVerificationStatus,
+    StateVerificationStatus,
+)
+
+
+_DEFAULT_FRONTMOST_APP_SETTLE_TIMEOUT_SECONDS = 1.0
+_DEFAULT_FRONTMOST_APP_SETTLE_POLL_SECONDS = 0.1
 
 
 class AgentLoop:
@@ -27,6 +46,15 @@ class AgentLoop:
         executor: object,
         verifier: object | None = None,
         recovery: object | None = None,
+        state_verifier: object | None = None,
+        allowed_app_names: Collection[str] | None = None,
+        frontmost_app_settle_timeout_seconds: float = (
+            _DEFAULT_FRONTMOST_APP_SETTLE_TIMEOUT_SECONDS
+        ),
+        frontmost_app_settle_poll_seconds: float = (
+            _DEFAULT_FRONTMOST_APP_SETTLE_POLL_SECONDS
+        ),
+        settling_sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         _require_method(
             perception_engine,
@@ -75,12 +103,48 @@ class AgentLoop:
             "recovery",
         )
 
+        if state_verifier is not None:
+            _require_method(
+                state_verifier,
+                "verify_frontmost_application",
+                "state_verifier",
+            )
+            _require_method(
+                state_verifier,
+                "verify_focused_editable_value",
+                "state_verifier",
+            )
+
+        frontmost_app_settle_timeout_seconds = _validate_seconds(
+            frontmost_app_settle_timeout_seconds,
+            "frontmost_app_settle_timeout_seconds",
+            allow_zero=True,
+        )
+        frontmost_app_settle_poll_seconds = _validate_seconds(
+            frontmost_app_settle_poll_seconds,
+            "frontmost_app_settle_poll_seconds",
+            allow_zero=False,
+        )
+        if not callable(settling_sleep):
+            raise ValueError("settling_sleep must be callable")
+
         self._perception_engine = perception_engine
         self._grounder = grounder
         self._action_grounder = action_grounder
         self._executor = executor
         self._verifier = verifier
         self._recovery = recovery
+        self._state_verifier = state_verifier
+        self._allowed_app_names = _normalize_allowed_app_names(
+            allowed_app_names
+        )
+        self._frontmost_app_settle_timeout_seconds = (
+            frontmost_app_settle_timeout_seconds
+        )
+        self._frontmost_app_settle_poll_seconds = (
+            frontmost_app_settle_poll_seconds
+        )
+        self._settling_sleep = settling_sleep
 
     @property
     def perception_engine(self) -> object:
@@ -118,6 +182,18 @@ class AgentLoop:
 
         return self._recovery
 
+    @property
+    def state_verifier(self) -> object | None:
+        """Return the state verifier used for direct semantic operations."""
+
+        return self._state_verifier
+
+    @property
+    def allowed_app_names(self) -> frozenset[str]:
+        """Return exact application names authorized for activation."""
+
+        return self._allowed_app_names
+
     def run(self, plan: StructuredPlan) -> AgentLoopResult:
         """Run all plan steps until completion or a typed terminal outcome."""
 
@@ -129,17 +205,50 @@ class AgentLoop:
         completed_plan_steps = 0
 
         for step in plan.steps:
-            if step.operation is not PlanOperation.CLICK_TARGET:
+            if (
+                isinstance(step, PlanStep)
+                and step.operation is PlanOperation.CLICK_TARGET
+            ):
+                terminal_result = self._run_click_step(
+                    plan=plan,
+                    state=state,
+                    step=step,
+                    completed_plan_steps=completed_plan_steps,
+                )
+            elif (
+                isinstance(step, ReadClipboardStep)
+                and step.operation is PlanOperation.READ_CLIPBOARD
+            ):
+                terminal_result = self._run_read_clipboard_step(
+                    plan=plan,
+                    state=state,
+                    step=step,
+                    completed_plan_steps=completed_plan_steps,
+                )
+            elif (
+                isinstance(step, ActivateAppStep)
+                and step.operation is PlanOperation.ACTIVATE_APP
+            ):
+                terminal_result = self._run_activate_app_step(
+                    plan=plan,
+                    state=state,
+                    step=step,
+                    completed_plan_steps=completed_plan_steps,
+                )
+            elif (
+                isinstance(step, InsertTextStep)
+                and step.operation is PlanOperation.INSERT_TEXT
+            ):
+                terminal_result = self._run_insert_text_step(
+                    plan=plan,
+                    state=state,
+                    step=step,
+                    completed_plan_steps=completed_plan_steps,
+                )
+            else:
                 raise RuntimeError(
                     f"unsupported plan operation: {step.operation}"
                 )
-
-            terminal_result = self._run_click_step(
-                plan=plan,
-                state=state,
-                step=step,
-                completed_plan_steps=completed_plan_steps,
-            )
 
             if terminal_result is not None:
                 return terminal_result
@@ -291,6 +400,274 @@ class AgentLoop:
                 f"unsupported recovery status: {recovery_result.status}"
             )
 
+    def _run_read_clipboard_step(
+        self,
+        *,
+        plan: StructuredPlan,
+        state: AgentState,
+        step: ReadClipboardStep,
+        completed_plan_steps: int,
+    ) -> AgentLoopResult | None:
+        values = state.context.get("values")
+        if values is not None and not isinstance(values, dict):
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.BLOCKED,
+                reason="runtime values context is not a mapping",
+            )
+
+        last_failure_reason = "clipboard content was not verified"
+        for _attempt_number in range(1, step.max_attempts + 1):
+            action = Action(
+                tool_name="read_from_clipboard",
+                arguments={},
+                reason="Read and verify clipboard text for runtime context",
+            )
+            tool_result = self._executor.execute(action)
+            state.record_step(action, tool_result)
+
+            verified_text, failure_reason = _verified_clipboard_text(
+                tool_result,
+                step.expected_text,
+            )
+            if verified_text is not None:
+                values = _runtime_values_mapping(
+                    state,
+                    create=True,
+                )
+                if values is None:
+                    return _terminal_failure(
+                        plan=plan,
+                        state=state,
+                        completed_plan_steps=completed_plan_steps,
+                        status=AgentLoopStatus.BLOCKED,
+                        reason="runtime values context is not a mapping",
+                    )
+
+                values[step.value_key] = verified_text
+                return None
+
+            last_failure_reason = failure_reason
+
+        return _terminal_failure(
+            plan=plan,
+            state=state,
+            completed_plan_steps=completed_plan_steps,
+            status=AgentLoopStatus.EXHAUSTED,
+            reason=(
+                "clipboard read verification exhausted attempts: "
+                f"{last_failure_reason}"
+            ),
+        )
+
+    def _run_activate_app_step(
+        self,
+        *,
+        plan: StructuredPlan,
+        state: AgentState,
+        step: ActivateAppStep,
+        completed_plan_steps: int,
+    ) -> AgentLoopResult | None:
+        if step.app_name not in self._allowed_app_names:
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.BLOCKED,
+                reason=(
+                    "application activation is not authorized for "
+                    f"{step.app_name}"
+                ),
+            )
+
+        if self._state_verifier is None:
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.BLOCKED,
+                reason="state verifier is required for application activation",
+            )
+
+        last_failure_reason = "application activation was not verified"
+        for _attempt_number in range(1, step.max_attempts + 1):
+            action = Action(
+                tool_name="activate_app",
+                arguments={"app_name": step.app_name},
+                reason="Activate allowlisted application for semantic step",
+            )
+            tool_result = self._executor.execute(action)
+            state.record_step(action, tool_result)
+
+            if not tool_result.success:
+                last_failure_reason = (
+                    "application activation tool failed: "
+                    f"{tool_result.error}"
+                )
+                continue
+
+            verification_result = (
+                self._verify_frontmost_application_with_settling(
+                    step.app_name
+                )
+            )
+            if (
+                verification_result.status
+                is StateVerificationStatus.VERIFIED
+            ):
+                return None
+
+            last_failure_reason = (
+                "frontmost application verification was "
+                f"{verification_result.status.value}: "
+                f"{verification_result.reason}"
+            )
+
+        return _terminal_failure(
+            plan=plan,
+            state=state,
+            completed_plan_steps=completed_plan_steps,
+            status=AgentLoopStatus.EXHAUSTED,
+            reason=(
+                "application activation exhausted attempts: "
+                f"{last_failure_reason}"
+            ),
+        )
+
+    def _verify_frontmost_application_with_settling(
+        self,
+        app_name: str,
+    ):
+        if self._state_verifier is None:
+            raise RuntimeError(
+                "frontmost application settling requires state verifier"
+            )
+
+        verification_result = (
+            self._state_verifier.verify_frontmost_application(app_name)
+        )
+        if verification_result.status is StateVerificationStatus.VERIFIED:
+            return verification_result
+
+        remaining_seconds = self._frontmost_app_settle_timeout_seconds
+        while remaining_seconds > 0.0:
+            sleep_seconds = min(
+                self._frontmost_app_settle_poll_seconds,
+                remaining_seconds,
+            )
+            self._settling_sleep(sleep_seconds)
+            remaining_seconds = max(
+                0.0,
+                remaining_seconds - sleep_seconds,
+            )
+
+            verification_result = (
+                self._state_verifier.verify_frontmost_application(app_name)
+            )
+            if (
+                verification_result.status
+                is StateVerificationStatus.VERIFIED
+            ):
+                return verification_result
+
+        return verification_result
+
+    def _run_insert_text_step(
+        self,
+        *,
+        plan: StructuredPlan,
+        state: AgentState,
+        step: InsertTextStep,
+        completed_plan_steps: int,
+    ) -> AgentLoopResult | None:
+        if step.max_attempts != 1:
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.BLOCKED,
+                reason="insert_text requires max_attempts of exactly 1",
+            )
+
+        if self._state_verifier is None:
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.BLOCKED,
+                reason="state verifier is required for text insertion",
+            )
+
+        values = _runtime_values_mapping(
+            state,
+            create=False,
+        )
+        if values is None:
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.BLOCKED,
+                reason="runtime values context is missing or not a mapping",
+            )
+
+        value = values.get(step.value_key)
+        if not isinstance(value, str) or not value.strip():
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.BLOCKED,
+                reason=(
+                    "runtime value is missing or not a non-empty string "
+                    f"for key {step.value_key}"
+                ),
+            )
+
+        action = Action(
+            tool_name="paste_text",
+            arguments={"text": value},
+            reason="Insert verified runtime text into focused application",
+        )
+        tool_result = self._executor.execute(action)
+        state.record_step(action, tool_result)
+
+        if not tool_result.success:
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.EXHAUSTED,
+                reason=(
+                    "text insertion tool failed: "
+                    f"{tool_result.error}"
+                ),
+            )
+
+        after_snapshot = self._perception_engine.observe()
+        verification_result = (
+            self._state_verifier.verify_focused_editable_value(
+                after_snapshot,
+                value,
+            )
+        )
+        if verification_result.status is StateVerificationStatus.VERIFIED:
+            return None
+
+        return _terminal_failure(
+            plan=plan,
+            state=state,
+            completed_plan_steps=completed_plan_steps,
+            status=AgentLoopStatus.EXHAUSTED,
+            reason=(
+                "focused editable verification was "
+                f"{verification_result.status.value}: "
+                f"{verification_result.reason}"
+            ),
+        )
+
 
 def _terminal_failure(
     *,
@@ -308,6 +685,110 @@ def _terminal_failure(
         completed_plan_steps=completed_plan_steps,
         reason=reason,
     )
+
+
+def _verified_clipboard_text(
+    tool_result: ToolResult,
+    expected_text: str,
+) -> tuple[str | None, str]:
+    if not tool_result.success:
+        return (
+            None,
+            f"clipboard read tool failed: {tool_result.error}",
+        )
+
+    if not isinstance(tool_result.output, dict):
+        return (
+            None,
+            "clipboard output was not a dict",
+        )
+
+    text = tool_result.output.get("text")
+    if not isinstance(text, str):
+        return (
+            None,
+            "clipboard output text was not a string",
+        )
+
+    if text != expected_text:
+        return (
+            None,
+            "clipboard text did not match expected value",
+        )
+
+    return text, "clipboard text matched expected value"
+
+
+def _runtime_values_mapping(
+    state: AgentState,
+    *,
+    create: bool,
+) -> dict | None:
+    values = state.context.get("values")
+    if values is None:
+        if not create:
+            return None
+
+        values = {}
+        state.context["values"] = values
+        return values
+
+    if not isinstance(values, dict):
+        return None
+
+    return values
+
+
+def _normalize_allowed_app_names(
+    allowed_app_names: Collection[str] | None,
+) -> frozenset[str]:
+    if allowed_app_names is None:
+        return frozenset()
+
+    if isinstance(allowed_app_names, (str, bytes)):
+        raise ValueError(
+            "allowed_app_names must be a collection of non-empty strings"
+        )
+
+    names = []
+    try:
+        iterator = iter(allowed_app_names)
+    except TypeError as error:
+        raise ValueError(
+            "allowed_app_names must be a collection of non-empty strings"
+        ) from error
+
+    for name in iterator:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(
+                "allowed_app_names must contain only non-empty strings"
+            )
+
+        names.append(name)
+
+    return frozenset(names)
+
+
+def _validate_seconds(
+    value: object,
+    field_name: str,
+    *,
+    allow_zero: bool,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be numeric")
+
+    seconds = float(value)
+    if not math.isfinite(seconds):
+        raise ValueError(f"{field_name} must be finite")
+
+    if allow_zero:
+        if seconds < 0.0:
+            raise ValueError(f"{field_name} must be non-negative")
+    elif seconds <= 0.0:
+        raise ValueError(f"{field_name} must be positive")
+
+    return seconds
 
 
 def _require_method(

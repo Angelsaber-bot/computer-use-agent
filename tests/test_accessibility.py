@@ -1,3 +1,4 @@
+import inspect
 import math
 
 import pytest
@@ -24,41 +25,113 @@ class FakeAXElement:
 
 
 class FakeFrontmostApplication:
-    def __init__(self, pid):
+    def __init__(self, pid, localized_name="Google Chrome"):
         self.pid = pid
+        self.localized_name = localized_name
         self.process_identifier_calls = 0
+        self.localized_name_calls = 0
 
     def processIdentifier(self):
         self.process_identifier_calls += 1
 
         return self.pid
 
+    def localizedName(self):
+        self.localized_name_calls += 1
+
+        return self.localized_name
+
 
 class FakeWorkspace:
-    def __init__(self, application):
+    def __init__(self, application, *, event_log=None):
         self.application = application
         self.frontmost_application_calls = 0
+        self.event_log = event_log
 
     def frontmostApplication(self):
         self.frontmost_application_calls += 1
+        if self.event_log is not None:
+            self.event_log.append("frontmostApplication")
 
         return self.application
 
 
 class FakeNSWorkspace:
-    def __init__(self, workspace):
+    def __init__(self, workspace, *, event_log=None):
         self.workspace = workspace
         self.shared_workspace_calls = 0
+        self.event_log = event_log
 
     def sharedWorkspace(self):
         self.shared_workspace_calls += 1
+        if self.event_log is not None:
+            self.event_log.append("sharedWorkspace")
 
         return self.workspace
 
 
 class FakeAppKit:
-    def __init__(self, workspace):
-        self.NSWorkspace = FakeNSWorkspace(workspace)
+    def __init__(self, workspace, *, event_log=None):
+        self.NSWorkspace = FakeNSWorkspace(
+            workspace,
+            event_log=event_log,
+        )
+
+
+class FakeRunLoop:
+    def __init__(self, foundation):
+        self.foundation = foundation
+
+    def runUntilDate_(self, deadline):
+        self.foundation.run_until_dates.append(deadline)
+        self.foundation.events.append("runUntilDate")
+
+        if self.foundation.refresh_error is not None:
+            raise self.foundation.refresh_error
+
+        if self.foundation.on_refresh is not None:
+            self.foundation.on_refresh()
+
+
+class FakeNSRunLoop:
+    def __init__(self, foundation):
+        self.foundation = foundation
+        self.current_run_loop_calls = 0
+
+    def currentRunLoop(self):
+        self.current_run_loop_calls += 1
+        self.foundation.events.append("currentRunLoop")
+
+        return self.foundation.run_loop
+
+
+class FakeNSDate:
+    def __init__(self, foundation):
+        self.foundation = foundation
+
+    def dateWithTimeIntervalSinceNow_(self, interval):
+        self.foundation.refresh_intervals.append(interval)
+        self.foundation.events.append("dateWithTimeIntervalSinceNow")
+
+        return ("deadline", interval)
+
+
+class FakeFoundation:
+    def __init__(
+        self,
+        *,
+        event_log=None,
+        on_refresh=None,
+        refresh_error=None,
+    ):
+        self.events = event_log if event_log is not None else []
+        self.on_refresh = on_refresh
+        self.refresh_error = refresh_error
+        self.refresh_intervals = []
+        self.run_until_dates = []
+        self.run_loop = FakeRunLoop(self)
+        self.NSRunLoop = FakeNSRunLoop(self)
+        self.NSDate = FakeNSDate(self)
 
 
 class FakeApplicationServices:
@@ -206,6 +279,8 @@ def _install_fake_accessibility(
     *,
     trusted=True,
     pid=4242,
+    localized_name="Google Chrome",
+    foundation=None,
     focused_element=None,
     focused_element_error=False,
     application_role="AXApplication",
@@ -234,11 +309,24 @@ def _install_fake_accessibility(
         trusted=trusted,
     )
     core_foundation = FakeCoreFoundation()
-    application = FakeFrontmostApplication(pid)
-    workspace = FakeWorkspace(application)
-    appkit = FakeAppKit(workspace)
+    application = FakeFrontmostApplication(
+        pid,
+        localized_name=localized_name,
+    )
+    if foundation is None:
+        foundation = FakeFoundation()
+
+    workspace = FakeWorkspace(
+        application,
+        event_log=foundation.events,
+    )
+    appkit = FakeAppKit(
+        workspace,
+        event_log=foundation.events,
+    )
 
     monkeypatch.setattr(accessibility_module, "AppKit", appkit)
+    monkeypatch.setattr(accessibility_module, "Foundation", foundation)
     monkeypatch.setattr(
         accessibility_module,
         "ApplicationServices",
@@ -307,6 +395,180 @@ def test_is_available_requires_both_framework_modules(monkeypatch):
     assert MacOSAccessibility.is_available() is False
 
 
+def test_frontmost_application_lookup_refreshes_run_loop_before_read(
+    monkeypatch,
+):
+    foundation = FakeFoundation()
+    window = _node(role="AXWindow")
+    _install_fake_accessibility(
+        monkeypatch,
+        window,
+        foundation=foundation,
+        localized_name="TextEdit",
+    )
+
+    assert MacOSAccessibility().read_frontmost_application_name() == "TextEdit"
+
+    assert foundation.refresh_intervals == [
+        accessibility_module._APPKIT_STATE_REFRESH_SECONDS,
+    ]
+    assert foundation.run_until_dates == [
+        (
+            "deadline",
+            accessibility_module._APPKIT_STATE_REFRESH_SECONDS,
+        )
+    ]
+    assert foundation.events.index("runUntilDate") < foundation.events.index(
+        "frontmostApplication"
+    )
+
+
+def test_frontmost_application_name_reflects_change_after_run_loop_refresh(
+    monkeypatch,
+):
+    current_application = FakeFrontmostApplication(
+        5252,
+        localized_name="TextEdit",
+    )
+    workspace = None
+    foundation = FakeFoundation(
+        on_refresh=lambda: setattr(
+            workspace,
+            "application",
+            current_application,
+        )
+    )
+    window = _node(role="AXWindow")
+    (
+        _appkit,
+        _services,
+        _core_foundation,
+        stale_application,
+        workspace,
+        _application_element,
+    ) = _install_fake_accessibility(
+        monkeypatch,
+        window,
+        foundation=foundation,
+        localized_name="Terminal",
+    )
+
+    name = MacOSAccessibility().read_frontmost_application_name()
+
+    assert name == "TextEdit"
+    assert stale_application.localized_name_calls == 0
+    assert current_application.localized_name_calls == 1
+
+
+def test_read_frontmost_application_name_returns_localized_name(monkeypatch):
+    window = _node(role="AXWindow")
+    (
+        appkit,
+        services,
+        _core_foundation,
+        application,
+        workspace,
+        _application_element,
+    ) = _install_fake_accessibility(
+        monkeypatch,
+        window,
+        localized_name="Safari",
+    )
+
+    name = MacOSAccessibility().read_frontmost_application_name()
+
+    assert name == "Safari"
+    assert appkit.NSWorkspace.shared_workspace_calls == 1
+    assert workspace.frontmost_application_calls == 1
+    assert application.localized_name_calls == 1
+    assert application.process_identifier_calls == 0
+    assert services.created_application_pids == []
+    assert services.attribute_reads == []
+    assert services.attribute_writes == []
+
+
+def test_read_frontmost_application_name_returns_none_without_frontmost_app(
+    monkeypatch,
+):
+    foundation = FakeFoundation()
+    workspace = FakeWorkspace(
+        None,
+        event_log=foundation.events,
+    )
+    appkit = FakeAppKit(
+        workspace,
+        event_log=foundation.events,
+    )
+    monkeypatch.setattr(accessibility_module, "AppKit", appkit)
+    monkeypatch.setattr(accessibility_module, "Foundation", foundation)
+
+    name = MacOSAccessibility().read_frontmost_application_name()
+
+    assert name is None
+    assert appkit.NSWorkspace.shared_workspace_calls == 1
+    assert workspace.frontmost_application_calls == 1
+
+
+def test_read_frontmost_application_name_returns_none_when_refresh_fails(
+    monkeypatch,
+):
+    foundation = FakeFoundation(refresh_error=RuntimeError("run loop failed"))
+    window = _node(role="AXWindow")
+    (
+        appkit,
+        _services,
+        _core_foundation,
+        _application,
+        workspace,
+        _application_element,
+    ) = _install_fake_accessibility(
+        monkeypatch,
+        window,
+        foundation=foundation,
+        localized_name="TextEdit",
+    )
+
+    name = MacOSAccessibility().read_frontmost_application_name()
+
+    assert name is None
+    assert foundation.events == [
+        "currentRunLoop",
+        "dateWithTimeIntervalSinceNow",
+        "runUntilDate",
+    ]
+    assert appkit.NSWorkspace.shared_workspace_calls == 0
+    assert workspace.frontmost_application_calls == 0
+
+
+def test_read_frontmost_application_name_preserves_trust_behavior(
+    monkeypatch,
+):
+    window = _node(role="AXWindow")
+    _install_fake_accessibility(
+        monkeypatch,
+        window,
+        trusted=False,
+        localized_name="TextEdit",
+    )
+
+    assert MacOSAccessibility().read_frontmost_application_name() == "TextEdit"
+    assert MacOSAccessibility.is_trusted() is False
+    with pytest.raises(
+        RuntimeError,
+        match="macOS Accessibility permission is not trusted",
+    ):
+        MacOSAccessibility().read_frontmost_controls()
+
+
+def test_frontmost_application_observation_uses_no_shell_or_applescript():
+    source = inspect.getsource(accessibility_module)
+
+    assert "NSWorkspace" in source
+    assert "subprocess" not in source
+    assert "osascript" not in source
+    assert "AppleScript" not in source
+
+
 def test_read_frontmost_controls_fails_when_frameworks_are_unavailable(
     monkeypatch,
 ):
@@ -354,6 +616,55 @@ def test_read_frontmost_controls_fails_when_permission_is_untrusted(
 def test_constructor_rejects_invalid_limits(kwargs, message):
     with pytest.raises(ValueError, match=message):
         MacOSAccessibility(**kwargs)
+
+
+def test_read_frontmost_controls_uses_refreshed_frontmost_application(
+    monkeypatch,
+):
+    control = _node(
+        role="AXButton",
+        title="ACTIVE_BUTTON_10",
+    )
+    window = _node(
+        role="AXWindow",
+        children=[control],
+    )
+    current_application = FakeFrontmostApplication(
+        5252,
+        localized_name="TextEdit",
+    )
+    workspace = None
+    foundation = FakeFoundation(
+        on_refresh=lambda: setattr(
+            workspace,
+            "application",
+            current_application,
+        )
+    )
+    (
+        _appkit,
+        services,
+        _core_foundation,
+        stale_application,
+        workspace,
+        _application_element,
+    ) = _install_fake_accessibility(
+        monkeypatch,
+        window,
+        foundation=foundation,
+        pid=1111,
+        localized_name="Terminal",
+    )
+
+    controls = MacOSAccessibility().read_frontmost_controls()
+
+    assert [control.text for control in controls] == ["ACTIVE_BUTTON_10"]
+    assert services.created_application_pids == [5252]
+    assert stale_application.process_identifier_calls == 0
+    assert current_application.process_identifier_calls == 1
+    assert foundation.events.index("runUntilDate") < foundation.events.index(
+        "frontmostApplication"
+    )
 
 
 def test_read_frontmost_controls_uses_pid_based_frontmost_application_path(
@@ -551,6 +862,7 @@ def test_role_mapping_for_supported_controls_preserves_tree_order(
         monkeypatch,
         [
             _node(role="AXTextField", title="TEXT"),
+            _node(role="AXTextArea", title="TEXT_AREA"),
             _node(role="AXButton", title="BUTTON"),
             _node(role="AXCheckBox", title="CHECKBOX"),
             _node(role="AXPopUpButton", title="POPUP"),
@@ -560,6 +872,7 @@ def test_role_mapping_for_supported_controls_preserves_tree_order(
 
     assert [control.element_type for control in controls] == [
         "text_field",
+        "text_area",
         "button",
         "checkbox",
         "popup_button",
@@ -567,6 +880,78 @@ def test_role_mapping_for_supported_controls_preserves_tree_order(
     ]
     assert all(control.source == "accessibility" for control in controls)
     assert all(control.confidence == 1.0 for control in controls)
+
+
+def test_ax_text_area_preserves_value_focus_box_and_source(monkeypatch):
+    text_area = _node(
+        role="AXTextArea",
+        title="EDITOR",
+        value="CROSS_APP_TRANSFER_10",
+        focused=False,
+        position=(12, 24),
+        size=(320, 180),
+    )
+    window = _node(
+        role="AXWindow",
+        children=[text_area],
+    )
+    _install_fake_accessibility(
+        monkeypatch,
+        window,
+        focused_element=text_area,
+    )
+
+    controls = MacOSAccessibility().read_frontmost_controls()
+
+    assert len(controls) == 1
+    assert controls[0].element_type == "text_area"
+    assert controls[0].value == "CROSS_APP_TRANSFER_10"
+    assert controls[0].focused is True
+    assert controls[0].bounding_box.x == 12
+    assert controls[0].bounding_box.y == 24
+    assert controls[0].bounding_box.width == 320
+    assert controls[0].bounding_box.height == 180
+    assert controls[0].source == "accessibility"
+
+
+def test_non_focused_ax_text_area_remains_unfocused_when_determinable(
+    monkeypatch,
+):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXTextArea",
+                title="EDITOR",
+                value="draft",
+                focused=False,
+            ),
+        ],
+    )
+
+    assert len(controls) == 1
+    assert controls[0].element_type == "text_area"
+    assert controls[0].value == "draft"
+    assert controls[0].focused is False
+
+
+def test_existing_ax_text_field_mapping_remains_unchanged(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXTextField",
+                title="FIELD",
+                value="typed value",
+                focused=True,
+            ),
+        ],
+    )
+
+    assert len(controls) == 1
+    assert controls[0].element_type == "text_field"
+    assert controls[0].value == "typed value"
+    assert controls[0].focused is True
 
 
 def test_title_is_preferred_and_description_is_fallback(monkeypatch):

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from computer_agent.planning.models import PlanStep, StructuredPlan
+from computer_agent.planning.models import SemanticPlanStep, StructuredPlan
 
 
 class StructuredPlanner:
@@ -12,7 +12,7 @@ class StructuredPlanner:
         self,
         *,
         task_goal: str,
-        steps: tuple[PlanStep, ...],
+        steps: tuple[SemanticPlanStep, ...],
     ) -> StructuredPlan:
         """Return an immutable structured plan after validation."""
 

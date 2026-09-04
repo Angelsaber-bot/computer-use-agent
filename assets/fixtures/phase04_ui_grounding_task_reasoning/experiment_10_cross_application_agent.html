@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Phase 04 Experiment 10: Cross-Application Agent</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Arial, Helvetica, sans-serif;
+        background: #f5f7fa;
+        color: #19212a;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+      }
+
+      main {
+        box-sizing: border-box;
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 56px 28px;
+      }
+
+      h1 {
+        margin: 0 0 28px;
+        font-size: 30px;
+        font-weight: 700;
+        line-height: 1.2;
+      }
+
+      .transfer-panel {
+        display: grid;
+        gap: 18px;
+        padding: 24px;
+        border: 1px solid #b9c2cf;
+        border-radius: 6px;
+        background: #ffffff;
+      }
+
+      .label {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      .value {
+        margin: 0;
+        padding: 14px 16px;
+        border: 1px solid #aeb8c5;
+        border-radius: 4px;
+        background: #eef2f7;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", "Courier New", monospace;
+        font-size: 18px;
+        letter-spacing: 0;
+      }
+
+      button {
+        appearance: none;
+        width: fit-content;
+        min-height: 42px;
+        padding: 0 18px;
+        border: 1px solid #245ca8;
+        border-radius: 4px;
+        background: #2769bd;
+        color: #ffffff;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button:focus-visible {
+        outline: 3px solid #6ea8fe;
+        outline-offset: 2px;
+      }
+
+      .completion-marker {
+        border-color: #287046;
+        background: #2f7d4f;
+        pointer-events: none;
+        cursor: default;
+      }
+
+      .status {
+        margin: 0;
+        color: #8c2f22;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Phase 04 Experiment 10: Cross-Application Agent</h1>
+      <section class="transfer-panel" id="workflow-panel">
+        <p class="label">Transfer value:</p>
+        <p class="value" id="transfer-value">CROSS_APP_TRANSFER_10</p>
+        <button
+          id="copy-transfer-value-10"
+          type="button"
+          aria-label="COPY_TRANSFER_VALUE_10"
+        >
+          COPY_TRANSFER_VALUE_10
+        </button>
+        <p class="status" id="copy-status" aria-live="polite"></p>
+      </section>
+    </main>
+
+    <script>
+      const TRANSFER_VALUE = "CROSS_APP_TRANSFER_10";
+      const COPY_TARGET = "COPY_TRANSFER_VALUE_10";
+      const COPIED_MARKER = "TRANSFER_COPIED_10";
+
+      function copyToClipboard(text) {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.left = "-1000px";
+        textarea.style.top = "-1000px";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+
+        let copied = false;
+        try {
+          copied = document.execCommand("copy");
+        } catch (error) {
+          copied = false;
+        }
+
+        textarea.remove();
+        return copied;
+      }
+
+      function renderCopiedState() {
+        const panel = document.getElementById("workflow-panel");
+        panel.replaceChildren();
+
+        const label = document.createElement("p");
+        label.className = "label";
+        label.textContent = "Transfer value copied:";
+
+        const value = document.createElement("p");
+        value.className = "value";
+        value.textContent = TRANSFER_VALUE;
+
+        const marker = document.createElement("button");
+        marker.type = "button";
+        marker.className = "completion-marker";
+        marker.tabIndex = -1;
+        marker.setAttribute("aria-label", COPIED_MARKER);
+        marker.textContent = COPIED_MARKER;
+
+        panel.append(label, value, marker);
+      }
+
+      function renderCopyFailure() {
+        const status = document.getElementById("copy-status");
+        status.textContent = "COPY_TRANSFER_VALUE_10 clipboard copy failed";
+      }
+
+      document
+        .getElementById("copy-transfer-value-10")
+        .addEventListener("click", () => {
+          if (copyToClipboard(TRANSFER_VALUE)) {
+            renderCopiedState();
+            return;
+          }
+
+          renderCopyFailure();
+        });
+    </script>
+  </body>
+</html>

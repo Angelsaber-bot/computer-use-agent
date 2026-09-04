@@ -76,8 +76,9 @@ Phase 03 Screen Perception is complete.
 - [x] Experiment 07: LLM Reasoner
 - [x] Experiment 08: Agent Loop
 - [x] Experiment 09: Dynamic UI
+- [x] Experiment 10: Cross-Application Agent
 
-Phase 04 is in progress. Experiment 04.01 extracted the reusable hybrid observation pipeline from Phase 03 Experiment 12 into `PerceptionEngine`, whose public API is `snapshot = engine.observe()`.
+Phase 04 is complete. Experiment 04.01 extracted the reusable hybrid observation pipeline from Phase 03 Experiment 12 into `PerceptionEngine`, whose public API is `snapshot = engine.observe()`.
 
 The engine uses injected screen capture, Accessibility, OCR, and fusion dependencies. `PerceptionSnapshot` contains the `ScreenFrame` metadata, a detached RGB image, logical Accessibility/OCR/fused element tuples, warnings, and computed source counts. Accessibility and OCR failures are partial-source failures with warnings, while capture failures, image-size mismatches, and fusion failures remain fail-fast. The engine only observes; it has no action, target-selection, planning, verification, application-switching, mouse, or keyboard behavior.
 
@@ -111,4 +112,14 @@ Experiment 09 completed the first formal Reasoner -> StructuredPlan -> AgentLoop
 
 Final Experiment 09 validation: focused Experiment 09 tests `36 passed`; Experiment 07 regression `90 passed`; Experiment 08 regression `78 passed`; complete suite `907 passed`; `pip check` reported no broken requirements in the project virtual environment; `py_compile` passed; `git diff --check` passed; dry-run passed; direct `--help` passed; live Experiment 09 acceptance passed.
 
-**Next Step:** Phase 04 Experiment 10 — Cross-Application Agent.
+Experiment 10 completed the Cross-Application Agent milestone. The formal natural-language task is `Transfer the deterministic browser fixture value CROSS_APP_TRANSFER_10 into the blank TextEdit document.` Acceptance uses a deterministic offline fake LLM provider; no live OpenAI request is required. The semantic sequence is `click_target -> read_clipboard -> activate_app -> insert_text`, and production execution is `click_mouse -> read_from_clipboard -> activate_app -> paste_text`.
+
+Experiment 10 proves a bounded autonomous agent can transfer runtime state from a browser UI into another macOS application through a structured semantic plan: `Natural-language task -> deterministic fake LLM -> LLMReasoner -> StructuredPlan -> AgentLoop -> UI grounding / tool execution / verification -> runtime AgentState value flow -> application switching -> final editable-value verification`. Runtime value flow is `browser fixture -> system clipboard -> read_from_clipboard ToolResult -> AgentState.context["values"]["transfer_value"] -> paste_text`; `InsertTextStep` stores only the runtime value key and does not contain the literal transfer text.
+
+The successful live acceptance result was `PASS`: `4 / 4` plan steps completed, `4` action executions, zero semantic retries, no duplicate paste, and final runtime value `CROSS_APP_TRANSFER_10`. The final TextEdit content verification uses macOS Accessibility focused editable state with exact value equality, not OCR. Formal evidence is `assets/screenshots/phase04_ui_grounding_task_reasoning/experiment_10_cross_application_agent.png`, which shows the final TextEdit document containing the runtime value.
+
+Experiment 10 also produced an important reusable macOS finding: `NSWorkspace.frontmostApplication` can remain stale in a command-line Python process unless the Cocoa run loop is serviced. `MacOSAccessibility` now refreshes AppKit state at the shared frontmost-application lookup boundary before reading `NSWorkspace.frontmostApplication`, so both `read_frontmost_application_name()` and `read_frontmost_controls()` observe current post-activation state. `ComputerController.activate_app("TextEdit")` was not the root bug and remains the production activation primitive.
+
+Final Experiment 10 validation: focused closeout tests `284 passed`; complete suite `1127 passed`; `pip check` reported no broken requirements in the project virtual environment; `py_compile` passed for changed Python files; `git diff --check` passed; dry-run remains the default; live Experiment 10 acceptance passed.
+
+Phase 04 UI Grounding and Task Reasoning is complete, including the original Task Reasoning plus core Autonomous Agent milestone.

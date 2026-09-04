@@ -38,13 +38,21 @@ _REASONING_TARGET_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_REASONING_STEP_SCHEMA: dict[str, Any] = {
+_NON_EMPTY_STRING_SCHEMA: dict[str, Any] = {
+    "type": "string",
+    "minLength": 1,
+}
+
+_MAX_ATTEMPTS_SCHEMA: dict[str, Any] = {
+    "type": "integer",
+    "minimum": 1,
+    "maximum": MAX_PLAN_STEP_ATTEMPTS,
+}
+
+_CLICK_TARGET_STEP_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "goal": {
-            "type": "string",
-            "minLength": 1,
-        },
+        "goal": _NON_EMPTY_STRING_SCHEMA,
         "operation": {
             "type": "string",
             "enum": [
@@ -53,11 +61,7 @@ _REASONING_STEP_SCHEMA: dict[str, Any] = {
         },
         "action_target": _REASONING_TARGET_SCHEMA,
         "verification_target": _REASONING_TARGET_SCHEMA,
-        "max_attempts": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": MAX_PLAN_STEP_ATTEMPTS,
-        },
+        "max_attempts": _MAX_ATTEMPTS_SCHEMA,
     },
     "required": [
         "goal",
@@ -67,6 +71,83 @@ _REASONING_STEP_SCHEMA: dict[str, Any] = {
         "max_attempts",
     ],
     "additionalProperties": False,
+}
+
+_READ_CLIPBOARD_STEP_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "goal": _NON_EMPTY_STRING_SCHEMA,
+        "operation": {
+            "type": "string",
+            "enum": [
+                PlanOperation.READ_CLIPBOARD.value,
+            ],
+        },
+        "value_key": _NON_EMPTY_STRING_SCHEMA,
+        "expected_text": _NON_EMPTY_STRING_SCHEMA,
+        "max_attempts": _MAX_ATTEMPTS_SCHEMA,
+    },
+    "required": [
+        "goal",
+        "operation",
+        "value_key",
+        "expected_text",
+        "max_attempts",
+    ],
+    "additionalProperties": False,
+}
+
+_ACTIVATE_APP_STEP_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "goal": _NON_EMPTY_STRING_SCHEMA,
+        "operation": {
+            "type": "string",
+            "enum": [
+                PlanOperation.ACTIVATE_APP.value,
+            ],
+        },
+        "app_name": _NON_EMPTY_STRING_SCHEMA,
+        "max_attempts": _MAX_ATTEMPTS_SCHEMA,
+    },
+    "required": [
+        "goal",
+        "operation",
+        "app_name",
+        "max_attempts",
+    ],
+    "additionalProperties": False,
+}
+
+_INSERT_TEXT_STEP_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "goal": _NON_EMPTY_STRING_SCHEMA,
+        "operation": {
+            "type": "string",
+            "enum": [
+                PlanOperation.INSERT_TEXT.value,
+            ],
+        },
+        "value_key": _NON_EMPTY_STRING_SCHEMA,
+        "max_attempts": _MAX_ATTEMPTS_SCHEMA,
+    },
+    "required": [
+        "goal",
+        "operation",
+        "value_key",
+        "max_attempts",
+    ],
+    "additionalProperties": False,
+}
+
+_REASONING_STEP_SCHEMA: dict[str, Any] = {
+    "anyOf": [
+        _CLICK_TARGET_STEP_SCHEMA,
+        _READ_CLIPBOARD_STEP_SCHEMA,
+        _ACTIVATE_APP_STEP_SCHEMA,
+        _INSERT_TEXT_STEP_SCHEMA,
+    ],
 }
 
 REASONING_PLAN_JSON_SCHEMA: dict[str, Any] = {
