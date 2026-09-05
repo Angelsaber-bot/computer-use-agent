@@ -100,7 +100,7 @@ The formal Experiment 06 harness is intentionally headless: no browser fixture, 
 
 Experiment 07 added provider-neutral LLM reasoning under `src/computer_agent/reasoning/`. `LLMClient` is the provider boundary, `LLMReasoner` owns strict JSON parsing and exact-key semantic validation, and the final plan is constructed through `StructuredPlanner`. The OpenAI adapter uses the Responses API with strict Structured Outputs and `store=False` on `openai==3.6.0`. Model output remains untrusted: code owns parsing, schema validation, canonical element-type validation, and planner construction. The LLM layer cannot produce executable `Action` objects, screen coordinates, observations, UI grounding, tool execution, verification, recovery, or an agent loop.
 
-The canonical reasoning element-type vocabulary is `button`, `checkbox`, `popup_button`, `radio_button`, `text_field`, and `text`. Empty `element_types` is valid and means no element-type grounding restriction. Separate live validation with `gpt-5.6-terra` first exposed unsupported-role hallucination (`link`, `menuitem`, `navigation item`, `heading`, and `page title`) that current perception cannot produce; after adding the canonical vocabulary and empty fallback policy, the second live call for `Open Settings.` returned `ready` with an empty element-type fallback. No UI execution occurred in Experiment 07.
+The canonical reasoning element-type vocabulary at the time of Experiment 07 was `button`, `checkbox`, `popup_button`, `radio_button`, `text_field`, and `text`. Empty `element_types` is valid and means no element-type grounding restriction. Separate live validation with `gpt-5.6-terra` first exposed unsupported-role hallucination (`link`, `menuitem`, `navigation item`, `heading`, and `page title`) that Phase 04 perception could not yet produce; after adding the canonical vocabulary and empty fallback policy, the second live call for `Open Settings.` returned `ready` with an empty element-type fallback. No UI execution occurred in Experiment 07.
 
 The formal Experiment 07 harness is headless and offline by default. It uses a deterministic fake LLM client, makes no live API request, observes no screen state, creates no fixture or screenshot, performs no UI grounding, creates no executable actions, and performs no verification or recovery. Its formal task is `Complete the deterministic LLM reasoning workflow`, producing two `click_target` semantic steps with `max_attempts=3`, empty element types, and targets `STEP_1_TARGET_07`, `STEP_1_COMPLETE_07`, `STEP_2_TARGET_07`, and `TASK_COMPLETE_07`. Current final validation: focused Experiment 07 reasoning tests `135 passed`, complete suite `793 passed`, `pip check` reported no broken requirements, `py_compile` passed, `git diff --check` passed, direct experiment execution passed, and direct `--help` passed.
 
@@ -123,3 +123,26 @@ Experiment 10 also produced an important reusable macOS finding: `NSWorkspace.fr
 Final Experiment 10 validation: focused closeout tests `284 passed`; complete suite `1127 passed`; `pip check` reported no broken requirements in the project virtual environment; `py_compile` passed for changed Python files; `git diff --check` passed; dry-run remains the default; live Experiment 10 acceptance passed.
 
 Phase 04 UI Grounding and Task Reasoning is complete, including the original Task Reasoning plus core Autonomous Agent milestone.
+
+### Phase 05: Real-World Web Autonomy
+
+- [x] Experiment 01: Real Web Accessibility Perception
+- [ ] Experiment 02: Real Web Semantic Grounding
+- [ ] Experiment 03: Verified Web Navigation
+- [ ] Experiment 04: Scroll and Viewport Search
+- [ ] Experiment 05: Real Web Text Input
+- [ ] Experiment 06: Web Information Extraction
+- [ ] Experiment 07: Adaptive Web Recovery
+- [ ] Experiment 08: Multi-Step Real Web Agent
+- [ ] Experiment 09: Live OpenAI Web Agent
+- [ ] Experiment 10: Cross-Site Generalization
+
+Experiment 05.01 moved the production perception pipeline from controlled HTML fixtures to a real public website. A raw macOS Accessibility audit of `https://www.python.org/` in Google Chrome visited `682` Accessibility nodes and confirmed that real webpages expose semantic roles including `AXLink`, `AXHeading`, `AXStaticText`, `AXTextField`, `AXButton`, and `AXWebArea`.
+
+Production `MacOSAccessibility` now maps `AXLink -> link`, `AXHeading -> heading`, and `AXStaticText -> text`. Live inspection also established that Chrome exposes visible `AXStaticText` content primarily through `AXValue` while `AXTitle` and `AXDescription` may be empty. The production reader therefore uses `AXValue` as a text fallback only for the normalized `text` role, preserving existing control-name semantics for buttons, text fields, and other controls.
+
+The formal read-only live acceptance used the production `PerceptionEngine` against python.org. It reported `152` Accessibility elements, `18` OCR elements, `167` fused elements, and no warnings. The real webpage produced semantic `link`, `heading`, `text`, `text_field`, `button`, `popup_button`, and `radio_button` elements with valid logical-screen geometry and meaningful web text. The experiment performed no mouse movement, clicking, typing, scrolling, navigation, or OpenAI request.
+
+Formal evidence is `assets/screenshots/phase05_real_web_autonomy/experiment_01_real_web_accessibility.png`.
+
+Experiment 05.01 validation: Accessibility regression `53 passed`; complete suite `1129 passed` using `python -m pytest -q`; `pip check` reported no broken requirements; `py_compile` passed; `git diff --check` passed; and live real-web acceptance passed.

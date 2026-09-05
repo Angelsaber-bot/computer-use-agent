@@ -3053,3 +3053,148 @@ Experiment 10 completed Cross-Application Agent.
 
 Phase 04 UI Grounding and Task Reasoning is complete, including the original
 Task Reasoning plus core Autonomous Agent milestone.
+
+## Phase 05: Real-World Web Autonomy
+
+### Experiment 01: Real Web Accessibility Perception
+
+**Date:** September 4, 2026
+
+**Objective:**
+
+Move the production perception pipeline from controlled local HTML fixtures to a real public website and determine which semantic web roles Google Chrome exposes through macOS Accessibility.
+
+**Target Website:**
+
+`https://www.python.org/`
+
+**Experiment File:**
+
+`experiments/phase05_real_web_autonomy/experiment_01_real_web_accessibility.py`
+
+**Evidence Screenshot:**
+
+`assets/screenshots/phase05_real_web_autonomy/experiment_01_real_web_accessibility.png`
+
+**Initial Raw Accessibility Audit:**
+
+The first read-only diagnostic traversed the focused Chrome Accessibility tree without using the production role filter.
+
+- Frontmost application: `Google Chrome`
+- Accessibility nodes visited: `682`
+- Unique raw AX roles: `16`
+- `AXLink`: `145`
+- `AXHeading`: `10`
+- `AXStaticText`: `301`
+- `AXTextField`: `2`
+- `AXButton`: `18`
+- `AXWebArea`: `1`
+
+The audit confirmed that a real webpage exposes semantic roles that were not yet part of the production Accessibility mapping.
+
+**Implemented:**
+
+- Added `AXLink -> link` to the production macOS Accessibility role mapping.
+- Added `AXHeading -> heading`.
+- Added `AXStaticText -> text`.
+- Preserved the existing mappings for text fields, text areas, buttons, checkboxes, popup buttons, and radio buttons.
+- Did not add structural roles such as `AXWebArea`, `AXGroup`, `AXList`, `AXMenuBar`, `AXOutline`, `AXToolbar`, `AXWindow`, or `AXTabGroup`.
+- Did not add `AXImage` because image semantics are not yet required by a demonstrated agent operation.
+- Added regression coverage for the three new web semantic mappings.
+- Confirmed that Chrome commonly exposes `AXStaticText` with empty `AXTitle` and `AXDescription` while placing the visible webpage text in `AXValue`.
+- Updated production text extraction so that only the normalized `text` role falls back to `AXValue`.
+- Preserved existing control-name behavior by preventing buttons and other non-text controls from using `AXValue` as their accessible name.
+- Kept the experiment fully read-only.
+- Used the production `PerceptionEngine` for final live acceptance.
+- Added no DOM, CSS selector, XPath, Selenium, Playwright, or browser-specific website automation.
+
+**Chrome AXStaticText Finding:**
+
+Live inspection showed this real pattern:
+
+    AXTitle:       ''
+    AXDescription: ''
+    AXValue:       'Downloads'
+
+The same pattern was observed for visible webpage text including `Python`, `PSF`, `Docs`, `PyPI`, `Jobs`, `Community`, `Donate`, and `Search This Site`.
+
+The production reader therefore uses `AXValue` as a fallback only when the normalized semantic role is `text`.
+
+**Production Accessibility Live Result:**
+
+After the production mapping and text-extraction changes, the focused python.org page produced semantic elements including:
+
+- `button`
+- `heading`
+- `link`
+- `popup_button`
+- `radio_button`
+- `text`
+- `text_field`
+
+Meaningful examples included:
+
+- Link: `Docs`
+- Link: `PyPI`
+- Link: `Community`
+- Heading: `Get Started`
+- Heading: `Docs`
+- Text field: `Search This Site`
+- Text: `Python`
+- Text: `Jobs`
+- Text: `Donate`
+
+**Formal Live Acceptance Result:**
+
+- Frontmost application: `Google Chrome`
+- Screenshot pixel size: `2940 x 1912`
+- Logical screen size: `1470 x 956`
+- Coordinate scale: `x=2.00`, `y=2.00`
+- Accessibility elements: `152`
+- OCR elements: `18`
+- Fused elements: `167`
+- Warnings: none
+- Required semantic type `link`: observed
+- Required semantic type `heading`: observed
+- Required semantic type `text`: observed
+- Required semantic type `text_field`: observed
+- Required page markers: observed
+- Live acceptance result: `passed`
+
+The acceptance criteria intentionally use semantic invariants rather than exact Accessibility element counts because Chrome UI state and webpage Accessibility trees can vary between observations.
+
+**Safety Measures:**
+
+- No mouse movement.
+- No clicking.
+- No typing.
+- No scrolling.
+- No navigation performed by the experiment.
+- No structured computer-control `Action` execution.
+- No OpenAI API request.
+- The target webpage is opened manually and kept visible and focused.
+- Accessibility availability and trust are checked before observation.
+- All semantic elements retain logical-screen bounding boxes from the existing perception system.
+
+**Validation:**
+
+- New focused role/text-fallback tests: `3 passed`
+- Complete Accessibility test module: `53 passed`
+- Complete automated suite: `1129 passed` using `python -m pytest -q`
+- `python -m pip check`: no broken requirements
+- Experiment script compiled successfully with `py_compile`
+- `git diff --check` passed
+- Formal live real-web acceptance passed
+- Evidence screenshot created successfully
+
+**Important Test Runner Note:**
+
+Running `pytest -q` directly caused Phase 04 experiment-harness collection failures because the repository root was not available for imports under `experiments.*`.
+
+Running `python -m pytest -q` from the repository root completed successfully with `1129 passed`.
+
+This was a test-runner import-path issue rather than a regression caused by Experiment 05.01.
+
+**Result:**
+
+Experiment 05.01 demonstrated that the production perception system can observe a real public webpage in Google Chrome and recover meaningful web semantics from macOS Accessibility plus OCR. The agent can now perceive real links, headings, text fields, and webpage text with logical geometry, providing the semantic foundation required for real-web grounding in Experiment 05.02.

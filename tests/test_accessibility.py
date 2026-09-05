@@ -867,6 +867,9 @@ def test_role_mapping_for_supported_controls_preserves_tree_order(
             _node(role="AXCheckBox", title="CHECKBOX"),
             _node(role="AXPopUpButton", title="POPUP"),
             _node(role="AXRadioButton", title="RADIO"),
+            _node(role="AXLink", title="LINK"),
+            _node(role="AXHeading", title="HEADING"),
+            _node(role="AXStaticText", title="STATIC_TEXT"),
         ],
     )
 
@@ -877,6 +880,9 @@ def test_role_mapping_for_supported_controls_preserves_tree_order(
         "checkbox",
         "popup_button",
         "radio_button",
+        "link",
+        "heading",
+        "text",
     ]
     assert all(control.source == "accessibility" for control in controls)
     assert all(control.confidence == 1.0 for control in controls)
@@ -1463,3 +1469,41 @@ def test_controls_are_returned_as_ui_elements(monkeypatch):
     )
 
     assert isinstance(controls[0], UIElement)
+
+
+def test_ax_static_text_uses_value_as_text_fallback(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXStaticText",
+                title="",
+                description="",
+                value="Downloads",
+            ),
+        ],
+    )
+
+    assert len(controls) == 1
+    assert controls[0].element_type == "text"
+    assert controls[0].text == "Downloads"
+    assert controls[0].value == "Downloads"
+
+
+def test_non_text_control_does_not_use_value_as_text_fallback(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXButton",
+                title="",
+                description="",
+                value="BUTTON_VALUE",
+            ),
+        ],
+    )
+
+    assert len(controls) == 1
+    assert controls[0].element_type == "button"
+    assert controls[0].text is None
+    assert controls[0].value == "BUTTON_VALUE"

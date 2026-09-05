@@ -35,6 +35,9 @@ _ROLE_MAP = {
     "AXCheckBox": "checkbox",
     "AXPopUpButton": "popup_button",
     "AXRadioButton": "radio_button",
+    "AXLink": "link",
+    "AXHeading": "heading",
+    "AXStaticText": "text",
 }
 
 _APPKIT_STATE_REFRESH_SECONDS = 0.01
@@ -293,7 +296,10 @@ def _control_from_element(
         element_type=mapped_role,
         bounding_box=bounding_box,
         confidence=1.0,
-        text=_text_from_element(element),
+        text=_text_from_element(
+            element,
+            mapped_role,
+        ),
         identifier=_identifier_from_element(element),
         value=_value_from_element(element),
         enabled=_bool_attribute(element, "kAXEnabledAttribute"),
@@ -305,7 +311,10 @@ def _control_from_element(
     )
 
 
-def _text_from_element(element: Any) -> str | None:
+def _text_from_element(
+    element: Any,
+    mapped_role: str,
+) -> str | None:
     title = _non_empty_string_attribute(
         element,
         "kAXTitleAttribute",
@@ -313,10 +322,20 @@ def _text_from_element(element: Any) -> str | None:
     if title is not None:
         return title
 
-    return _non_empty_string_attribute(
+    description = _non_empty_string_attribute(
         element,
         "kAXDescriptionAttribute",
     )
+    if description is not None:
+        return description
+
+    if mapped_role == "text":
+        return _non_empty_string_attribute(
+            element,
+            "kAXValueAttribute",
+        )
+
+    return None
 
 
 def _identifier_from_element(element: Any) -> str | None:
