@@ -127,7 +127,7 @@ Phase 04 UI Grounding and Task Reasoning is complete, including the original Tas
 ### Phase 05: Real-World Web Autonomy
 
 - [x] Experiment 01: Real Web Accessibility Perception
-- [ ] Experiment 02: Real Web Semantic Grounding
+- [x] Experiment 02: Real Web Semantic Grounding
 - [ ] Experiment 03: Verified Web Navigation
 - [ ] Experiment 04: Scroll and Viewport Search
 - [ ] Experiment 05: Real Web Text Input
@@ -146,3 +146,11 @@ The formal read-only live acceptance used the production `PerceptionEngine` agai
 Formal evidence is `assets/screenshots/phase05_real_web_autonomy/experiment_01_real_web_accessibility.png`.
 
 Experiment 05.01 validation: Accessibility regression `53 passed`; complete suite `1129 passed` using `python -m pytest -q`; `pip check` reported no broken requirements; `py_compile` passed; `git diff --check` passed; and live real-web acceptance passed.
+
+Experiment 05.02 validated the existing deterministic `UIGrounder` against real `python.org` perception output without changing production grounding logic. The experiment grounds directly against `PerceptionSnapshot.fused_elements`, matching the same input used by the autonomous `AgentLoop`.
+
+Real-web semantic collisions were handled correctly. The visible text `Docs` appeared simultaneously as `link`, `heading`, and `text` elements, yet `TargetSpec(text="Docs", element_types=("link",))` resolved uniquely to the link while the same target constrained to `heading` resolved uniquely to the heading. `Search This Site` similarly resolved to the `text_field` while the same-text static `text` candidate was rejected as an incompatible element type. A deliberately missing link returned `not_found`.
+
+The formal Experiment 05.02 acceptance remained completely read-only: no mouse movement, click, typing, scrolling, navigation, computer-action execution, or OpenAI request occurred. Final live acceptance passed with no perception warnings. Evidence is `assets/screenshots/phase05_real_web_autonomy/experiment_02_real_web_semantic_grounding.png`.
+
+Experiment 05.02 added regression coverage for real-web role collisions in `tests/test_ui_grounder.py`. The complete UI-grounder module passed `43 tests`; the complete repository suite passed `1132 tests`; `pip check` reported no broken requirements; `py_compile` and `git diff --check` passed.

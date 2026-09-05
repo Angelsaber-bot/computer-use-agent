@@ -862,3 +862,123 @@ def test_non_resolved_result_cannot_contain_actionable_element():
             candidates=(),
             reason="unsafe",
         )
+
+
+def test_real_web_same_text_resolves_link_role():
+    link = _element(
+        "Docs",
+        element_type="link",
+        x=100,
+    )
+    heading = _element(
+        "Docs",
+        element_type="heading",
+        x=200,
+    )
+    text = _element(
+        "Docs",
+        element_type="text",
+        x=300,
+    )
+
+    result = _ground(
+        TargetSpec(
+            text="Docs",
+            element_types=("link",),
+        ),
+        (
+            heading,
+            link,
+            text,
+        ),
+    )
+
+    assert result.status is GroundingStatus.RESOLVED
+    assert result.element is link
+
+    eligible = tuple(
+        candidate
+        for candidate in result.candidates
+        if candidate.eligible
+    )
+
+    assert len(eligible) == 1
+    assert eligible[0].element is link
+
+
+def test_real_web_same_text_resolves_heading_role():
+    link = _element(
+        "Docs",
+        element_type="link",
+        x=100,
+    )
+    heading = _element(
+        "Docs",
+        element_type="heading",
+        x=200,
+    )
+    text = _element(
+        "Docs",
+        element_type="text",
+        x=300,
+    )
+
+    result = _ground(
+        TargetSpec(
+            text="Docs",
+            element_types=("heading",),
+        ),
+        (
+            link,
+            text,
+            heading,
+        ),
+    )
+
+    assert result.status is GroundingStatus.RESOLVED
+    assert result.element is heading
+
+    eligible = tuple(
+        candidate
+        for candidate in result.candidates
+        if candidate.eligible
+    )
+
+    assert len(eligible) == 1
+    assert eligible[0].element is heading
+
+
+def test_real_web_text_field_beats_same_text_static_text():
+    text_field = _element(
+        "Search This Site",
+        element_type="text_field",
+        x=100,
+    )
+    text = _element(
+        "Search This Site",
+        element_type="text",
+        x=200,
+    )
+
+    result = _ground(
+        TargetSpec(
+            text="Search This Site",
+            element_types=("text_field",),
+        ),
+        (
+            text,
+            text_field,
+        ),
+    )
+
+    assert result.status is GroundingStatus.RESOLVED
+    assert result.element is text_field
+
+    eligible = tuple(
+        candidate
+        for candidate in result.candidates
+        if candidate.eligible
+    )
+
+    assert len(eligible) == 1
+    assert eligible[0].element is text_field

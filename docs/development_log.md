@@ -3198,3 +3198,161 @@ This was a test-runner import-path issue rather than a regression caused by Expe
 **Result:**
 
 Experiment 05.01 demonstrated that the production perception system can observe a real public webpage in Google Chrome and recover meaningful web semantics from macOS Accessibility plus OCR. The agent can now perceive real links, headings, text fields, and webpage text with logical geometry, providing the semantic foundation required for real-web grounding in Experiment 05.02.
+
+### Experiment 02: Real Web Semantic Grounding
+
+**Date:** September 4, 2026
+
+**Objective:**
+
+Validate whether the existing deterministic `UIGrounder` can resolve semantic targets correctly on a real public webpage when multiple perceived elements share the same visible text but have different semantic roles.
+
+**Target Website:**
+
+`https://www.python.org/`
+
+**Experiment File:**
+
+`experiments/phase05_real_web_autonomy/experiment_02_real_web_semantic_grounding.py`
+
+**Evidence Screenshot:**
+
+`assets/screenshots/phase05_real_web_autonomy/experiment_02_real_web_semantic_grounding.png`
+
+**Architecture Under Test:**
+
+The experiment uses the same production path used by the autonomous agent:
+
+    Google Chrome
+        -> macOS Accessibility + OCR
+        -> PerceptionEngine
+        -> fused_elements
+        -> TargetSpec
+        -> UIGrounder
+        -> GroundingResult
+
+The grounding input is `PerceptionSnapshot.fused_elements`, matching the input used by `AgentLoop` before action grounding.
+
+No production `UIGrounder` changes were required for this experiment.
+
+**Real-Web Grounding Cases:**
+
+1. `Docs` constrained to `link`
+2. `Docs` constrained to `heading`
+3. `Search This Site` constrained to `text_field`
+4. Deliberately missing link target
+
+**Docs Semantic Collision:**
+
+On the real python.org page, the visible text `Docs` appeared simultaneously as four grounding candidates:
+
+- `heading`
+- `link`
+- `text`
+- `text`
+
+For:
+
+    TargetSpec(
+        text="Docs",
+        element_types=("link",),
+        minimum_confidence=0.70,
+    )
+
+the result was:
+
+- Status: `resolved`
+- Reason: `resolved by text`
+- Eligible candidates: exactly one
+- Resolved type: `link`
+- Resolved source: `accessibility`
+- Confidence: `1.00`
+- Enabled: `True`
+
+The heading and static-text candidates were rejected with `incompatible_element_type`.
+
+For the same visible text constrained to `heading`, the result was again `resolved`, with exactly one eligible heading candidate. The link and static-text candidates were rejected as incompatible roles.
+
+**Search Field Semantic Collision:**
+
+`Search This Site` appeared as both:
+
+- `text`
+- `text_field`
+
+For:
+
+    TargetSpec(
+        text="Search This Site",
+        element_types=("text_field",),
+        minimum_confidence=0.70,
+    )
+
+the `text_field` resolved successfully while the same-text static `text` candidate was rejected with `incompatible_element_type`.
+
+**Missing Target Behavior:**
+
+The deliberately absent target:
+
+    PHASE05_MISSING_LINK_02
+
+returned:
+
+- Status: `not_found`
+- Reason: `no exact identifier or normalized text match`
+- Candidate count: `0`
+- Resolved element: `None`
+
+**Formal Live Acceptance:**
+
+The final live run observed:
+
+- Frontmost application: `Google Chrome`
+- Fused elements: `171`
+- Perception warnings: none
+- `Docs` link: `resolved`
+- `Docs` heading: `resolved`
+- `Search This Site` text field: `resolved`
+- Missing link: `not_found`
+- Live acceptance result: `passed`
+
+The fused-element count differed from an earlier diagnostic run (`167` versus `171`), confirming that the acceptance criteria correctly depend on semantic invariants rather than exact dynamic Chrome Accessibility-tree counts.
+
+**Safety Measures:**
+
+- No mouse movement.
+- No clicking.
+- No typing.
+- No scrolling.
+- No navigation performed by the experiment.
+- No computer-control `Action` execution.
+- No OpenAI API request.
+- The webpage was opened manually and kept visible and focused.
+- The experiment remained observation-only.
+
+**Regression Coverage:**
+
+Three real-web semantic-role collision tests were added to `tests/test_ui_grounder.py`:
+
+- same-text `link / heading / text` resolves the requested `link`
+- same-text `link / heading / text` resolves the requested `heading`
+- same-text `text_field / text` resolves the requested `text_field`
+
+These tests preserve the deterministic role-filtering behavior demonstrated during the live run.
+
+**Validation:**
+
+- `tests/test_ui_grounder.py`: `43 passed`
+- Complete repository suite: `1132 passed`
+- `python -m pip check`: no broken requirements
+- Experiment script: `py_compile` passed
+- `git diff --check`: passed
+- Formal real-web live acceptance: passed
+
+**Result:**
+
+Experiment 05.02 demonstrated that the existing production `UIGrounder` can correctly resolve semantic targets from real-web `fused_elements` even when several visible elements share identical text but represent different semantic roles.
+
+The experiment required no production grounding changes.
+
+This establishes the semantic grounding foundation needed for Experiment 05.03, where the agent will move from read-only grounding to verified real-web navigation.
