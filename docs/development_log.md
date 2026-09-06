@@ -3356,3 +3356,223 @@ Experiment 05.02 demonstrated that the existing production `UIGrounder` can corr
 The experiment required no production grounding changes.
 
 This establishes the semantic grounding foundation needed for Experiment 05.03, where the agent will move from read-only grounding to verified real-web navigation.
+
+### Experiment 03: Verified Web Navigation
+
+**Date:** September 6, 2026
+
+**Objective:**
+
+Move Phase 05 from read-only real-web perception and grounding to the first real browser action with deterministic post-action verification.
+
+The experiment must prove that a semantic web target can be grounded, converted into a safe structured click action, executed once on a real webpage, followed by a fresh observation that verifies the intended navigation actually occurred.
+
+**Start Website:**
+
+`https://www.python.org/`
+
+**Experiment File:**
+
+`experiments/phase05_real_web_autonomy/experiment_03_verified_web_navigation.py`
+
+**Regression Test File:**
+
+`tests/test_experiment_03_verified_web_navigation.py`
+
+**Evidence Screenshots:**
+
+Before navigation:
+
+`assets/screenshots/phase05_real_web_autonomy/experiment_03_verified_web_navigation_before.png`
+
+Verified after navigation:
+
+`assets/screenshots/phase05_real_web_autonomy/experiment_03_verified_web_navigation.png`
+
+**Architecture Under Test:**
+
+The live path uses the existing production components:
+
+    Google Chrome
+        -> PerceptionEngine
+        -> fused_elements
+        -> UIGrounder
+        -> ActionGrounder
+        -> structured click_mouse Action
+        -> ToolExecutor
+        -> fresh PerceptionEngine observation
+        -> ActionVerifier
+        -> verified semantic postcondition
+
+No DOM selectors, CSS selectors, XPath, Selenium, or Playwright were introduced.
+
+No production grounding, action-grounding, executor, or verification code changes were required.
+
+**Start-Page Identity Gate:**
+
+Before a click is allowed, the experiment requires:
+
+    Search This Site
+    element_type = text_field
+
+to resolve successfully.
+
+This provides an explicit semantic indication that the expected python.org start page is visible before execution.
+
+The final dry-run observed:
+
+- Start-page marker status: `resolved`
+- Type: `text_field`
+- Text: `Search This Site`
+- Source: `accessibility`
+- Confidence: `1.00`
+- Enabled: `True`
+
+**Action Target:**
+
+The navigation action target is:
+
+    Docs
+    element_type = link
+
+Live grounding result:
+
+- Status: `resolved`
+- Reason: `resolved by text`
+- Type: `link`
+- Text: `Docs`
+- Source: `accessibility`
+- Confidence: `1.00`
+- Enabled: `True`
+- Bounding box: `x=536, y=127, width=198, height=43`
+
+`ActionGrounder` converted the resolved semantic element into:
+
+    tool_name = click_mouse
+    arguments = {"x": 635, "y": 148}
+
+Action-grounding result:
+
+- Status: `ready`
+- Reason: `click action ready`
+
+**Verification Target:**
+
+The post-navigation semantic target is:
+
+    Library reference
+    element_type = link
+
+The target was intentionally selected because it was absent from the python.org start page and present after navigation to the Python documentation.
+
+Before execution:
+
+- Status: `not_found`
+- Candidate count: `0`
+
+This established target absence before the click.
+
+**Dry-Run Safety Validation:**
+
+The harness remains dry-run by default.
+
+A live dry-run after the final harness refactor showed:
+
+- Frontmost application: `Google Chrome`
+- Before perception warnings: none
+- Start-page marker: `resolved`
+- Docs link: `resolved`
+- Verification target before action: `not_found`
+- Action grounding: `ready`
+- Generated click: `(635, 148)`
+- Precondition acceptance result: `passed`
+- Action execution count: `0`
+- Evidence promotion: skipped
+
+No mouse action occurred without the explicit `--execute` flag.
+
+**Live Execute Acceptance:**
+
+The explicit execute run performed exactly one structured `click_mouse` action.
+
+Execution result:
+
+- Tool result success: `True`
+- Tool name: `click_mouse`
+- Tool error: `None`
+- Action execution count: `1`
+
+After the click, a fresh production observation reported:
+
+- Frontmost application: `Google Chrome`
+- Fused elements: `193`
+- Perception warnings: none
+
+The verification target then resolved as:
+
+- Type: `link`
+- Text: `Library reference`
+- Source: `accessibility`
+- Confidence: `1.00`
+- Enabled: `True`
+- Bounding box: `x=425, y=482, width=154, height=25`
+
+`ActionVerifier` returned:
+
+- Status: `verified`
+- Reason: `target verified: before=not_found, after=resolved`
+- Before status: `not_found`
+- After status: `resolved`
+
+The formal live result was:
+
+    Live acceptance result: passed
+
+**Evidence Promotion Policy:**
+
+The after-action screenshot is first written to a candidate evidence path.
+
+Only after all navigation verification conditions pass is that candidate promoted to the formal evidence path.
+
+If verification fails, the candidate is retained for debugging and any existing formal evidence remains untouched.
+
+Both the before-navigation screenshot and the verified after-navigation screenshot are retained because the Experiment 05.03 claim depends on the semantic transition between those two states.
+
+**Harness Regression Coverage:**
+
+Seven Experiment 05.03 harness tests were added.
+
+They verify:
+
+- dry-run observes but never executes
+- missing start-page marker blocks execution
+- missing action target blocks execution
+- verification target already present before action blocks execution
+- verified navigation executes exactly one action and promotes candidate evidence
+- failed post-navigation verification preserves existing formal evidence
+- failed click execution cannot produce a verified navigation result
+
+Focused result:
+
+    7 passed
+
+**Final Validation:**
+
+- Experiment 05.03 harness tests: `7 passed`
+- Complete repository suite: `1139 passed`
+- `python -m pip check`: no broken requirements
+- Experiment and regression-test files: `py_compile` passed
+- `git diff --check`: passed
+- Final dry-run preconditions: passed
+- Real-web execute acceptance: passed
+- Action verification status: `verified`
+
+**Result:**
+
+Experiment 05.03 demonstrated the first complete verified real-world web navigation loop in the project.
+
+The system successfully moved from semantic perception to semantic grounding, safe coordinate action grounding, one real click, fresh post-action perception, and deterministic verification that the expected destination-page target appeared.
+
+A successful `click_mouse` tool result alone was not sufficient for success. The experiment only passed after `ActionVerifier` established the semantic transition from `Library reference = not_found` before execution to `Library reference = resolved` afterward.
+
+This establishes the verified navigation foundation required for Experiment 05.04: Scroll and Viewport Search.

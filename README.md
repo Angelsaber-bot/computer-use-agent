@@ -128,7 +128,7 @@ Phase 04 UI Grounding and Task Reasoning is complete, including the original Tas
 
 - [x] Experiment 01: Real Web Accessibility Perception
 - [x] Experiment 02: Real Web Semantic Grounding
-- [ ] Experiment 03: Verified Web Navigation
+- [x] Experiment 03: Verified Web Navigation
 - [ ] Experiment 04: Scroll and Viewport Search
 - [ ] Experiment 05: Real Web Text Input
 - [ ] Experiment 06: Web Information Extraction
@@ -154,3 +154,11 @@ Real-web semantic collisions were handled correctly. The visible text `Docs` app
 The formal Experiment 05.02 acceptance remained completely read-only: no mouse movement, click, typing, scrolling, navigation, computer-action execution, or OpenAI request occurred. Final live acceptance passed with no perception warnings. Evidence is `assets/screenshots/phase05_real_web_autonomy/experiment_02_real_web_semantic_grounding.png`.
 
 Experiment 05.02 added regression coverage for real-web role collisions in `tests/test_ui_grounder.py`. The complete UI-grounder module passed `43 tests`; the complete repository suite passed `1132 tests`; `pip check` reported no broken requirements; `py_compile` and `git diff --check` passed.
+
+Experiment 05.03 completed the first verified real-world web navigation loop. Starting from `https://www.python.org/`, the production perception pipeline resolved the `Search This Site` text field as a start-page identity marker and resolved `Docs` uniquely as a `link`. `ActionGrounder` converted that semantic target into one safe `click_mouse` action at logical screen coordinates `(635, 148)`.
+
+In live execute mode, `ToolExecutor` executed exactly one grounded click. After navigation, a fresh production observation found `Library reference` as a `link` on the Python documentation page. `ActionVerifier` verified the transition because the target was `not_found` before the click and `resolved` afterward. The live result was `verified` with no perception warnings.
+
+The experiment remains dry-run by default and requires explicit `--execute` for real interaction. A start-page identity gate, semantic action grounding, safe coordinate grounding, before/after observations, target-appearance verification, and candidate-evidence promotion prevent a successful tool call from being treated as task success without semantic postcondition evidence. Formal evidence is preserved as both `experiment_03_verified_web_navigation_before.png` and `experiment_03_verified_web_navigation.png`.
+
+Experiment 05.03 added seven harness regression tests covering dry-run safety, failed preconditions, exactly-once execution, successful verification and evidence promotion, failed verification, and failed tool execution. The complete repository suite passed `1139 tests`; `pip check` reported no broken requirements; `py_compile` and `git diff --check` passed; and the real-web execute acceptance passed.
