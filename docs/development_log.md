@@ -3951,3 +3951,129 @@ Remaining limitations:
 - no LLM planning or recovery
 - bounded viewport search is reused only as a visibility fallback
 - offscreen text-field search is not fully validated as part of 05.05
+
+### Phase 05 Experiment 06: Web Information Extraction
+
+**Date:** September 7, 2026
+
+**Objective:**
+
+Extract deterministic structured records from real webpage Accessibility semantics.
+
+**Files:**
+
+- `src/computer_agent/perception/semantic_extraction.py`
+- `experiments/phase05_real_web_autonomy/experiment_06_web_information_extraction.py`
+- `tests/test_semantic_extraction.py`
+- `tests/test_experiment_06_web_information_extraction.py`
+
+**Implemented:**
+
+- Added pure production semantic extraction helpers that accept `Sequence[SemanticAXElement]` inputs and normalize internally to immutable tuples.
+- Added `SemanticSection` for heading-delimited semantic slices.
+- Added `NewsRecord` for structured `{date, title}` records.
+- Added explicit section statuses: `extracted`, `missing_heading`, `duplicate_heading`, and `empty_section`.
+- Added explicit news statuses: `extracted`, `empty_section`, `no_records`, and `malformed_records`.
+- Added explicit news issue kinds for malformed or incomplete dates, titles without complete dates, and dates without following titles.
+- Section extraction locates exactly one normalized `AXHeading` match and stops before the next `AXHeading`; it does not rely on element indexes, coordinates, or bounds.
+- News extraction combines split date fragments such as `2026-` plus `09-01`, validates real calendar dates, treats `AXLink` text as the authoritative title source, ignores duplicate `AXStaticText` title copies, ignores `>>>More`, and preserves source order.
+- Added a read-only Experiment 05.06 harness targeting `https://www.python.org/` in Google Chrome. The harness performs an 8-second visible countdown, verifies the frontmost application, reads raw Accessibility semantics, extracts the `Latest News` section, checks that it ends before `Upcoming Events`, prints all records, and performs zero computer actions.
+
+**Automated Coverage:**
+
+Focused tests cover:
+
+- unique heading -> correct section slice
+- section stops at the next `AXHeading`
+- `bounds=None` elements are accepted
+- section extraction does not assume fixed element indexes
+- missing heading
+- duplicate heading
+- empty `SemanticSection` -> `NewsExtractionStatus.EMPTY_SECTION`
+- semantic content but no date/title records -> `NewsExtractionStatus.NO_RECORDS`
+- one valid date/title record
+- split date fragments combine correctly
+- incomplete year fragment such as `2026-` -> malformed incomplete date issue
+- month-day fragment such as `09-01` without a preceding year -> malformed incomplete date issue
+- five valid records preserve order
+- duplicate static-text title copies do not duplicate records
+- `>>>More` is ignored
+- malformed date behavior
+- date without a following title
+- title without a complete date
+- unrelated elements outside the section are ignored
+- harness pass/fail/block paths preserve `action_execution_count == 0`
+- countdown output prints one visible line per second
+
+**Final Automated Validation:**
+
+- Focused Phase 05.06 tests: `25 passed`
+- Complete suite using the known-good environment command `PYTHONPATH=src python -m pytest -q`: `1211 passed`
+- `py_compile`: passed
+- `git diff --check`: passed
+- `python -m pip check`: still failed with the documented environment mismatch where `pynacl 1.6.2` requires `cffi>=2.0.0` and the active environment has `cffi 1.17.1`
+
+**Live Python.org Validation:**
+
+Command:
+
+`PYTHONPATH=src python experiments/phase05_real_web_autonomy/experiment_06_web_information_extraction.py`
+
+Observed:
+
+- Extraction status: `passed`
+- Extraction reason: `all live read-only extraction checks passed`
+- Frontmost application: `Google Chrome`
+- Raw semantic element count: `490`
+- Action execution count: `0`
+- Section status: `extracted`
+- Section reason: `target section extracted`
+- Matching headings: `1`
+- Section heading: `Latest News`
+- Section element count: `24`
+- Following heading: `Upcoming Events`
+- News status: `extracted`
+- News reason: `news records extracted`
+- News record count: `5`
+- News issue count: `0`
+
+Extracted live records:
+
+1. `2026-09-01` — `The 2026 PSF Board Election is Open!`
+2. `2026-09-01` — `Inaugural Python Packaging Council Election: Voting is now open!`
+3. `2026-09-01` — `Python 3.15.0 candidate 2 is here!`
+4. `2026-08-31` — `Kojo Idrissa: 2026 PSF Board Election Candidate Interview`
+5. `2026-08-25` — `Ramya Ravi: 2026 PSF Board Election Candidate Interview`
+
+Success came from live Accessibility semantics and structured parsing. No pre-known live titles were used as PASS conditions; titles were printed as extracted evidence.
+
+**Current Status:**
+
+Experiment 05.06 is complete for the current deterministic python.org `Latest News` semantic-extraction scope.
+
+This does not claim arbitrary websites, arbitrary webpage structures, or generic news extraction are solved.
+
+The live harness does not:
+
+- scroll
+- click
+- type
+- navigate
+- use OCR
+- take screenshots
+- mutate the clipboard
+- call an LLM
+
+Remaining limitations:
+
+- one known semantic section pattern
+- section extraction is heading-delimited and does not infer visual layout
+- deterministic date/title parsing
+- no scrolling in this experiment
+- no clicking
+- no typing
+- no navigation
+- no OCR
+- no screenshots
+- no clipboard mutation
+- no LLM

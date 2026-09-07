@@ -29,6 +29,18 @@ from computer_agent.perception.preprocessing import (
 from computer_agent.perception.screen_capture import (
     ScreenCapture,
 )
+from computer_agent.perception.semantic_extraction import (
+    NewsExtractionIssue,
+    NewsExtractionIssueKind,
+    NewsExtractionResult,
+    NewsExtractionStatus,
+    NewsRecord,
+    SectionExtractionResult,
+    SectionExtractionStatus,
+    SemanticSection,
+    extract_news_records,
+    extract_semantic_section,
+)
 from computer_agent.perception.text_locator import (
     TextTargetLocator,
 )
@@ -58,6 +70,9 @@ __all__ = [
     "ScreenCapture",
     "ScreenCoordinateMapper",
     "ScreenFrame",
+    "SectionExtractionResult",
+    "SectionExtractionStatus",
+    "SemanticSection",
     "TesseractOCR",
     "UIElement",
     "UIElementFusion",
@@ -74,6 +89,13 @@ __all__ = [
     "ViewportSearchPolicy",
     "ViewportSearchResult",
     "ViewportSearchStatus",
+    "NewsExtractionIssue",
+    "NewsExtractionIssueKind",
+    "NewsExtractionResult",
+    "NewsExtractionStatus",
+    "NewsRecord",
+    "extract_news_records",
+    "extract_semantic_section",
     "normalize_ui_text",
     "smaller_area_overlap_ratio",
 ]

@@ -131,7 +131,7 @@ Phase 04 UI Grounding and Task Reasoning is complete, including the original Tas
 - [x] Experiment 03: Verified Web Navigation
 - [x] Experiment 04: Scroll and Viewport Search
 - [x] Experiment 05: Real Web Text Input
-- [ ] Experiment 06: Web Information Extraction
+- [x] Experiment 06: Web Information Extraction
 - [ ] Experiment 07: Adaptive Web Recovery
 - [ ] Experiment 08: Multi-Step Real Web Agent
 - [ ] Experiment 09: Live OpenAI Web Agent
@@ -184,3 +184,11 @@ Experiment 05.05 validation: focused tests `13 passed`; relevant grounding and v
 Live python.org validation closed out Experiment 05.05 for the minimal single-visible-field text-input scope. Dry-run on `Google Chrome` at `python.org` resolved the `Search This Site` `text_field` with empty value, bounds `BoundingBox(x=937, y=213, width=224, height=38)`, no warnings, ready focus action `click_mouse {"x": 1049, "y": 232}`, status `needs_action`, and action execution count `0`. Execute mode typed `computer agent` after one successful focus click and one successful `type_text` action, then a fresh post-action observation resolved the same field with value `computer agent`, bounds `BoundingBox(x=873, y=213, width=288, height=38)`, no warnings, final status `verified`, and action execution count `2`.
 
 Experiment 05.05 did not press Enter, submit the search form, navigate, use clipboard paste, or call an LLM. This completes only the current minimal scope: one deterministic visible field, one focus click, one type action, fresh semantic value verification, and a pre-action empty-field requirement. Arbitrary form filling, arbitrary websites, offscreen text-field search validation, multi-field forms, submission, Enter-key behavior, and LLM recovery remain out of scope.
+
+Experiment 05.06 completed the current deterministic python.org Latest News semantic-extraction scope. The production `semantic_extraction` module locates one `AXHeading` section by normalized text, slices semantic elements until the next heading, and parses ordered news records from date text plus authoritative `AXLink` titles. It accepts `bounds=None`, combines split date fragments such as `2026-` plus `09-01`, ignores duplicate static-text title copies and `>>>More`, and reports explicit malformed-input statuses instead of inventing missing data.
+
+Live read-only validation used `PYTHONPATH=src python experiments/phase05_real_web_autonomy/experiment_06_web_information_extraction.py` with Google Chrome frontmost on `https://www.python.org/`. The result was `passed`: `490` raw semantic elements, `0` actions, `1` matching `Latest News` heading, `24` section elements, following heading `Upcoming Events`, news status `extracted`, `5` records, and `0` issues. Extracted records were `2026-09-01 — The 2026 PSF Board Election is Open!`, `2026-09-01 — Inaugural Python Packaging Council Election: Voting is now open!`, `2026-09-01 — Python 3.15.0 candidate 2 is here!`, `2026-08-31 — Kojo Idrissa: 2026 PSF Board Election Candidate Interview`, and `2026-08-25 — Ramya Ravi: 2026 PSF Board Election Candidate Interview`.
+
+Experiment 05.06 validates structure and extraction success from live Accessibility semantics and structured parsing; no pre-known live titles are used as PASS conditions. It does not claim arbitrary websites, arbitrary webpage structures, or generic news extraction are solved. Limitations remain: one known semantic section pattern, heading-delimited section extraction, deterministic date/title parsing, no scrolling, no clicking, no typing, no navigation, no OCR, no screenshots, no clipboard mutation, and no LLM.
+
+Experiment 05.06 final automated validation: focused Phase 05.06 tests `25 passed`; complete suite passed with `PYTHONPATH=src python -m pytest -q` as `1211 passed`; `py_compile` passed; `git diff --check` passed; `python -m pip check` still reports the documented `pynacl`/`cffi` environment mismatch.
