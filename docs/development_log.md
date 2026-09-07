@@ -3576,3 +3576,378 @@ The system successfully moved from semantic perception to semantic grounding, sa
 A successful `click_mouse` tool result alone was not sufficient for success. The experiment only passed after `ActionVerifier` established the semantic transition from `Library reference = not_found` before execution to `Library reference = resolved` afterward.
 
 This establishes the verified navigation foundation required for Experiment 05.04: Scroll and Viewport Search.
+
+### Experiment 04: Scroll and Viewport Search
+
+**Date:** September 6, 2026
+
+**Current Increment:**
+
+Deterministic read-only diagnosis status only. No scroll execution has been added.
+
+**Objective:**
+
+Distinguish a visible real-web semantic target from a target that exists in raw Accessibility semantics but may require viewport search because geometry is unavailable or outside the current viewport.
+
+**Target Website:**
+
+`https://www.python.org/`
+
+**Experiment File:**
+
+`experiments/phase05_real_web_autonomy/experiment_04_scroll_viewport_search.py`
+
+**Implemented:**
+
+- Added reusable viewport target diagnosis in `computer_agent.perception.viewport`.
+- Preserved `SemanticAXElement` as the optional-geometry representation for raw Accessibility semantics.
+- Kept `UIElement.bounding_box` required.
+- Classified a unique visible matching target as `visible`.
+- Classified a unique matching target with unavailable geometry or outside-viewport geometry as `needs_search`.
+- Classified zero matching raw semantic targets as `not_found` for this observation only.
+- Classified non-Chrome frontmost app, missing or ambiguous viewport, duplicate matches, and other ambiguous observations as `blocked`.
+- Kept the experiment as a read-only observer over frontmost app name, unique viewport, and raw semantic elements.
+- Added no mouse movement, clicking, typing, scrolling, navigation, clipboard modification, or LLM request.
+
+**Validated Live Behavior Informing This Increment:**
+
+- Frontmost application: `Google Chrome`
+- Unique `AXWebArea`: `Viewport(bounds=BoundingBox(x=0, y=124, width=1470, height=832))`
+- Raw Accessibility contains exactly one `AXLink` with text `Privacy Notice`.
+- That raw semantic target currently has `bounds=None` at the top of the page.
+- Its visibility is therefore `geometry_unavailable`.
+- The deterministic diagnosis for this observation is `needs_search`.
+
+**Regression Coverage:**
+
+Focused tests cover:
+
+- unique visible target -> `visible`
+- unique geometry-unavailable target -> `needs_search`
+- unique outside-viewport target -> `needs_search`
+- zero target matches -> `not_found`
+- duplicate target matches -> `blocked`
+- non-Chrome frontmost app -> `blocked`
+- missing or ambiguous viewport -> `blocked`
+- read-only experiment diagnosis performs only Accessibility read methods
+- viewport-aware grounding still rejects outside-viewport `UIElement` candidates without making `UIElement.bounding_box` optional
+- Accessibility viewport and raw semantic reads preserve unique `AXWebArea` and optional target geometry
+
+**Validation:**
+
+- Focused Experiment 05.04 harness test: `1 passed`
+- Focused Experiment 05.04 viewport and harness tests: `18 passed`
+- `tests/test_viewport.py` plus `tests/test_viewport_grounding.py`: `17 passed`
+- `tests/test_experiment_04_scroll_viewport_search.py`: `1 passed`
+- `tests/test_ui_grounder.py` plus `tests/test_accessibility.py`: `96 passed`
+- Requested viewport, viewport-grounding, UI-grounder, and Accessibility regressions: `116 passed`
+- Accessibility regression: `56 passed`
+- Complete suite with `PYTHONPATH=src`: `1160 passed`
+- Plain `python -m pytest -q`: `1157 passed`, `3 failed` because subprocess checks could not import `computer_agent` from the current environment
+- `python -m pip check`: failed because `pynacl 1.6.2` requires `cffi>=2.0.0` while the active environment has `cffi 1.17.1`
+- `py_compile` for changed Python files: passed
+- `git diff --check`: passed
+
+**Result:**
+
+Experiment 05.04 can now report whether the configured target is immediately visible, requires viewport search, is absent from the current observation, or is blocked by an untrustworthy observation.
+
+This increment intentionally stops before implementing any scroll action, retry behavior, or search execution.
+
+**Bounded Downward Search Increment:**
+
+This increment added bounded downward viewport search while keeping dry-run as the default.
+
+Implemented:
+
+- Added `ViewportSearchStatus` with `found`, `needs_scroll`, `blocked`, `stalled`, and `exhausted`.
+- Added `ViewportSearchPolicy` with default downward search calibration: `max_scroll_attempts=6`, `scroll_amount=4`, and `stabilization_wait_seconds=0.3`.
+- Added `ViewportSearchObservation` so every search decision uses a fresh frontmost application, unique viewport, and raw semantic element observation.
+- Added `ViewportSearchController` as production deterministic search logic under `src/computer_agent/perception/`.
+- Kept `DiagnosisStatus` separate from overall search result status.
+- Kept dry-run to exactly one read-only observation and zero control actions.
+- Added explicit `--execute` for bounded scroll execution.
+- Used the existing structured `scroll` tool via `Action(tool_name="scroll", arguments={"amount": -scroll_amount})` and `ToolExecutor`.
+- Re-checks Chrome, viewport reliability, and target ambiguity after each scroll.
+- Never clicks the found target.
+- Never types, navigates, modifies the clipboard, or calls an LLM.
+- Does not reuse pre-scroll bounds after a scroll.
+- Does not treat scroll dispatch success as movement proof.
+- Uses a conservative repeated semantic viewport signature check to return `stalled` when an observation does not change after a scroll.
+- Continues treating `not_found` as only "not found in this observation"; execute-mode search can continue while budget remains.
+
+Tested bounded-search behavior:
+
+- dry-run `needs_search` -> `needs_scroll`, zero executions
+- dry-run already visible -> `found`, zero executions
+- dry-run blocked diagnosis -> `blocked`, zero executions
+- execute already visible -> `found`, zero scrolls
+- execute `needs_search` -> one scroll -> visible -> `found`
+- execute repeated changing `needs_search` observations -> `exhausted` at exact budget
+- successful scroll with unchanged semantic observation -> `stalled`
+- app changes from Chrome after scroll -> `blocked`
+- viewport becomes unavailable after scroll -> `blocked`
+- duplicate target after scroll -> `blocked`
+- scroll count cannot exceed configured maximum
+- no click, type, navigation, clipboard, or LLM action is generated
+
+Bounded-search validation:
+
+- Focused Phase 05.04 tests: `13 passed`
+- `tests/test_experiment_04_scroll_viewport_search.py` plus `tests/test_viewport.py`: `24 passed`
+- `tests/test_experiment_04_scroll_viewport_search.py`, `tests/test_viewport.py`, and `tests/test_viewport_grounding.py`: `30 passed`
+- `tests/test_viewport_grounding.py`, `tests/test_ui_grounder.py`, and `tests/test_accessibility.py`: `105 passed`
+- Existing scroll/tool tests (`test_mouse_tools.py`, `test_computer_controller.py`, `test_computer_tool_factory.py`, `test_tool_executor.py`): `48 passed`
+- Complete suite using the known-good environment command `PYTHONPATH=src python -m pytest -q`: `1172 passed`
+- `python -m pip check`: still failed with the documented environment mismatch where `pynacl 1.6.2` requires `cffi>=2.0.0` and the active environment has `cffi 1.17.1`
+
+**Live Python.org Validation:**
+
+The bounded viewport-search increment was manually validated on `https://www.python.org/` in Google Chrome.
+
+Read-only diagnosis at the top of python.org:
+
+- Frontmost application: `Google Chrome`
+- Target: `AXLink` with text `Privacy Notice`
+- Semantic matches: exactly one
+- Target bounds: `None`
+- Visibility: `VisibilityStatus.GEOMETRY_UNAVAILABLE`
+- Diagnosis status: `needs_search`
+
+Initial execute calibration with default policy:
+
+- `max_scroll_attempts=6`
+- `scroll_amount=4`
+- Scroll attempts performed: `6`
+- All six scroll `ToolResult` values returned `success=True`
+- The target remained `VisibilityStatus.GEOMETRY_UNAVAILABLE`
+- Final search status: `exhausted`
+- Reason: `scroll-attempt budget exhausted`
+
+Interpretation: structured scroll dispatch and the fresh-observation loop worked, but `scroll_amount=4` was insufficient to reach the target within the six-attempt budget on this page in this environment. This was not a scroll tool failure and is not a universal failure claim.
+
+Execute calibration with larger page-specific scroll amount:
+
+- `max_scroll_attempts=6`
+- `scroll_amount=12`
+- Initial diagnosis: `needs_search`
+- Automatic downward search performed `4` scroll attempts
+- After the fourth scroll, `Privacy Notice` had `BoundingBox(x=878, y=922, width=72, height=15)`
+- Visibility became `visible`
+- Final search status: `found`
+- Reason: `target became visible`
+- Only four of six allowed attempts were used
+- No click was performed after finding the target
+
+Interpretation: `scroll_amount=12` is successful calibration evidence for python.org in this environment. It is not claimed to be optimal or universal.
+
+Already-visible target validation:
+
+- The page was left at the footer with `Privacy Notice` visible.
+- Dry-run performed exactly one observation.
+- Scroll attempts performed: `0`
+- Search status: `found`
+- Diagnosis status: `visible`
+- Target bounds: `BoundingBox(x=878, y=922, width=72, height=15)`
+
+Interpretation: the controller stops before scrolling when the target is already visible, and the experiment does not rely on stale state from a previous run.
+
+**Current Status:**
+
+The bounded downward viewport-search increment for Experiment 05.04 is implemented, tested, and live validated on python.org.
+
+Remaining limitations are explicit:
+
+- downward-only bounded search
+- one primary webpage viewport
+- no nested scroll containers
+- no infinite-scroll handling
+- no progress-bounded end-of-page search
+- no clicking after finding
+- no typing
+- no LLM recovery
+- search remains hard-budget bounded by `max_scroll_attempts`
+
+### Experiment 05: Real Web Text Input
+
+**Date:** September 7, 2026
+
+**Current Increment:**
+
+Deterministic single-field text input workflow for python.org's site search field. Dry-run is the default; the minimal live execute validation has passed.
+
+**Objective:**
+
+Safely locate a real web text field, type a deterministic test string, then re-observe the page and verify that the field's semantic value changed to the requested input without submitting the form.
+
+**Target Website:**
+
+`https://www.python.org/`
+
+**Target Field:**
+
+`Search This Site` constrained to `text_field`
+
+**Test Input:**
+
+`computer agent`
+
+**Experiment File:**
+
+`experiments/phase05_real_web_autonomy/experiment_05_real_web_text_input.py`
+
+**Implemented:**
+
+- Added `TextInputStatus` with `verified`, `needs_action`, `blocked`, `action_failed`, and `verification_failed`.
+- Added `TextInputObservation` to keep frontmost app, unique viewport, `PerceptionSnapshot`, and raw semantic elements together for each decision.
+- Added `TextInputController` under `src/computer_agent/agent/` for deterministic single-field text input.
+- Preserved dry-run as the default.
+- In dry-run, the controller performs one observation, grounds the target, checks safety, and returns `needs_action` when the field could be safely focused and typed.
+- In execute mode, the controller issues exactly one `click_mouse` focus action and one `type_text` action when preconditions pass.
+- The experiment uses the existing `PerceptionEngine`, `MacOSAccessibility`, `UIGrounder`, `ActionGrounder`, `Action`, `ToolExecutor`, and registered computer tools.
+- The experiment does not call `pyautogui` directly.
+- The experiment does not press Enter, submit the form, navigate, mutate the clipboard, paste through the clipboard, or call an LLM.
+- Verification requires a fresh post-action observation.
+- Verification requires the post-action field to resolve again and its semantic `value` to equal the requested input while differing from the pre-action value.
+- Successful click/type `ToolResult`s alone are not sufficient for success.
+- Pre-action value must be empty before typing, preventing deterministic test text from being appended to existing content.
+- If the target is not safely visible, execute mode can delegate to the existing bounded viewport-search controller rather than duplicating scroll search logic.
+
+**Semantic Value Model:**
+
+`SemanticAXElement` now has an explicit optional `value` field. This preserves raw Accessibility field values separately from label/name text and avoids overloading `text` when verifying entered input.
+
+`MacOSAccessibility.read_frontmost_semantic_elements()` now fills that value from `AXValue` when it is a scalar supported by the existing `UIElement.value` contract.
+
+**Read-Only Live Shape Probe:**
+
+A read-only local probe attempted to inspect python.org's current search-field Accessibility representation before implementation.
+
+Result from the current tool environment:
+
+- `MacOSAccessibility.is_available()`: `False`
+- `MacOSAccessibility.is_trusted()`: `False`
+- Frontmost application name read through AppKit path: `rednote`
+- Viewport, controls, and raw semantic reads failed because macOS Accessibility frameworks were unavailable
+
+No mouse movement, clicking, typing, scrolling, navigation, clipboard mutation, or LLM request was performed by that probe.
+
+This probe limitation was superseded by the manual live python.org dry-run and execute validations recorded below.
+
+**Regression Coverage:**
+
+Focused tests cover:
+
+- dry-run unique visible text field -> `needs_action`, zero actions
+- dry-run missing target -> `blocked`, zero actions
+- dry-run duplicate target -> `blocked`, zero actions
+- dry-run wrong role -> `blocked`, zero actions
+- dry-run geometry unavailable through raw semantics without actionable `UIElement` geometry -> `blocked`, zero actions
+- dry-run non-Chrome frontmost app -> `blocked`, zero actions
+- execute unique field -> focus action -> type action -> fresh observation value match -> `verified`
+- focus/click tool failure -> `action_failed`
+- typing tool failure -> `action_failed`
+- post-action field missing -> `verification_failed`
+- post-action value unchanged -> `verification_failed`
+- post-action ambiguous field -> `blocked`
+- no Enter, submit, navigation, clipboard, or paste action is issued
+- action order is exactly `click_mouse` before `type_text`
+- total field-input actions are bounded and deterministic
+- raw semantic Accessibility values are preserved
+
+**Validation:**
+
+- Focused Experiment 05.05 tests: `13 passed`
+- Accessibility, viewport, and Experiment 05.05 focused tests: `81 passed`
+- Relevant grounding and viewport-search tests: `112 passed`
+- Relevant click/type/tool executor tests: `54 passed`
+- Accessibility, viewport, viewport-grounding, and Experiment 05.05 focused tests: `87 passed`
+- Complete suite using the known-good environment command `PYTHONPATH=src python -m pytest -q`: `1186 passed`
+- `python -m pip check`: still failed with the documented environment mismatch where `pynacl 1.6.2` requires `cffi>=2.0.0` and the active environment has `cffi 1.17.1`
+- `py_compile` for changed Python files: passed
+
+**Live Python.org Validation:**
+
+Dry-run validation on `https://www.python.org/`:
+
+- Frontmost application: `Google Chrome`
+- Target field text/name: `Search This Site`
+- Expected type: `text_field`
+- Text input status: `needs_action`
+- Text input reason: `text input could execute safely`
+- Viewport: available
+- Warnings: none
+- Grounding status: `resolved`
+- Grounding reason: `resolved by text`
+- Field type: `text_field`
+- Field text: `Search This Site`
+- Field value: `""`
+- Field bounds: `BoundingBox(x=937, y=213, width=224, height=38)`
+- Focus action status: `ready`
+- Focus action tool: `click_mouse`
+- Focus action arguments: `{"x": 1049, "y": 232}`
+- Action execution count: `0`
+
+Interpretation: the agent could uniquely and safely resolve the real python.org search text field, and dry-run performed no click or typing.
+
+Live execute validation:
+
+- Input text: `computer agent`
+
+Before action:
+
+- Grounding status: `resolved`
+- Field type: `text_field`
+- Field value: `""`
+- Field bounds: `BoundingBox(x=937, y=213, width=224, height=38)`
+
+Executed actions:
+
+- `click_mouse`: `success=True`
+- `type_text`: `success=True`
+
+After action:
+
+- Fresh post-action observation: collected
+- Grounding status: `resolved`
+- Field type: `text_field`
+- Field text: `Search This Site`
+- Field value: `computer agent`
+- Field bounds: `BoundingBox(x=873, y=213, width=288, height=38)`
+- Warnings: none
+
+Final result:
+
+- Text input status: `verified`
+- Reason: `post-action field value matched requested input`
+- Action execution count: `2`
+
+Interpretation: success was not inferred from `ToolResult` success alone. Verification came from fresh post-action semantic evidence, and the field value changed from the empty string to `computer agent`.
+
+The live execute validation did not:
+
+- press Enter
+- submit the search form
+- navigate
+- use clipboard paste
+- call an LLM
+
+**Current Status:**
+
+Experiment 05.05 is complete for the current minimal single-visible-field verified text-input scope.
+
+Remaining limitations:
+
+- one deterministic field only
+- one focus click
+- one type action
+- fresh semantic value verification
+- pre-action field must currently be empty
+- no arbitrary form filling
+- no submission
+- no Enter key
+- no arbitrary multi-field forms
+- no clipboard paste path
+- no LLM planning or recovery
+- bounded viewport search is reused only as a visibility fallback
+- offscreen text-field search is not fully validated as part of 05.05

@@ -32,6 +32,22 @@ from computer_agent.perception.screen_capture import (
 from computer_agent.perception.text_locator import (
     TextTargetLocator,
 )
+from computer_agent.perception.viewport import (
+    DiagnosisStatus,
+    SemanticAXElement,
+    Viewport,
+    ViewportTargetDiagnosis,
+    VisibilityStatus,
+    classify_visibility,
+    diagnose_semantic_target_visibility,
+)
+from computer_agent.perception.viewport_search import (
+    ViewportSearchController,
+    ViewportSearchObservation,
+    ViewportSearchPolicy,
+    ViewportSearchResult,
+    ViewportSearchStatus,
+)
 
 __all__ = [
     "BoundingBox",
@@ -46,6 +62,18 @@ __all__ = [
     "UIElement",
     "UIElementFusion",
     "TextTargetLocator",
+    "DiagnosisStatus",
+    "SemanticAXElement",
+    "Viewport",
+    "ViewportTargetDiagnosis",
+    "VisibilityStatus",
+    "classify_visibility",
+    "diagnose_semantic_target_visibility",
+    "ViewportSearchController",
+    "ViewportSearchObservation",
+    "ViewportSearchPolicy",
+    "ViewportSearchResult",
+    "ViewportSearchStatus",
     "normalize_ui_text",
     "smaller_area_overlap_ratio",
 ]

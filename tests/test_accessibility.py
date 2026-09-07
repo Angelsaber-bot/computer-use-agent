@@ -6,7 +6,9 @@ import pytest
 import computer_agent.perception.accessibility as accessibility_module
 from computer_agent.perception import MacOSAccessibility
 from computer_agent.perception import MacOSAccessibility as ExportedMacOSAccessibility
+from computer_agent.perception import SemanticAXElement
 from computer_agent.perception import UIElement
+from computer_agent.perception import Viewport
 
 
 class FakeAXValue:
@@ -714,6 +716,100 @@ def test_read_frontmost_controls_uses_pid_based_frontmost_application_path(
             "AXFocusedUIElement",
         )
     ) == 1
+
+
+def test_read_frontmost_viewport_returns_unique_web_area(monkeypatch):
+    web_area = _node(
+        role="AXWebArea",
+        position=(0, 124),
+        size=(1470, 832),
+    )
+    window = _node(
+        role="AXWindow",
+        children=[web_area],
+    )
+    _install_fake_accessibility(
+        monkeypatch,
+        window,
+    )
+
+    viewport = MacOSAccessibility().read_frontmost_viewport()
+
+    assert isinstance(viewport, Viewport)
+    assert viewport.bounds.x == 0
+    assert viewport.bounds.y == 124
+    assert viewport.bounds.width == 1470
+    assert viewport.bounds.height == 832
+
+
+def test_read_frontmost_viewport_returns_none_without_unique_web_area(
+    monkeypatch,
+):
+    window = _node(
+        role="AXWindow",
+        children=[
+            _node(role="AXWebArea"),
+            _node(role="AXWebArea"),
+        ],
+    )
+    _install_fake_accessibility(
+        monkeypatch,
+        window,
+    )
+
+    assert MacOSAccessibility().read_frontmost_viewport() is None
+
+
+def test_read_frontmost_semantic_elements_preserves_missing_geometry(
+    monkeypatch,
+):
+    link = _node(
+        role="AXLink",
+        title="Privacy Notice",
+        position=None,
+    )
+    window = _node(
+        role="AXWindow",
+        children=[link],
+    )
+    _install_fake_accessibility(
+        monkeypatch,
+        window,
+    )
+
+    elements = MacOSAccessibility().read_frontmost_semantic_elements()
+
+    assert elements == [
+        SemanticAXElement(
+            role="AXLink",
+            text="Privacy Notice",
+            bounds=None,
+        )
+    ]
+
+
+def test_read_frontmost_semantic_elements_preserves_value(monkeypatch):
+    text_field = _node(
+        role="AXTextField",
+        title="Search This Site",
+        value="accessibility test",
+    )
+    window = _node(
+        role="AXWindow",
+        children=[text_field],
+    )
+    _install_fake_accessibility(
+        monkeypatch,
+        window,
+    )
+
+    elements = MacOSAccessibility().read_frontmost_semantic_elements()
+
+    assert len(elements) == 1
+    assert elements[0].role == "AXTextField"
+    assert elements[0].text == "Search This Site"
+    assert elements[0].value == "accessibility test"
+    assert elements[0].bounds is not None
 
 
 def test_application_role_is_requested_once_per_read_frontmost_controls_call(

@@ -26,6 +26,10 @@ except ImportError:  # pragma: no cover - depends on host platform
     CoreFoundation = None  # type: ignore[assignment]
 
 from computer_agent.perception.models import BoundingBox, UIElement
+from computer_agent.perception.viewport import (
+    SemanticAXElement,
+    Viewport,
+)
 
 
 _ROLE_MAP = {
@@ -146,6 +150,184 @@ class MacOSAccessibility:
             return None
 
         return _localized_application_name(application)
+
+    def read_frontmost_window_bounds(self) -> BoundingBox | None:
+        """Return the focused frontmost window bounds when available."""
+
+        if not self.is_available():
+            raise RuntimeError(
+                "macOS Accessibility frameworks are unavailable"
+            )
+
+        if not self.is_trusted():
+            raise RuntimeError(
+                "macOS Accessibility permission is not trusted"
+            )
+
+        application = self._frontmost_application_element()
+        if application is None:
+            return None
+
+        focused_window = _copy_attribute(
+            application,
+            _ax_constant("kAXFocusedWindowAttribute"),
+        )
+        if focused_window is None:
+            return None
+
+        return _bounding_box_from_element(focused_window)
+
+    def read_frontmost_web_areas(self) -> list[BoundingBox]:
+        """Return AXWebArea bounds from the focused frontmost window."""
+
+        if not self.is_available():
+            raise RuntimeError(
+                "macOS Accessibility frameworks are unavailable"
+            )
+
+        if not self.is_trusted():
+            raise RuntimeError(
+                "macOS Accessibility permission is not trusted"
+            )
+
+        application = self._frontmost_application_element()
+        if application is None:
+            return []
+
+        focused_window = _copy_attribute(
+            application,
+            _ax_constant("kAXFocusedWindowAttribute"),
+        )
+        if focused_window is None:
+            return []
+
+        web_areas: list[BoundingBox] = []
+        self._collect_web_areas(
+            focused_window,
+            depth=0,
+            web_areas=web_areas,
+        )
+        return web_areas
+
+    def read_frontmost_viewport(self) -> Viewport | None:
+        """Return the unique frontmost webpage viewport when available."""
+
+        web_areas = self.read_frontmost_web_areas()
+
+        if len(web_areas) != 1:
+            return None
+
+        return Viewport(bounds=web_areas[0])
+
+    def read_frontmost_semantic_elements(
+        self,
+    ) -> list[SemanticAXElement]:
+        """Return supported Accessibility semantics with optional geometry."""
+
+        if not self.is_available():
+            raise RuntimeError(
+                "macOS Accessibility frameworks are unavailable"
+            )
+
+        if not self.is_trusted():
+            raise RuntimeError(
+                "macOS Accessibility permission is not trusted"
+            )
+
+        application = self._frontmost_application_element()
+        if application is None:
+            return []
+
+        focused_window = _copy_attribute(
+            application,
+            _ax_constant("kAXFocusedWindowAttribute"),
+        )
+        if focused_window is None:
+            return []
+
+        elements: list[SemanticAXElement] = []
+        self._collect_semantic_elements(
+            focused_window,
+            depth=0,
+            elements=elements,
+        )
+        return elements
+
+    def _collect_semantic_elements(
+        self,
+        element: Any,
+        *,
+        depth: int,
+        elements: list[SemanticAXElement],
+    ) -> None:
+        if depth > self.maximum_depth:
+            return
+
+        role = _copy_attribute(
+            element,
+            _ax_constant("kAXRoleAttribute"),
+        )
+
+        if role in _ROLE_MAP:
+            mapped_role = _ROLE_MAP[role]
+
+            text = _text_from_element(
+                element,
+                mapped_role,
+            )
+
+            elements.append(
+                SemanticAXElement(
+                    role=role,
+                    text=text,
+                    bounds=_bounding_box_from_element(element),
+                    value=_value_from_element(element),
+                )
+            )
+
+        children = _copy_attribute(
+            element,
+            _ax_constant("kAXChildrenAttribute"),
+        )
+
+        for child in _iter_children(children):
+            self._collect_semantic_elements(
+                child,
+                depth=depth + 1,
+                elements=elements,
+            )
+
+    def _collect_web_areas(
+        self,
+        element: Any,
+        *,
+        depth: int,
+        web_areas: list[BoundingBox],
+    ) -> None:
+        if depth > self.maximum_depth:
+            return
+
+        role = _copy_attribute(
+            element,
+            _ax_constant("kAXRoleAttribute"),
+        )
+
+        if role == "AXWebArea":
+            bounds = _bounding_box_from_element(element)
+            if bounds is not None:
+                web_areas.append(bounds)
+
+        children = _copy_attribute(
+            element,
+            _ax_constant("kAXChildrenAttribute"),
+        )
+
+        for child in _iter_children(children):
+            self._collect_web_areas(
+                child,
+                depth=depth + 1,
+                web_areas=web_areas,
+            )
 
     def _frontmost_application_element(self) -> Any | None:
         application = self._frontmost_workspace_application()

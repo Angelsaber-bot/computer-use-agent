@@ -13,7 +13,7 @@ from computer_agent.grounding.models import (
     TargetSpec,
 )
 from computer_agent.perception.fusion import normalize_ui_text
-from computer_agent.perception.models import UIElement
+from computer_agent.perception.models import BoundingBox, UIElement
 
 
 _SOURCE_PRIORITY = {
@@ -30,11 +30,16 @@ class UIGrounder:
         self,
         target_spec: TargetSpec,
         elements: Iterable[UIElement],
+        *,
+        viewport: BoundingBox | None = None,
     ) -> GroundingResult:
         """Return an explicit deterministic grounding result."""
 
         if not isinstance(target_spec, TargetSpec):
             raise ValueError("target_spec must be a TargetSpec")
+
+        if viewport is not None and not isinstance(viewport, BoundingBox):
+            raise ValueError("viewport must be a BoundingBox or None")
 
         element_tuple = tuple(elements)
         for element in element_tuple:
@@ -61,6 +66,7 @@ class UIGrounder:
                         element,
                         tier_name,
                         target_spec,
+                        viewport,
                     )
                     for element in tier_elements
                 ),
@@ -131,12 +137,18 @@ class UIGrounder:
         element: UIElement,
         match_basis: str,
         target_spec: TargetSpec,
+        viewport: BoundingBox | None,
     ) -> GroundingCandidate:
         rejection_reasons = []
         box_usable = _box_is_usable(element)
 
         if not box_usable:
             rejection_reasons.append("invalid_bounding_box")
+        elif (
+            viewport is not None
+            and not element.bounding_box.intersects(viewport)
+        ):
+            rejection_reasons.append("outside_viewport")
 
         if element.enabled is False:
             rejection_reasons.append("disabled")
