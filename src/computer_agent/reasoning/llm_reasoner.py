@@ -14,6 +14,7 @@ from computer_agent.planning.models import (
     ReadClipboardStep,
     SemanticPlanStep,
     StructuredPlan,
+    WebTextInputStep,
 )
 from computer_agent.planning.structured_planner import StructuredPlanner
 from computer_agent.reasoning.llm_client import LLMClient
@@ -29,21 +30,29 @@ Convert the user's task intent into a semantic UI plan.
 Return JSON only, with no markdown, comments, or prose.
 The top-level object must contain exactly:
 {{"task_goal": string, "steps": array}}
-Only supported semantic operations are allowed: click_target, read_clipboard, activate_app, insert_text.
+Only supported semantic operations are allowed: click_target, read_clipboard, activate_app, insert_text, type_into_target.
 Each step must use exactly one operation shape:
 click_target: {{"goal": string, "operation": "click_target", "action_target": target, "verification_target": target, "max_attempts": integer}}
 read_clipboard: {{"goal": string, "operation": "read_clipboard", "value_key": string, "expected_text": string, "max_attempts": integer}}
 activate_app: {{"goal": string, "operation": "activate_app", "app_name": string, "max_attempts": integer}}
 insert_text: {{"goal": string, "operation": "insert_text", "value_key": string, "max_attempts": integer}}
+type_into_target: {{"goal": string, "operation": "type_into_target", "target": target, "input_text": string, "max_attempts": 1}}
 Each target object must contain exactly:
 {{"text": string, "element_types": array}}
 element_types may contain only: {", ".join(SUPPORTED_REASONING_ELEMENT_TYPES)}.
-If the UI role is uncertain, use an empty element_types array.
-Never invent a role.
+element_types are semantic UI roles, not descriptions of visible content.
+Do not choose "text" merely because a string is visible on screen.
+Only specify an element role when the task intent explicitly states it or strongly semantically implies it.
+If the role is not known from the task intent, use an empty element_types array.
+Appearance verification such as "verify that 'Results' appears" should use "element_types": [] unless the role was explicitly known from the task intent.
+Never invent a semantic role in order to make a target more specific.
 click_target identifies semantic UI targets, never coordinates.
 read_clipboard stores the clipboard value into value_key.
 activate_app identifies only the application name.
 insert_text consumes a previously stored runtime value by value_key and must never contain literal text to type.
+Use type_into_target when the task requires entering literal caller-visible text into a semantic UI target.
+type_into_target input_text is literal text only, not a command or tool call.
+type_into_target max_attempts must be exactly 1.
 Never emit executable Action objects, tool names, raw tool arguments, coordinates, hotkeys, shell commands, AppleScript, or bundle IDs.
 Do not claim to observe the screen, operate the computer, or execute the task.
 """.strip()
@@ -82,6 +91,15 @@ _INSERT_TEXT_STEP_KEYS = frozenset(
         "goal",
         "operation",
         "value_key",
+        "max_attempts",
+    )
+)
+_TYPE_INTO_TARGET_STEP_KEYS = frozenset(
+    (
+        "goal",
+        "operation",
+        "target",
+        "input_text",
         "max_attempts",
     )
 )
@@ -195,6 +213,9 @@ def _parse_step(step_data: object) -> SemanticPlanStep:
     if operation is PlanOperation.INSERT_TEXT:
         return _parse_insert_text_step(step_data)
 
+    if operation is PlanOperation.TYPE_INTO_TARGET:
+        return _parse_type_into_target_step(step_data)
+
     raise _ReasoningResponseError("unsupported operation")
 
 
@@ -251,10 +272,51 @@ def _parse_insert_text_step(step_data: dict[str, Any]) -> InsertTextStep:
     )
 
 
+def _parse_type_into_target_step(
+    step_data: dict[str, Any],
+) -> WebTextInputStep:
+    _require_exact_keys(
+        step_data,
+        _TYPE_INTO_TARGET_STEP_KEYS,
+        "type_into_target step",
+    )
+    return WebTextInputStep(
+        goal=step_data["goal"],
+        target=_parse_target(step_data["target"]),
+        input_text=_parse_input_text(step_data["input_text"]),
+        max_attempts=_parse_type_into_target_max_attempts(
+            step_data["max_attempts"]
+        ),
+    )
+
+
 def _parse_max_attempts(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise _ReasoningResponseError(
             "max_attempts must be a JSON integer"
+        )
+
+    return value
+
+
+def _parse_type_into_target_max_attempts(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise _ReasoningResponseError(
+            "type_into_target max_attempts must be the JSON integer 1"
+        )
+
+    if value != 1:
+        raise _ReasoningResponseError(
+            "type_into_target max_attempts must be exactly 1"
+        )
+
+    return value
+
+
+def _parse_input_text(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise _ReasoningResponseError(
+            "input_text must be a non-empty string"
         )
 
     return value

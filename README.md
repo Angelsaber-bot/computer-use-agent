@@ -134,7 +134,7 @@ Phase 04 UI Grounding and Task Reasoning is complete, including the original Tas
 - [x] Experiment 06: Web Information Extraction
 - [x] Experiment 07: Adaptive Web Recovery
 - [x] Experiment 08: Multi-Step Real Web Agent
-- [ ] Experiment 09: Live OpenAI Web Agent
+- [x] Experiment 09: Live OpenAI Web Agent
 - [ ] Experiment 10: Cross-Site Generalization
 
 Experiment 05.01 moved the production perception pipeline from controlled HTML fixtures to a real public website. A raw macOS Accessibility audit of `https://www.python.org/` in Google Chrome visited `682` Accessibility nodes and confirmed that real webpages expose semantic roles including `AXLink`, `AXHeading`, `AXStaticText`, `AXTextField`, `AXButton`, and `AXWebArea`.
@@ -205,4 +205,20 @@ The formal live task resolved the `"Search This Site"` `text_field`, typed `typi
 
 Formal evidence is `assets/screenshots/phase05_real_web_autonomy/experiment_08_multi_step_real_web_agent.png`. Candidate evidence was promoted only after acceptance passed. Validation: focused tests `245 passed`; full suite `1321 passed in 5.21s`; `git diff --check` passed; live Experiment 05.08 acceptance passed.
 
-Experiment 05.08 remains bounded. Verification still uses the predefined postcondition marker `"Results"`, `LLMReasoner` does not yet emit `TYPE_INTO_TARGET`, `StructuredPlan` has no semantic extraction step yet, and cross-site generalization is not complete.
+Experiment 05.08 remains bounded. Verification still uses the predefined postcondition marker `"Results"`, `StructuredPlan` has no semantic extraction step yet, and cross-site generalization is not complete.
+
+Experiment 05.09 completed the bounded Live OpenAI Web Agent workflow for the same python.org task. The formal architecture is: `Natural-language task -> real OpenAI Responses API -> OpenAILLMClient -> LLMReasoner -> trusted StructuredPlan -> deterministic semantic plan acceptance -> strict live precondition gate -> one production AgentLoop.run(plan) -> production TextInputController / UI grounding / ToolExecutor -> real browser execution -> final semantic verification`.
+
+Increment 1 added `LLMReasoner` support for `PlanOperation.TYPE_INTO_TARGET`. The reasoner can now construct the existing production `WebTextInputStep` from the provider-neutral `type_into_target` JSON shape with `goal`, `operation`, `target`, `input_text`, and `max_attempts`. `max_attempts` must be exactly integer `1`; existing safe `TargetSpec` policy is reused; the OpenAI strict Structured Outputs schema includes `type_into_target`; and existing operations remained unchanged.
+
+Increment 2 added the planning-only Experiment 05.09 harness. Default mode remains deterministic/offline, while `--live-openai` performs exactly one real OpenAI planning request and no browser actions. The first real OpenAI planning run was safely blocked before browser execution because the model inferred `Results` as `element_types=("text",)`. That was not accepted because Phase 05.08 live Accessibility evidence established that `Results` is exposed as a heading, while the current reasoning vocabulary intentionally does not support `heading`. Experiment acceptance was not weakened; instead, the generic reasoning prompt was strengthened so semantic roles are not treated as visible-content descriptions, `"text"` is not used merely because text appears, and unknown roles use empty `element_types`. The second real OpenAI planning run passed acceptance.
+
+The accepted real OpenAI plan contained two steps. Step 1 was `WebTextInputStep`, operation `type_into_target`, target text `"Search This Site"`, target element types `("text_field",)`, input text `"typing"`, and `max_attempts=1`. Step 2 was `PlanStep`, operation `click_target`, action target text `"GO"`, action target element types `("button",)`, verification target text `"Results"`, verification target element types `()`, and `max_attempts=1`.
+
+Increment 3 added explicit gated execution mode: `--live-openai --execute`. `--live-openai` alone remains planning-only, and `--execute` without `--live-openai` is rejected. Executor construction occurs only after plan acceptance and strict read-only live preconditions pass: macOS, Accessibility available/trusted, Google Chrome frontmost, viewport available, empty perception warnings, `"Search This Site"` resolved as an empty `text_field`, `"GO"` resolved as a `button`, and `"Results"` initially `not_found`. Core execution is exactly one `AgentLoop(...).run(trusted_plan)` call, with no manual sequencing outside `AgentLoop` and no hardcoded coordinates in the LLM plan.
+
+The formal live execution passed. Planning acceptance passed; initial state was Google Chrome with `"Search This Site"` resolved, `"GO"` resolved, and `"Results"` `not_found`; `AgentLoopResult.reason` was `all plan steps completed`; status was `completed`; `AgentState` was `succeeded`; completed plan steps were `2 / 2`; action executions were `3`; exact tool order was `click_mouse -> type_text -> click_mouse`; all `ToolResult`s succeeded; and no scroll occurred in the validated happy path. Final `"Results"` grounding was `resolved`, final app remained `Google Chrome`, final warnings were `()`, evidence was promoted, and execution acceptance passed.
+
+Formal evidence is `assets/screenshots/phase05_real_web_autonomy/experiment_09_live_openai_web_agent.png`. Candidate evidence was promoted only after full execution acceptance passed. Validation: Increment 3 focused suite `414 passed`; complete repository suite `1405 passed in 5.74s`; `git diff --check` passed; real OpenAI planning-only acceptance passed; and real OpenAI plus real AgentLoop execution acceptance passed.
+
+Experiment 05.09 remains bounded to the predefined python.org workflow. `"Results"` remains a predefined postcondition marker. There is no dynamic postcondition discovery yet, no semantic extraction step emitted by the LLM plan yet, and cross-site generalization is not complete. This does not claim arbitrary web autonomy.

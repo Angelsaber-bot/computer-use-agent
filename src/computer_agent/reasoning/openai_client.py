@@ -49,6 +49,12 @@ _MAX_ATTEMPTS_SCHEMA: dict[str, Any] = {
     "maximum": MAX_PLAN_STEP_ATTEMPTS,
 }
 
+_TYPE_INTO_TARGET_MAX_ATTEMPTS_SCHEMA: dict[str, Any] = {
+    "type": "integer",
+    "minimum": 1,
+    "maximum": 1,
+}
+
 _CLICK_TARGET_STEP_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -141,12 +147,37 @@ _INSERT_TEXT_STEP_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+_TYPE_INTO_TARGET_STEP_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "goal": _NON_EMPTY_STRING_SCHEMA,
+        "operation": {
+            "type": "string",
+            "enum": [
+                PlanOperation.TYPE_INTO_TARGET.value,
+            ],
+        },
+        "target": _REASONING_TARGET_SCHEMA,
+        "input_text": _NON_EMPTY_STRING_SCHEMA,
+        "max_attempts": _TYPE_INTO_TARGET_MAX_ATTEMPTS_SCHEMA,
+    },
+    "required": [
+        "goal",
+        "operation",
+        "target",
+        "input_text",
+        "max_attempts",
+    ],
+    "additionalProperties": False,
+}
+
 _REASONING_STEP_SCHEMA: dict[str, Any] = {
     "anyOf": [
         _CLICK_TARGET_STEP_SCHEMA,
         _READ_CLIPBOARD_STEP_SCHEMA,
         _ACTIVATE_APP_STEP_SCHEMA,
         _INSERT_TEXT_STEP_SCHEMA,
+        _TYPE_INTO_TARGET_STEP_SCHEMA,
     ],
 }
 

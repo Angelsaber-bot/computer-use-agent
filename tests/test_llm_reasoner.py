@@ -18,6 +18,7 @@ from computer_agent.planning import (
     SemanticPlanStep,
     StructuredPlan,
     StructuredPlanner,
+    WebTextInputStep,
 )
 from computer_agent.reasoning import (
     LLMReasoner,
@@ -167,6 +168,25 @@ def _insert_text_step_json(
         "goal": goal,
         "operation": "insert_text",
         "value_key": value_key,
+        "max_attempts": max_attempts,
+    }
+
+
+def _type_into_target_step_json(
+    *,
+    goal: object = "Enter the search query",
+    target: object | None = None,
+    input_text: object = "typing",
+    max_attempts: object = 1,
+) -> dict[str, object]:
+    if target is None:
+        target = _target_json("Search This Site", ("text_field",))
+
+    return {
+        "goal": goal,
+        "operation": "type_into_target",
+        "target": target,
+        "input_text": input_text,
         "max_attempts": max_attempts,
     }
 
@@ -339,6 +359,77 @@ def test_valid_insert_text_response_returns_typed_step():
     assert step.value_key == "transfer_value"
     assert step.max_attempts == 2
     assert len(client.calls) == 1
+
+
+def test_valid_type_into_target_response_returns_web_text_input_step():
+    result, client, _reasoner = _reason(
+        _response(steps=[_type_into_target_step_json()])
+    )
+
+    assert result.status is ReasoningStatus.READY
+    step = result.plan.steps[0]
+    assert isinstance(step, WebTextInputStep)
+    assert step.operation is PlanOperation.TYPE_INTO_TARGET
+    assert step.goal == "Enter the search query"
+    assert step.target == TargetSpec(
+        text="Search This Site",
+        element_types=("text_field",),
+    )
+    assert step.target.identifier is None
+    assert step.target.reference_point is None
+    assert step.input_text == "typing"
+    assert step.max_attempts == 1
+    assert len(client.calls) == 1
+
+
+def test_type_into_target_preserves_caller_visible_input_text_exactly():
+    input_text = "  Python release schedule 3.14  "
+
+    result, _client, _reasoner = _reason(
+        _response(
+            steps=[
+                _type_into_target_step_json(
+                    input_text=input_text,
+                )
+            ]
+        )
+    )
+
+    assert result.status is ReasoningStatus.READY
+    step = result.plan.steps[0]
+    assert isinstance(step, WebTextInputStep)
+    assert step.input_text == input_text
+
+
+def test_mixed_type_into_target_then_click_target_preserves_order_and_types():
+    result, _client, _reasoner = _reason(
+        _response(
+            task_goal="Search python.org",
+            steps=[
+                _type_into_target_step_json(),
+                _step_json(
+                    goal="Submit the search",
+                    action_target=_target_json("GO", ("button",)),
+                    verification_target=_target_json(
+                        "Search Results",
+                        ("text",),
+                    ),
+                ),
+            ],
+        )
+    )
+
+    assert result.status is ReasoningStatus.READY
+    first, second = result.plan.steps
+    assert isinstance(first, WebTextInputStep)
+    assert isinstance(second, PlanStep)
+    assert tuple(step.operation for step in result.plan.steps) == (
+        PlanOperation.TYPE_INTO_TARGET,
+        PlanOperation.CLICK_TARGET,
+    )
+    assert first.target.text == "Search This Site"
+    assert first.input_text == "typing"
+    assert second.action_target.text == "GO"
 
 
 def test_valid_mixed_four_step_cross_app_response_preserves_exact_order():
@@ -568,6 +659,24 @@ def test_unsupported_reasoning_element_types_fail_closed(
     assert len(client.calls) == 1
 
 
+def test_type_into_target_uses_same_reasoning_element_type_policy():
+    result, client, _reasoner = _reason(
+        _response(
+            steps=[
+                _type_into_target_step_json(
+                    target=_target_json("Search", ("text_field", "text")),
+                )
+            ]
+        )
+    )
+
+    assert result.status is ReasoningStatus.READY
+    step = result.plan.steps[0]
+    assert isinstance(step, WebTextInputStep)
+    assert step.target.element_types == ("text_field", "text")
+    assert len(client.calls) == 1
+
+
 def test_system_prompt_communicates_supported_element_type_policy():
     reasoner = LLMReasoner(client=FakeLLMClient(_response()))
     prompt = reasoner.system_prompt
@@ -575,9 +684,36 @@ def test_system_prompt_communicates_supported_element_type_policy():
     for element_type in SUPPORTED_REASONING_ELEMENT_TYPES:
         assert element_type in prompt
 
-    assert "If the UI role is uncertain" in prompt
+    assert "semantic UI roles" in prompt
+    assert "not descriptions of visible content" in prompt
+    assert 'Do not choose "text" merely because a string is visible' in prompt
+    assert "If the role is not known from the task intent" in prompt
     assert "empty element_types array" in prompt
-    assert "Never invent a role" in prompt
+    assert "Never invent a semantic role" in prompt
+
+
+def test_system_prompt_documents_appearance_verification_role_policy():
+    reasoner = LLMReasoner(client=FakeLLMClient(_response()))
+    prompt = reasoner.system_prompt
+
+    assert "verify that 'Results' appears" in prompt
+    assert '"element_types": []' in prompt
+    assert "unless the role was explicitly known" in prompt
+
+
+def test_system_prompt_documents_type_into_target_policy():
+    reasoner = LLMReasoner(client=FakeLLMClient(_response()))
+    prompt = reasoner.system_prompt
+
+    assert "type_into_target" in prompt
+    assert '"target": target' in prompt
+    assert '"input_text": string' in prompt
+    assert '"max_attempts": 1' in prompt
+    assert "literal caller-visible text" in prompt
+    assert "not a command or tool call" in prompt
+    assert "max_attempts must be exactly 1" in prompt
+    assert "never coordinates" in prompt
+    assert "tool names" in prompt
 
 
 def test_final_plan_is_constructed_through_injected_planner_seam():
@@ -1010,6 +1146,167 @@ def test_empty_caller_task_is_rejected(task: str):
             _duplicate_runtime_step_key_response(),
             "duplicate runtime step key",
         ),
+        (
+            _response(
+                steps=[
+                    _type_into_target_step_json(
+                        max_attempts=0,
+                    )
+                ]
+            ),
+            "type_into_target zero max_attempts",
+        ),
+        (
+            _response(
+                steps=[
+                    _type_into_target_step_json(
+                        max_attempts=2,
+                    )
+                ]
+            ),
+            "type_into_target two max_attempts",
+        ),
+        (
+            _response(
+                steps=[
+                    _type_into_target_step_json(
+                        max_attempts=True,
+                    )
+                ]
+            ),
+            "type_into_target bool max_attempts",
+        ),
+        (
+            _response(
+                steps=[
+                    _type_into_target_step_json(
+                        max_attempts=1.0,
+                    )
+                ]
+            ),
+            "type_into_target float max_attempts",
+        ),
+        (
+            _response(
+                steps=[
+                    _type_into_target_step_json(
+                        input_text="",
+                    )
+                ]
+            ),
+            "type_into_target empty input_text",
+        ),
+        (
+            _response(
+                steps=[
+                    _type_into_target_step_json(
+                        input_text="   ",
+                    )
+                ]
+            ),
+            "type_into_target whitespace input_text",
+        ),
+        (
+            _response(
+                steps=[
+                    _type_into_target_step_json(
+                        input_text=123,
+                    )
+                ]
+            ),
+            "type_into_target non-string input_text",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        key: value
+                        for key, value in _type_into_target_step_json().items()
+                        if key != "input_text"
+                    }
+                ]
+            ),
+            "type_into_target missing input_text",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        **_type_into_target_step_json(),
+                        "note": "extra",
+                    }
+                ]
+            ),
+            "type_into_target extra key",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        **_type_into_target_step_json(),
+                        "action_target": _target_json("Search"),
+                    }
+                ]
+            ),
+            "click-only action_target on type_into_target",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        **_type_into_target_step_json(),
+                        "verification_target": _target_json("Results"),
+                    }
+                ]
+            ),
+            "click-only verification_target on type_into_target",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        **_type_into_target_step_json(),
+                        "value_key": "transfer_value",
+                    }
+                ]
+            ),
+            "runtime field on type_into_target",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        **_type_into_target_step_json(),
+                        "tool_name": "type_text",
+                    }
+                ]
+            ),
+            "tool name on type_into_target",
+        ),
+        (
+            _response(
+                steps=[
+                    {
+                        **_type_into_target_step_json(),
+                        "arguments": {"text": "typing"},
+                    }
+                ]
+            ),
+            "raw arguments on type_into_target",
+        ),
+        (
+            _response(
+                steps=[
+                    _type_into_target_step_json(
+                        target={
+                            **_target_json("Search"),
+                            "coordinates": [1, 2],
+                        },
+                    )
+                ]
+            ),
+            "coordinates in type_into_target target",
+        ),
     ],
 )
 def test_unsafe_runtime_responses_fail_closed(
@@ -1042,6 +1339,40 @@ def test_forbidden_target_fields_fail_closed(forbidden_field: str):
                 _step_json(
                     action_target={
                         **_target_json("Settings"),
+                        forbidden_field: "not allowed",
+                    },
+                )
+            ]
+        )
+    )
+
+    _assert_blocked(result)
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "forbidden_field",
+    [
+        "coordinates",
+        "x",
+        "y",
+        "bounding_box",
+        "tool_name",
+        "arguments",
+        "identifier",
+        "minimum_confidence",
+        "reference_point",
+    ],
+)
+def test_forbidden_type_into_target_target_fields_fail_closed(
+    forbidden_field: str,
+):
+    result, client, _reasoner = _reason(
+        _response(
+            steps=[
+                _type_into_target_step_json(
+                    target={
+                        **_target_json("Search"),
                         forbidden_field: "not allowed",
                     },
                 )

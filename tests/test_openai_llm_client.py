@@ -133,6 +133,17 @@ def _click_target_schemas(
     return action_target, verification_target
 
 
+def _reasoning_target_schemas(
+    call: dict[str, object],
+) -> tuple[dict[str, object], ...]:
+    type_into_target = _step_variant(
+        call,
+        PlanOperation.TYPE_INTO_TARGET,
+    )["properties"]["target"]
+    assert isinstance(type_into_target, dict)
+    return (*_click_target_schemas(call), type_into_target)
+
+
 def test_default_model_is_experiment_model():
     _result, _sdk_client, call = _generate()
 
@@ -232,7 +243,7 @@ def test_schema_forbids_extra_top_level_keys():
     )
 
 
-def test_schema_contains_four_operation_specific_step_variants():
+def test_schema_contains_five_operation_specific_step_variants():
     _result, _sdk_client, call = _generate()
 
     variants_by_operation = _step_variants_by_operation(call)
@@ -241,8 +252,9 @@ def test_schema_contains_four_operation_specific_step_variants():
         PlanOperation.READ_CLIPBOARD.value,
         PlanOperation.ACTIVATE_APP.value,
         PlanOperation.INSERT_TEXT.value,
+        PlanOperation.TYPE_INTO_TARGET.value,
     }
-    assert len(_step_variants(call)) == 4
+    assert len(_step_variants(call)) == 5
 
 
 @pytest.mark.parametrize(
@@ -286,6 +298,16 @@ def test_schema_contains_four_operation_specific_step_variants():
                 "max_attempts",
             ],
         ),
+        (
+            PlanOperation.TYPE_INTO_TARGET,
+            [
+                "goal",
+                "operation",
+                "target",
+                "input_text",
+                "max_attempts",
+            ],
+        ),
     ],
 )
 def test_schema_forbids_extra_step_keys(
@@ -303,7 +325,7 @@ def test_schema_forbids_extra_step_keys(
 def test_schema_forbids_extra_target_keys():
     _result, _sdk_client, call = _generate()
 
-    for target_schema in _click_target_schemas(call):
+    for target_schema in _reasoning_target_schemas(call):
         assert target_schema["required"] == [
             "text",
             "element_types",
@@ -314,7 +336,7 @@ def test_schema_forbids_extra_target_keys():
 def test_schema_element_types_item_enum_matches_reasoning_policy():
     _result, _sdk_client, call = _generate()
 
-    for target_schema in _click_target_schemas(call):
+    for target_schema in _reasoning_target_schemas(call):
         element_types_schema = target_schema["properties"]["element_types"]
         assert tuple(element_types_schema["items"]["enum"]) == (
             SUPPORTED_REASONING_ELEMENT_TYPES
@@ -324,7 +346,7 @@ def test_schema_element_types_item_enum_matches_reasoning_policy():
 def test_schema_allows_empty_element_types_list():
     _result, _sdk_client, call = _generate()
 
-    for target_schema in _click_target_schemas(call):
+    for target_schema in _reasoning_target_schemas(call):
         element_types_schema = target_schema["properties"]["element_types"]
         assert "minItems" not in element_types_schema
 
@@ -332,8 +354,11 @@ def test_schema_allows_empty_element_types_list():
 def test_action_and_verification_targets_use_same_constrained_schema():
     _result, _sdk_client, call = _generate()
 
-    action_target, verification_target = _click_target_schemas(call)
+    action_target, verification_target, type_into_target = (
+        _reasoning_target_schemas(call)
+    )
     assert action_target == verification_target
+    assert type_into_target == action_target
     assert tuple(
         action_target["properties"]["element_types"]["items"]["enum"]
     ) == SUPPORTED_REASONING_ELEMENT_TYPES
@@ -354,9 +379,25 @@ def test_schema_constrains_operation_per_variant():
 def test_schema_uses_planning_attempt_bound():
     _result, _sdk_client, call = _generate()
 
-    for step_schema in _step_variants(call):
+    for operation, step_schema in _step_variants_by_operation(call).items():
+        if operation == PlanOperation.TYPE_INTO_TARGET.value:
+            continue
+
         max_attempts_schema = step_schema["properties"]["max_attempts"]
         assert max_attempts_schema["maximum"] == MAX_PLAN_STEP_ATTEMPTS
+
+
+def test_type_into_target_schema_constrains_max_attempts_to_one():
+    _result, _sdk_client, call = _generate()
+
+    step_schema = _step_variant(call, PlanOperation.TYPE_INTO_TARGET)
+    max_attempts_schema = step_schema["properties"]["max_attempts"]
+
+    assert max_attempts_schema == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1,
+    }
 
 
 def test_insert_text_schema_contains_only_runtime_value_reference():
@@ -382,6 +423,42 @@ def test_insert_text_schema_contains_only_runtime_value_reference():
         "tool_name",
         "arguments",
         "hotkey",
+    } & set(step_schema["properties"])
+
+
+def test_type_into_target_schema_contains_only_semantic_text_input_fields():
+    _result, _sdk_client, call = _generate()
+
+    step_schema = _step_variant(call, PlanOperation.TYPE_INTO_TARGET)
+    assert step_schema["required"] == [
+        "goal",
+        "operation",
+        "target",
+        "input_text",
+        "max_attempts",
+    ]
+    assert set(step_schema["properties"]) == {
+        "goal",
+        "operation",
+        "target",
+        "input_text",
+        "max_attempts",
+    }
+    assert not {
+        "action_target",
+        "verification_target",
+        "coordinates",
+        "x",
+        "y",
+        "bounding_box",
+        "identifier",
+        "minimum_confidence",
+        "reference_point",
+        "tool_name",
+        "arguments",
+        "hotkey",
+        "value_key",
+        "expected_text",
     } & set(step_schema["properties"])
 
 
