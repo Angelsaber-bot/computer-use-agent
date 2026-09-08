@@ -4,7 +4,8 @@ import inspect
 
 import pytest
 
-from computer_agent.core.models import Action
+from computer_agent.core.models import Action, ToolResult
+from computer_agent.grounding import GroundingResult
 from computer_agent.grounding import TargetSpec
 from computer_agent.planning import (
     ActivateAppStep,
@@ -17,6 +18,7 @@ from computer_agent.planning import (
     SemanticPlanStep,
     StructuredPlan,
     StructuredPlanner,
+    WebTextInputStep,
 )
 import computer_agent.planning.models as planning_models
 import computer_agent.planning.structured_planner as structured_planner_module
@@ -86,6 +88,25 @@ def _insert_text_step(
     )
 
 
+def _web_text_input_step(
+    *,
+    goal: str = "Type into search field",
+    target: TargetSpec | None = None,
+    input_text: str = "structured real-web text",
+    max_attempts: int = 1,
+) -> WebTextInputStep:
+    return WebTextInputStep(
+        goal=goal,
+        target=target
+        or TargetSpec(
+            text="Search",
+            element_types=("text field",),
+        ),
+        input_text=input_text,
+        max_attempts=max_attempts,
+    )
+
+
 def test_single_step_plan_is_ready_semantic_plan():
     step = _step()
 
@@ -106,6 +127,7 @@ def test_plan_operation_contains_bounded_non_click_operations():
     assert PlanOperation.READ_CLIPBOARD.value == "read_clipboard"
     assert PlanOperation.ACTIVATE_APP.value == "activate_app"
     assert PlanOperation.INSERT_TEXT.value == "insert_text"
+    assert PlanOperation.TYPE_INTO_TARGET.value == "type_into_target"
 
 
 def test_valid_multi_step_plan_preserves_exact_order():
@@ -183,6 +205,7 @@ def test_existing_plan_step_constructor_remains_click_target_compatible():
         PlanOperation.READ_CLIPBOARD,
         PlanOperation.ACTIVATE_APP,
         PlanOperation.INSERT_TEXT,
+        PlanOperation.TYPE_INTO_TARGET,
     ],
 )
 def test_plan_step_remains_click_target_only(operation):
@@ -319,12 +342,104 @@ def test_insert_text_step_has_no_literal_text_payload_field():
     assert "expected_text" not in fields
 
 
+def test_web_text_input_step_construction_sets_fixed_operation():
+    target = TargetSpec(
+        text="Search",
+        element_types=("text field",),
+    )
+    step = WebTextInputStep(
+        goal="Type search query",
+        target=target,
+        input_text="hello web",
+        max_attempts=1,
+    )
+
+    assert step.goal == "Type search query"
+    assert step.target is target
+    assert step.input_text == "hello web"
+    assert step.max_attempts == 1
+    assert step.operation is PlanOperation.TYPE_INTO_TARGET
+    assert not hasattr(step, "__dict__")
+
+    with pytest.raises(FrozenInstanceError):
+        step.input_text = "other"
+
+
+@pytest.mark.parametrize(
+    "goal",
+    [
+        "",
+        "   ",
+        123,
+        None,
+    ],
+)
+def test_web_text_input_step_rejects_empty_goal(goal):
+    with pytest.raises(ValueError, match="goal"):
+        _web_text_input_step(goal=goal)
+
+
+def test_web_text_input_step_rejects_invalid_target():
+    with pytest.raises(ValueError, match="target"):
+        _web_text_input_step(target=object())
+
+
+@pytest.mark.parametrize(
+    "input_text",
+    [
+        "",
+        "   ",
+        123,
+        None,
+    ],
+)
+def test_web_text_input_step_rejects_empty_input_text(input_text):
+    with pytest.raises(ValueError, match="input_text"):
+        _web_text_input_step(input_text=input_text)
+
+
+def test_web_text_input_step_accepts_max_attempts_one():
+    step = _web_text_input_step(max_attempts=1)
+
+    assert step.max_attempts == 1
+
+
+@pytest.mark.parametrize(
+    "max_attempts",
+    [
+        2,
+        3,
+        0,
+        True,
+    ],
+)
+def test_web_text_input_step_rejects_non_one_max_attempts(
+    max_attempts,
+):
+    with pytest.raises(
+        ValueError,
+        match="WebTextInputStep max_attempts must be exactly 1",
+    ):
+        _web_text_input_step(max_attempts=max_attempts)
+
+
 @pytest.mark.parametrize(
     ("step_factory", "kwargs"),
     [
         (ReadClipboardStep, {"goal": "Read", "value_key": "v", "expected_text": "x"}),
         (ActivateAppStep, {"goal": "Activate", "app_name": "TextEdit"}),
         (InsertTextStep, {"goal": "Insert", "value_key": "v"}),
+        (
+            WebTextInputStep,
+            {
+                "goal": "Type",
+                "target": TargetSpec(
+                    text="Search",
+                    element_types=("text field",),
+                ),
+                "input_text": "x",
+            },
+        ),
     ],
 )
 def test_non_click_step_operation_cannot_be_overridden(step_factory, kwargs):
@@ -458,6 +573,7 @@ def test_structured_plan_accepts_mixed_semantic_step_types():
     read_step = _read_clipboard_step()
     activate_step = _activate_app_step()
     insert_step = _insert_text_step()
+    web_text_step = _web_text_input_step()
 
     plan = StructuredPlan(
         task_goal="Transfer text across apps",
@@ -466,6 +582,7 @@ def test_structured_plan_accepts_mixed_semantic_step_types():
             read_step,
             activate_step,
             insert_step,
+            web_text_step,
         ),
     )
 
@@ -474,12 +591,36 @@ def test_structured_plan_accepts_mixed_semantic_step_types():
         read_step,
         activate_step,
         insert_step,
+        web_text_step,
     )
     assert tuple(step.operation for step in plan.steps) == (
         PlanOperation.CLICK_TARGET,
         PlanOperation.READ_CLIPBOARD,
         PlanOperation.ACTIVATE_APP,
         PlanOperation.INSERT_TEXT,
+        PlanOperation.TYPE_INTO_TARGET,
+    )
+
+
+def test_structured_plan_accepts_mixed_click_and_web_text_input_steps():
+    click_step = _step()
+    web_text_step = _web_text_input_step()
+
+    plan = StructuredPlan(
+        task_goal="Search the real web",
+        steps=(
+            click_step,
+            web_text_step,
+        ),
+    )
+
+    assert plan.steps == (
+        click_step,
+        web_text_step,
+    )
+    assert tuple(step.operation for step in plan.steps) == (
+        PlanOperation.CLICK_TARGET,
+        PlanOperation.TYPE_INTO_TARGET,
     )
 
 
@@ -489,6 +630,7 @@ def test_structured_planner_accepts_mixed_semantic_step_types():
         _read_clipboard_step(),
         _activate_app_step(),
         _insert_text_step(),
+        _web_text_input_step(),
     )
 
     plan = StructuredPlanner().build_plan(
@@ -558,9 +700,10 @@ def test_new_semantic_steps_do_not_contain_actions_or_coordinates():
         _read_clipboard_step(),
         _activate_app_step(),
         _insert_text_step(),
+        _web_text_input_step(),
     ):
         assert not any(
-            isinstance(value, Action)
+            isinstance(value, (Action, ToolResult, GroundingResult))
             for value in (
                 getattr(step, field_name)
                 for field_name in step.__dataclass_fields__
@@ -571,6 +714,24 @@ def test_new_semantic_steps_do_not_contain_actions_or_coordinates():
         assert "coordinates" not in step.__dataclass_fields__
         assert "tool_name" not in step.__dataclass_fields__
         assert "arguments" not in step.__dataclass_fields__
+        assert "executor" not in step.__dataclass_fields__
+        assert "action" not in step.__dataclass_fields__
+
+
+def test_web_text_input_step_exposes_only_semantic_fields():
+    fields = WebTextInputStep.__dataclass_fields__
+
+    assert set(fields) == {
+        "goal",
+        "target",
+        "input_text",
+        "max_attempts",
+        "operation",
+    }
+    assert "action_target" not in fields
+    assert "verification_target" not in fields
+    assert "coordinates" not in fields
+    assert "tool_name" not in fields
 
 
 def test_planner_has_no_pipeline_calls():
@@ -604,6 +765,7 @@ def test_planning_imports_are_safe():
     assert module.ReadClipboardStep is ReadClipboardStep
     assert module.ActivateAppStep is ActivateAppStep
     assert module.InsertTextStep is InsertTextStep
+    assert module.WebTextInputStep is WebTextInputStep
     assert module.SemanticPlanStep is SemanticPlanStep
     assert module.StructuredPlan is StructuredPlan
     assert module.StructuredPlanner is StructuredPlanner

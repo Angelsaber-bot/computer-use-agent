@@ -4149,3 +4149,52 @@ Remaining limitations:
 - no bidirectional search
 - no LLM-based recovery choice
 - no automatic click after recovery
+
+### Phase 05 Experiment 08 Increment 1: Structured Real-Web Text Input
+
+**Date:** September 8, 2026
+
+**Objective:**
+
+Make the existing production real-web text input workflow expressible in `StructuredPlan` and executable through `AgentLoop`, without implementing the full Phase 05.08 multi-step live experiment.
+
+**Files:**
+
+- `src/computer_agent/planning/models.py`
+- `src/computer_agent/planning/__init__.py`
+- `src/computer_agent/agent/agent_loop.py`
+- `tests/test_structured_planner.py`
+- `tests/test_agent_loop.py`
+
+**Implemented:**
+
+- Added `PlanOperation.TYPE_INTO_TARGET`.
+- Added frozen/slotted `WebTextInputStep`.
+- `WebTextInputStep` fields are `goal`, `target`, `input_text`, and `max_attempts`.
+- `WebTextInputStep.max_attempts` is currently required to be exactly `1`; the field remains present for consistency and future extensibility.
+- `StructuredPlan` can now contain `WebTextInputStep`.
+- `AgentLoop` dispatches `WebTextInputStep` through the existing production `TextInputController`.
+- `AgentLoop` does not duplicate `TextInputController` grounding, viewport recovery, focus, `type_text`, or semantic value-verification logic.
+- Added optional `web_text_input_observer`; this observation dependency is required only when a `WebTextInputStep` executes.
+- Added `_StateRecordingExecutor` so controller-executed actions are recorded exactly once into `AgentState`.
+- This preserves future viewport-search scroll actions, the focus click, and `type_text` in real execution order.
+- Existing `InsertTextStep` semantics remain unchanged; it still consumes a runtime value and inserts it into the already focused application.
+
+**Not Implemented Yet:**
+
+- No `LLMReasoner` schema support.
+- No semantic extraction step.
+- No Phase 05.08 live multi-step harness.
+- No live browser actions were run for this increment.
+
+**Validation:**
+
+- Focused tests: `240 passed`
+- Full suite: `1279 passed in 4.73s`
+- `git diff --check`: passed
+
+**Current Status:**
+
+Phase 05.08 Increment 1 is complete for structured real-web text input planning and AgentLoop execution through the existing `TextInputController`.
+
+This does not complete Phase 05.08 as a whole.

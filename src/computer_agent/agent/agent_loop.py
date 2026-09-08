@@ -8,6 +8,11 @@ import time
 
 from computer_agent.agent.loop_models import AgentLoopResult, AgentLoopStatus
 from computer_agent.agent.state import AgentState
+from computer_agent.agent.text_input import (
+    TextInputController,
+    TextInputResult,
+    TextInputStatus,
+)
 from computer_agent.core.models import Action, ToolResult
 from computer_agent.grounding.action_grounder import ActionGrounder
 from computer_agent.grounding.action_models import ActionGroundingStatus
@@ -20,6 +25,7 @@ from computer_agent.planning.models import (
     PlanStep,
     ReadClipboardStep,
     StructuredPlan,
+    WebTextInputStep,
 )
 from computer_agent.recovery.action_recovery import ActionRecovery
 from computer_agent.recovery.models import RecoveryStatus
@@ -55,6 +61,8 @@ class AgentLoop:
             _DEFAULT_FRONTMOST_APP_SETTLE_POLL_SECONDS
         ),
         settling_sleep: Callable[[float], None] = time.sleep,
+        web_text_input_observer: Callable[[], object] | None = None,
+        text_input_controller_factory: Callable[..., object] | None = None,
     ) -> None:
         _require_method(
             perception_engine,
@@ -128,6 +136,20 @@ class AgentLoop:
         if not callable(settling_sleep):
             raise ValueError("settling_sleep must be callable")
 
+        if (
+            web_text_input_observer is not None
+            and not callable(web_text_input_observer)
+        ):
+            raise ValueError("web_text_input_observer must be callable")
+
+        if (
+            text_input_controller_factory is not None
+            and not callable(text_input_controller_factory)
+        ):
+            raise ValueError(
+                "text_input_controller_factory must be callable"
+            )
+
         self._perception_engine = perception_engine
         self._grounder = grounder
         self._action_grounder = action_grounder
@@ -145,6 +167,10 @@ class AgentLoop:
             frontmost_app_settle_poll_seconds
         )
         self._settling_sleep = settling_sleep
+        self._web_text_input_observer = web_text_input_observer
+        self._text_input_controller_factory = (
+            text_input_controller_factory
+        )
 
     @property
     def perception_engine(self) -> object:
@@ -187,6 +213,18 @@ class AgentLoop:
         """Return the state verifier used for direct semantic operations."""
 
         return self._state_verifier
+
+    @property
+    def web_text_input_observer(self) -> Callable[[], object] | None:
+        """Return the browser text-input observation bridge, if supplied."""
+
+        return self._web_text_input_observer
+
+    @property
+    def text_input_controller_factory(self) -> Callable[..., object] | None:
+        """Return the text-input controller factory override, if supplied."""
+
+        return self._text_input_controller_factory
 
     @property
     def allowed_app_names(self) -> frozenset[str]:
@@ -240,6 +278,16 @@ class AgentLoop:
                 and step.operation is PlanOperation.INSERT_TEXT
             ):
                 terminal_result = self._run_insert_text_step(
+                    plan=plan,
+                    state=state,
+                    step=step,
+                    completed_plan_steps=completed_plan_steps,
+                )
+            elif (
+                isinstance(step, WebTextInputStep)
+                and step.operation is PlanOperation.TYPE_INTO_TARGET
+            ):
+                terminal_result = self._run_web_text_input_step(
                     plan=plan,
                     state=state,
                     step=step,
@@ -668,6 +716,103 @@ class AgentLoop:
             ),
         )
 
+    def _run_web_text_input_step(
+        self,
+        *,
+        plan: StructuredPlan,
+        state: AgentState,
+        step: WebTextInputStep,
+        completed_plan_steps: int,
+    ) -> AgentLoopResult | None:
+        if self._web_text_input_observer is None:
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.BLOCKED,
+                reason=(
+                    "web text-input observation capability is required"
+                ),
+            )
+
+        controller = self._build_text_input_controller(step)
+        _require_method(
+            controller,
+            "run",
+            "text_input_controller",
+        )
+
+        result = controller.run(
+            execute=True,
+            executor=_StateRecordingExecutor(
+                executor=self._executor,
+                state=state,
+            ),
+        )
+        if not isinstance(result, TextInputResult):
+            raise ValueError(
+                "text input controller must return TextInputResult objects"
+            )
+
+        if result.status is TextInputStatus.VERIFIED:
+            return None
+
+        if result.status is TextInputStatus.BLOCKED:
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.BLOCKED,
+                reason=f"text input blocked: {result.reason}",
+            )
+
+        if result.status in (
+            TextInputStatus.ACTION_FAILED,
+            TextInputStatus.VERIFICATION_FAILED,
+        ):
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.EXHAUSTED,
+                reason=(
+                    "text input failed with "
+                    f"{result.status.value}: {result.reason}"
+                ),
+            )
+
+        if result.status is TextInputStatus.NEEDS_ACTION:
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.BLOCKED,
+                reason=(
+                    "text input controller returned needs_action during "
+                    "AgentLoop execution"
+                ),
+            )
+
+        raise RuntimeError(
+            f"unsupported text input status: {result.status}"
+        )
+
+    def _build_text_input_controller(
+        self,
+        step: WebTextInputStep,
+    ) -> object:
+        factory = (
+            self._text_input_controller_factory
+            if self._text_input_controller_factory is not None
+            else TextInputController
+        )
+
+        return factory(
+            observer=self._web_text_input_observer,
+            target_spec=step.target,
+            input_text=step.input_text,
+        )
+
 
 def _terminal_failure(
     *,
@@ -685,6 +830,26 @@ def _terminal_failure(
         completed_plan_steps=completed_plan_steps,
         reason=reason,
     )
+
+
+class _StateRecordingExecutor:
+    """Record controller-executed actions in AgentState exactly once."""
+
+    def __init__(
+        self,
+        *,
+        executor: object,
+        state: AgentState,
+    ) -> None:
+        self._executor = executor
+        self._state = state
+
+    def execute(self, action: Action) -> ToolResult:
+        tool_result = self._executor.execute(action)
+        if isinstance(tool_result, ToolResult):
+            self._state.record_step(action, tool_result)
+
+        return tool_result
 
 
 def _verified_clipboard_text(

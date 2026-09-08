@@ -10,6 +10,7 @@ from computer_agent.planning.models import (
     ReadClipboardStep,
     SemanticPlanStep,
     StructuredPlan,
+    WebTextInputStep,
 )
 from computer_agent.planning.structured_planner import StructuredPlanner
 
@@ -24,4 +25,5 @@ __all__ = [
     "SemanticPlanStep",
     "StructuredPlan",
     "StructuredPlanner",
+    "WebTextInputStep",
 ]

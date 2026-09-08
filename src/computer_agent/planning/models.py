@@ -23,6 +23,7 @@ class PlanOperation(str, Enum):
     READ_CLIPBOARD = "read_clipboard"
     ACTIVATE_APP = "activate_app"
     INSERT_TEXT = "insert_text"
+    TYPE_INTO_TARGET = "type_into_target"
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,17 +110,49 @@ class InsertTextStep:
         _validate_max_attempts(self.max_attempts)
 
 
+@dataclass(frozen=True, slots=True)
+class WebTextInputStep:
+    """Type literal text into a resolved real-web target field."""
+
+    goal: str
+    target: TargetSpec
+    input_text: str
+    max_attempts: int = 1
+    operation: PlanOperation = field(
+        init=False,
+        default=PlanOperation.TYPE_INTO_TARGET,
+    )
+
+    def __post_init__(self) -> None:
+        _validate_non_empty_string(self.goal, "goal")
+
+        if not isinstance(self.target, TargetSpec):
+            raise ValueError("target must be a TargetSpec")
+
+        _validate_non_empty_string(self.input_text, "input_text")
+        if (
+            isinstance(self.max_attempts, bool)
+            or not isinstance(self.max_attempts, int)
+            or self.max_attempts != 1
+        ):
+            raise ValueError(
+                "WebTextInputStep max_attempts must be exactly 1"
+            )
+
+
 SemanticPlanStep: TypeAlias = (
     PlanStep
     | ReadClipboardStep
     | ActivateAppStep
     | InsertTextStep
+    | WebTextInputStep
 )
 _SEMANTIC_PLAN_STEP_TYPES = (
     PlanStep,
     ReadClipboardStep,
     ActivateAppStep,
     InsertTextStep,
+    WebTextInputStep,
 )
 
 

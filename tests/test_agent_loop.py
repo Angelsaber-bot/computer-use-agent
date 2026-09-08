@@ -13,6 +13,9 @@ from computer_agent.agent import (
     AgentLoopStatus,
     AgentState,
     AgentStatus,
+    TextInputObservation,
+    TextInputResult,
+    TextInputStatus,
 )
 import computer_agent.agent.agent_loop as agent_loop_module
 from computer_agent.core.models import Action, ToolResult
@@ -29,7 +32,9 @@ from computer_agent.perception import (
     BoundingBox,
     PerceptionSnapshot,
     ScreenFrame,
+    SemanticAXElement,
     UIElement,
+    Viewport,
 )
 from computer_agent.planning import (
     ActivateAppStep,
@@ -38,6 +43,7 @@ from computer_agent.planning import (
     PlanStep,
     ReadClipboardStep,
     StructuredPlan,
+    WebTextInputStep,
 )
 from computer_agent.recovery import (
     ActionRecovery,
@@ -91,6 +97,31 @@ def _element(
     )
 
 
+def _text_field_element(
+    *,
+    text: str = "Search",
+    value=None,
+    x: int = 10,
+    y: int = 20,
+    width: int = 100,
+    height: int = 30,
+) -> UIElement:
+    return UIElement(
+        element_type="text field",
+        bounding_box=BoundingBox(
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+        ),
+        confidence=0.95,
+        text=text,
+        value=value,
+        enabled=True,
+        source="accessibility",
+    )
+
+
 def _snapshot(
     elements=(),
     *,
@@ -117,10 +148,57 @@ def _snapshot(
     )
 
 
+def _text_input_observation(
+    *,
+    text: str = "Search",
+    value=None,
+    application_name: str | None = "Google Chrome",
+    viewport: Viewport | None = None,
+    second: int = 0,
+) -> TextInputObservation:
+    if viewport is None:
+        viewport = Viewport(
+            bounds=BoundingBox(
+                x=0,
+                y=0,
+                width=200,
+                height=100,
+            )
+        )
+
+    field = _text_field_element(
+        text=text,
+        value=value,
+    )
+    return TextInputObservation(
+        application_name=application_name,
+        viewport=viewport,
+        snapshot=_snapshot(
+            (field,),
+            second=second,
+        ),
+        semantic_elements=(
+            SemanticAXElement(
+                role="AXTextField",
+                text=text,
+                bounds=field.bounding_box,
+                value=value,
+            ),
+        ),
+    )
+
+
 def _target(text: str = TARGET_TEXT) -> TargetSpec:
     return TargetSpec(
         text=text,
         element_types=("button",),
+    )
+
+
+def _web_text_target(text: str = "Search") -> TargetSpec:
+    return TargetSpec(
+        text=text,
+        element_types=("text field",),
     )
 
 
@@ -136,6 +214,21 @@ def _step(
         operation=PlanOperation.CLICK_TARGET,
         action_target=_target(action_text),
         verification_target=_target(verification_text),
+        max_attempts=max_attempts,
+    )
+
+
+def _web_text_step(
+    *,
+    goal: str = "Type into real-web target",
+    target: TargetSpec | None = None,
+    input_text: str = "structured web text",
+    max_attempts: int = 1,
+) -> WebTextInputStep:
+    return WebTextInputStep(
+        goal=goal,
+        target=target or _web_text_target(),
+        input_text=input_text,
         max_attempts=max_attempts,
     )
 
@@ -421,6 +514,56 @@ class RecordingExecutor:
         )
 
 
+def _text_input_result(
+    status: TextInputStatus,
+    *,
+    reason: str | None = None,
+) -> TextInputResult:
+    before = _text_input_observation()
+    before_grounding = GroundingResult(
+        status=GroundingStatus.RESOLVED,
+        element=before.snapshot.fused_elements[0],
+        candidates=(),
+        reason="resolved",
+    )
+    action_grounding = _ready_action_grounding(_action())
+    return TextInputResult(
+        status=status,
+        reason=reason or status.value,
+        before_observation=before,
+        before_grounding=before_grounding,
+        action_grounding=action_grounding,
+    )
+
+
+class FixedTextInputController:
+    def __init__(self, result: TextInputResult) -> None:
+        self.result = result
+        self.run_calls = []
+
+    def run(self, *, execute, executor=None):
+        self.run_calls.append(
+            {
+                "execute": execute,
+                "executor": executor,
+            }
+        )
+        return self.result
+
+
+class FixedTextInputControllerFactory:
+    def __init__(self, result: TextInputResult) -> None:
+        self.result = result
+        self.calls = []
+        self.controllers = []
+
+    def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+        controller = FixedTextInputController(self.result)
+        self.controllers.append(controller)
+        return controller
+
+
 class RecordingVerifier:
     def __init__(
         self,
@@ -534,6 +677,8 @@ def _agent_loop(
     frontmost_app_settle_timeout_seconds=0.0,
     frontmost_app_settle_poll_seconds=0.1,
     settling_sleep=None,
+    web_text_input_observer=None,
+    text_input_controller_factory=None,
 ) -> AgentLoop:
     if settling_sleep is None:
         settling_sleep = RecordingSleeper()
@@ -554,6 +699,8 @@ def _agent_loop(
             frontmost_app_settle_poll_seconds
         ),
         settling_sleep=settling_sleep,
+        web_text_input_observer=web_text_input_observer,
+        text_input_controller_factory=text_input_controller_factory,
     )
 
 
@@ -1805,6 +1952,194 @@ def test_insert_text_unverified_postcondition_is_exhausted_without_retry(
     assert state_verifier.focused_calls[0]["snapshot"] is after_insert
 
 
+def test_web_text_input_verified_completes_and_records_controller_actions():
+    step = _web_text_step(input_text="hello web")
+    observations = [
+        _text_input_observation(value=None, second=0),
+        _text_input_observation(value="hello web", second=1),
+    ]
+    executor = RecordingExecutor()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception(()),
+        grounder=RecordingGrounder(()),
+        action_grounder=RecordingActionGrounder(()),
+        executor=executor,
+        verifier=RecordingVerifier(()),
+        recovery=RecordingRecovery(()),
+        web_text_input_observer=lambda: observations.pop(0),
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    assert result.completed_plan_steps == 1
+    assert result.state.status is AgentStatus.SUCCEEDED
+    assert [record.action.tool_name for record in result.state.steps] == [
+        "click_mouse",
+        "type_text",
+    ]
+    assert result.state.steps[1].action.arguments == {"text": "hello web"}
+    assert executor.calls == [
+        record.action for record in result.state.steps
+    ]
+    assert observations == []
+
+
+@pytest.mark.parametrize(
+    ("text_input_status", "loop_status", "reason_fragment"),
+    [
+        (
+            TextInputStatus.BLOCKED,
+            AgentLoopStatus.BLOCKED,
+            "text input blocked",
+        ),
+        (
+            TextInputStatus.ACTION_FAILED,
+            AgentLoopStatus.EXHAUSTED,
+            "action_failed",
+        ),
+        (
+            TextInputStatus.VERIFICATION_FAILED,
+            AgentLoopStatus.EXHAUSTED,
+            "verification_failed",
+        ),
+        (
+            TextInputStatus.NEEDS_ACTION,
+            AgentLoopStatus.BLOCKED,
+            "needs_action",
+        ),
+    ],
+)
+def test_web_text_input_status_maps_to_terminal_agent_loop_status(
+    text_input_status,
+    loop_status,
+    reason_fragment,
+):
+    step = _web_text_step()
+    factory = FixedTextInputControllerFactory(
+        _text_input_result(text_input_status)
+    )
+    observer = lambda: _text_input_observation()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception(()),
+        grounder=RecordingGrounder(()),
+        action_grounder=RecordingActionGrounder(()),
+        executor=RecordingExecutor(),
+        verifier=RecordingVerifier(()),
+        recovery=RecordingRecovery(()),
+        web_text_input_observer=observer,
+        text_input_controller_factory=factory,
+    ).run(_plan(step))
+
+    assert result.status is loop_status
+    assert result.completed_plan_steps == 0
+    assert result.state.status is AgentStatus.FAILED
+    assert reason_fragment in result.reason
+    assert factory.calls == [
+        {
+            "observer": observer,
+            "target_spec": step.target,
+            "input_text": step.input_text,
+        }
+    ]
+    assert factory.controllers[0].run_calls[0]["execute"] is True
+
+
+def test_web_text_input_missing_observation_dependency_blocks_closed():
+    executor = RecordingExecutor()
+    factory = FixedTextInputControllerFactory(
+        _text_input_result(TextInputStatus.VERIFIED)
+    )
+
+    result = _agent_loop(
+        perception_engine=SequencePerception(()),
+        grounder=RecordingGrounder(()),
+        action_grounder=RecordingActionGrounder(()),
+        executor=executor,
+        verifier=RecordingVerifier(()),
+        recovery=RecordingRecovery(()),
+        text_input_controller_factory=factory,
+    ).run(_plan(_web_text_step()))
+
+    assert result.status is AgentLoopStatus.BLOCKED
+    assert "observation capability" in result.reason
+    assert result.completed_plan_steps == 0
+    assert executor.calls == []
+    assert factory.calls == []
+
+
+def test_mixed_web_text_input_then_click_plan_preserves_execution_order():
+    web_step = _web_text_step(input_text="query")
+    click_step = _step(
+        goal="Submit search",
+        action_text="Submit",
+        verification_text="Results",
+    )
+    observations = [
+        _text_input_observation(value=None, second=0),
+        _text_input_observation(value="query", second=1),
+    ]
+    final_click_action = _action(x=50, y=60)
+    executor = RecordingExecutor()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception(
+            (
+                _snapshot(second=2),
+                _snapshot(second=3),
+            )
+        ),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(final_click_action),)
+        ),
+        executor=executor,
+        verifier=RecordingVerifier((ActionVerificationStatus.VERIFIED,)),
+        recovery=RecordingRecovery(()),
+        web_text_input_observer=lambda: observations.pop(0),
+    ).run(_plan(web_step, click_step))
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    assert result.completed_plan_steps == 2
+    assert [record.action.tool_name for record in result.state.steps] == [
+        "click_mouse",
+        "type_text",
+        "click_mouse",
+    ]
+    assert result.state.steps[2].action is final_click_action
+    assert executor.calls == [
+        record.action for record in result.state.steps
+    ]
+
+
+def test_text_input_controller_actions_are_not_double_recorded():
+    step = _web_text_step(input_text="once")
+    observations = [
+        _text_input_observation(value=None, second=0),
+        _text_input_observation(value="once", second=1),
+    ]
+
+    result = _agent_loop(
+        perception_engine=SequencePerception(()),
+        grounder=RecordingGrounder(()),
+        action_grounder=RecordingActionGrounder(()),
+        executor=RecordingExecutor(),
+        verifier=RecordingVerifier(()),
+        recovery=RecordingRecovery(()),
+        web_text_input_observer=lambda: observations.pop(0),
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    assert [record.step_number for record in result.state.steps] == [1, 2]
+    assert [record.action.tool_name for record in result.state.steps].count(
+        "click_mouse"
+    ) == 1
+    assert [record.action.tool_name for record in result.state.steps].count(
+        "type_text"
+    ) == 1
+    assert len({record.action.action_id for record in result.state.steps}) == 2
+
+
 def test_full_mixed_plan_completes_with_expected_action_order():
     click_step = _step()
     read_step = _read_step()
@@ -2089,6 +2424,8 @@ def test_dependency_injection_exposes_custom_and_default_components():
     assert loop.recovery.grounder is loop.grounder
     assert loop.recovery.action_grounder is loop.action_grounder
     assert loop.state_verifier is None
+    assert loop.web_text_input_observer is None
+    assert loop.text_input_controller_factory is None
     assert loop.allowed_app_names == frozenset()
 
 
@@ -2096,16 +2433,24 @@ def test_dependency_injection_accepts_state_verifier_and_app_allowlist():
     perception_engine = SequencePerception(())
     executor = RecordingExecutor()
     state_verifier = RecordingStateVerifier()
+    web_text_input_observer = lambda: _text_input_observation()
+    factory = FixedTextInputControllerFactory(
+        _text_input_result(TextInputStatus.VERIFIED)
+    )
 
     loop = AgentLoop(
         perception_engine=perception_engine,
         executor=executor,
         state_verifier=state_verifier,
         allowed_app_names={"TextEdit"},
+        web_text_input_observer=web_text_input_observer,
+        text_input_controller_factory=factory,
     )
 
     assert loop.state_verifier is state_verifier
     assert loop.allowed_app_names == frozenset({"TextEdit"})
+    assert loop.web_text_input_observer is web_text_input_observer
+    assert loop.text_input_controller_factory is factory
 
 
 def test_explicit_concrete_grounder_is_reused_by_default_components():
@@ -2235,6 +2580,16 @@ def test_fully_explicit_custom_dependency_injection_remains_valid():
             "settling_sleep",
             object(),
             "settling_sleep",
+        ),
+        (
+            "web_text_input_observer",
+            object(),
+            "web_text_input_observer",
+        ),
+        (
+            "text_input_controller_factory",
+            object(),
+            "text_input_controller_factory",
         ),
     ],
 )
