@@ -9,6 +9,11 @@ from computer_agent.agent.text_input import (
     TextInputResult,
     TextInputStatus,
 )
+from computer_agent.agent.web_recovery import (
+    WebRecoveryDecision,
+    WebRecoveryDecisionResult,
+    decide_failed_grounding_recovery,
+)
 
 __all__ = [
     "AgentLoop",
@@ -20,4 +25,7 @@ __all__ = [
     "TextInputObservation",
     "TextInputResult",
     "TextInputStatus",
+    "WebRecoveryDecision",
+    "WebRecoveryDecisionResult",
+    "decide_failed_grounding_recovery",
 ]

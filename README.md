@@ -132,7 +132,7 @@ Phase 04 UI Grounding and Task Reasoning is complete, including the original Tas
 - [x] Experiment 04: Scroll and Viewport Search
 - [x] Experiment 05: Real Web Text Input
 - [x] Experiment 06: Web Information Extraction
-- [ ] Experiment 07: Adaptive Web Recovery
+- [x] Experiment 07: Adaptive Web Recovery
 - [ ] Experiment 08: Multi-Step Real Web Agent
 - [ ] Experiment 09: Live OpenAI Web Agent
 - [ ] Experiment 10: Cross-Site Generalization
@@ -192,3 +192,9 @@ Live read-only validation used `PYTHONPATH=src python experiments/phase05_real_w
 Experiment 05.06 validates structure and extraction success from live Accessibility semantics and structured parsing; no pre-known live titles are used as PASS conditions. It does not claim arbitrary websites, arbitrary webpage structures, or generic news extraction are solved. Limitations remain: one known semantic section pattern, heading-delimited section extraction, deterministic date/title parsing, no scrolling, no clicking, no typing, no navigation, no OCR, no screenshots, no clipboard mutation, and no LLM.
 
 Experiment 05.06 final automated validation: focused Phase 05.06 tests `25 passed`; complete suite passed with `PYTHONPATH=src python -m pytest -q` as `1211 passed`; `py_compile` passed; `git diff --check` passed; `python -m pip check` still reports the documented `pynacl`/`cffi` environment mismatch.
+
+Experiment 05.07 completed the implemented cause-aware adaptive web recovery scope for web interaction, currently integrated into text-input recovery eligibility and live-validated with bounded viewport search. The new pure web recovery decision layer maps `not_found` grounding to `viewport_search`; maps `unsafe` to `viewport_search` only when every candidate rejection reason is exactly `("outside_viewport",)`; and maps `ambiguous`, `resolved`, disabled, incompatible element type, low or invalid confidence, identifier/text conflict, invalid bounding box, and mixed rejection reasons to `block`. `TextInputController` now attempts viewport search only for trusted observations and a structured `viewport_search` decision. Existing `ViewportSearchController`, `ActionRecovery`, and retry-loop behavior were reused rather than replaced.
+
+Live validation on `https://www.python.org/` targeted `"Privacy Notice"` as a `link`. Initial state was Google Chrome with viewport `BoundingBox(x=0, y=124, width=1470, height=832)`, initial grounding `not_found`, reason `no exact identifier or normalized text match`, and candidate count `0`. Recovery decision was `viewport_search` with reason `semantic target was not found; bounded viewport search is eligible`. Bounded downward viewport search returned `found` with reason `target became visible` after `4` successful scroll actions. Final grounding was `resolved`, reason `resolved by text`, final text `"Privacy Notice"`, final bounds `BoundingBox(x=878, y=922, width=72, height=15)`, and total action execution count `4`. No click, typing, or navigation occurred.
+
+Experiment 05.07 final automated validation: focused Phase 05.07-related tests `52 passed`; complete suite passed with `PYTHONPATH=src python -m pytest -q` as `1250 passed in 4.74s`; `git diff --check` passed. This is intentionally not a generic arbitrary web recovery planner. Current limitations remain: narrow recovery decision space, downward bounded viewport search only, no bidirectional search, no LLM-based recovery choice, and no automatic click after recovery.

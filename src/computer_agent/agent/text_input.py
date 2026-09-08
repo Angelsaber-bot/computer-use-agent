@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from enum import Enum
 
 from computer_agent.core.models import Action, ToolResult
+from computer_agent.agent.web_recovery import (
+    WebRecoveryDecision,
+    decide_failed_grounding_recovery,
+)
 from computer_agent.grounding import (
     ActionGrounder,
     ActionGroundingResult,
@@ -232,7 +236,14 @@ class TextInputController:
             action_grounding,
         )
 
-        if precondition_failure is not None and execute:
+        if (
+            precondition_failure is not None
+            and execute
+            and self._trusted_observation(before)
+            and decide_failed_grounding_recovery(
+                before_grounding
+            ).decision is WebRecoveryDecision.VIEWPORT_SEARCH
+        ):
             search_result = self._search_if_appropriate(
                 before,
                 executor,

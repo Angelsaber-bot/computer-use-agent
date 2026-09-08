@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from PIL import Image
+import pytest
 
 from computer_agent.core.models import ToolResult
 from computer_agent.perception import (
@@ -15,6 +16,9 @@ from computer_agent.perception import (
 from experiments.phase05_real_web_autonomy import (
     experiment_05_real_web_text_input as experiment,
 )
+
+
+DEFAULT_VIEWPORT = object()
 
 
 class FakeObserver:
@@ -133,16 +137,18 @@ def _field(
     element_type="text_field",
     box=None,
     x=100,
+    enabled=True,
+    confidence=1.0,
 ):
     return UIElement(
         element_type=element_type,
         bounding_box=box
         if box is not None
         else _box(x=x),
-        confidence=1.0,
+        confidence=confidence,
         text=text,
         value=value,
-        enabled=True,
+        enabled=enabled,
         source="accessibility",
     )
 
@@ -190,7 +196,7 @@ def _snapshot(
 def _observation(
     *,
     app="Google Chrome",
-    viewport=None,
+    viewport=DEFAULT_VIEWPORT,
     elements=(),
     semantics=(),
     seconds=0,
@@ -198,7 +204,9 @@ def _observation(
 ):
     return experiment.TextInputObservation(
         application_name=app,
-        viewport=_viewport() if viewport is None else viewport,
+        viewport=_viewport()
+        if viewport is DEFAULT_VIEWPORT
+        else viewport,
         snapshot=_snapshot(
             elements=elements,
             seconds=seconds,
@@ -242,6 +250,13 @@ def _run(
 
 def _assert_no_actions(executor):
     assert executor.actions == []
+
+
+def _action_names(executor):
+    return [
+        action.tool_name
+        for action in executor.actions
+    ]
 
 
 def test_dry_run_unique_visible_text_field_needs_action_with_zero_actions(
@@ -402,6 +417,314 @@ def test_execute_focuses_types_and_verifies_changed_value(tmp_path):
         "text": "accessibility test",
     }
     assert sleeps == [0.25]
+
+
+def test_execute_missing_target_may_invoke_viewport_search(tmp_path):
+    result, builder, _executor_builder, executor, sleeps = _run(
+        tmp_path,
+        execute=True,
+        observations=[
+            _observation(
+                elements=(),
+                semantics=(),
+                seconds=0,
+            ),
+            _observation(
+                elements=(),
+                semantics=(
+                    _semantic_field(bounds=_box(y=800)),
+                ),
+                seconds=1,
+            ),
+            _observation(
+                elements=(),
+                semantics=(
+                    _semantic_field(bounds=_box()),
+                ),
+                seconds=2,
+            ),
+            _observation(
+                elements=(
+                    _field(value=""),
+                ),
+                semantics=(
+                    _semantic_field(),
+                ),
+                seconds=3,
+            ),
+            _observation(
+                elements=(
+                    _field(value="accessibility test"),
+                ),
+                semantics=(
+                    _semantic_field(value="accessibility test"),
+                ),
+                seconds=4,
+            ),
+        ],
+    )
+
+    assert result.status is experiment.TextInputStatus.VERIFIED
+    assert _action_names(executor) == [
+        "scroll",
+        "click_mouse",
+        "type_text",
+    ]
+    assert builder.observer.calls == 5
+    assert sleeps == [
+        0.3,
+        0.25,
+    ]
+
+
+def test_execute_outside_viewport_only_unsafe_target_may_search(
+    tmp_path,
+):
+    result, builder, _executor_builder, executor, sleeps = _run(
+        tmp_path,
+        execute=True,
+        observations=[
+            _observation(
+                elements=(
+                    _field(
+                        value="",
+                        box=_box(y=800),
+                    ),
+                ),
+                semantics=(
+                    _semantic_field(bounds=_box(y=800)),
+                ),
+                seconds=0,
+            ),
+            _observation(
+                elements=(),
+                semantics=(
+                    _semantic_field(bounds=_box(y=800)),
+                ),
+                seconds=1,
+            ),
+            _observation(
+                elements=(),
+                semantics=(
+                    _semantic_field(bounds=_box()),
+                ),
+                seconds=2,
+            ),
+            _observation(
+                elements=(
+                    _field(value=""),
+                ),
+                semantics=(
+                    _semantic_field(),
+                ),
+                seconds=3,
+            ),
+            _observation(
+                elements=(
+                    _field(value="accessibility test"),
+                ),
+                semantics=(
+                    _semantic_field(value="accessibility test"),
+                ),
+                seconds=4,
+            ),
+        ],
+    )
+
+    assert result.status is experiment.TextInputStatus.VERIFIED
+    assert _action_names(executor) == [
+        "scroll",
+        "click_mouse",
+        "type_text",
+    ]
+    assert builder.observer.calls == 5
+    assert sleeps == [
+        0.3,
+        0.25,
+    ]
+
+
+def test_execute_ambiguous_target_does_not_invoke_viewport_search(
+    tmp_path,
+):
+    result, builder, _executor_builder, executor, sleeps = _run(
+        tmp_path,
+        execute=True,
+        observations=[
+            _observation(
+                elements=(
+                    _field(x=100),
+                    _field(x=250),
+                ),
+            )
+        ],
+    )
+
+    assert result.status is experiment.TextInputStatus.BLOCKED
+    assert builder.observer.calls == 1
+    _assert_no_actions(executor)
+    assert sleeps == []
+
+
+def test_execute_wrong_role_does_not_invoke_viewport_search(tmp_path):
+    result, builder, _executor_builder, executor, sleeps = _run(
+        tmp_path,
+        execute=True,
+        observations=[
+            _observation(
+                elements=(
+                    _field(element_type="button"),
+                ),
+            )
+        ],
+    )
+
+    assert result.status is experiment.TextInputStatus.BLOCKED
+    assert builder.observer.calls == 1
+    _assert_no_actions(executor)
+    assert sleeps == []
+
+
+def test_execute_untrusted_observation_does_not_invoke_viewport_search(
+    tmp_path,
+):
+    result, builder, _executor_builder, executor, sleeps = _run(
+        tmp_path,
+        execute=True,
+        observations=[
+            _observation(
+                app="Safari",
+                elements=(),
+                semantics=(),
+            )
+        ],
+    )
+
+    assert result.status is experiment.TextInputStatus.BLOCKED
+    assert builder.observer.calls == 1
+    _assert_no_actions(executor)
+    assert sleeps == []
+
+
+def test_execute_missing_viewport_does_not_invoke_viewport_search(
+    tmp_path,
+):
+    result, builder, _executor_builder, executor, sleeps = _run(
+        tmp_path,
+        execute=True,
+        observations=[
+            _observation(
+                viewport=None,
+                elements=(),
+                semantics=(),
+            )
+        ],
+    )
+
+    assert result.status is experiment.TextInputStatus.BLOCKED
+    assert builder.observer.calls == 1
+    _assert_no_actions(executor)
+    assert sleeps == []
+
+
+def test_execute_snapshot_warnings_do_not_invoke_viewport_search(
+    tmp_path,
+):
+    result, builder, _executor_builder, executor, sleeps = _run(
+        tmp_path,
+        execute=True,
+        observations=[
+            _observation(
+                elements=(),
+                semantics=(),
+                warnings=("synthetic warning",),
+            )
+        ],
+    )
+
+    assert result.status is experiment.TextInputStatus.BLOCKED
+    assert builder.observer.calls == 1
+    _assert_no_actions(executor)
+    assert sleeps == []
+
+
+def test_execute_non_empty_field_does_not_invoke_viewport_search(
+    tmp_path,
+):
+    result, builder, _executor_builder, executor, sleeps = _run(
+        tmp_path,
+        execute=True,
+        observations=[
+            _observation(
+                elements=(
+                    _field(value="already filled"),
+                ),
+            )
+        ],
+    )
+
+    assert result.status is experiment.TextInputStatus.BLOCKED
+    assert builder.observer.calls == 1
+    _assert_no_actions(executor)
+    assert sleeps == []
+
+
+def test_execute_focus_action_blocked_does_not_invoke_viewport_search(
+    tmp_path,
+):
+    result, builder, _executor_builder, executor, sleeps = _run(
+        tmp_path,
+        execute=True,
+        observations=[
+            _observation(
+                elements=(
+                    _field(
+                        value="",
+                        box=BoundingBox(
+                            x=0,
+                            y=100,
+                            width=1,
+                            height=1,
+                        ),
+                    ),
+                ),
+            )
+        ],
+    )
+
+    assert result.status is experiment.TextInputStatus.BLOCKED
+    assert builder.observer.calls == 1
+    _assert_no_actions(executor)
+    assert sleeps == []
+
+
+@pytest.mark.parametrize(
+    "field_kwargs",
+    [
+        {"enabled": False},
+        {"confidence": 0.2},
+    ],
+)
+def test_execute_unsafe_disabled_or_low_confidence_target_does_not_search(
+    tmp_path,
+    field_kwargs,
+):
+    result, builder, _executor_builder, executor, sleeps = _run(
+        tmp_path,
+        execute=True,
+        observations=[
+            _observation(
+                elements=(
+                    _field(**field_kwargs),
+                ),
+            )
+        ],
+    )
+
+    assert result.status is experiment.TextInputStatus.BLOCKED
+    assert builder.observer.calls == 1
+    _assert_no_actions(executor)
+    assert sleeps == []
 
 
 def test_execute_click_failure_returns_action_failed(tmp_path):
