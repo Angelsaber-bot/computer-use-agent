@@ -133,7 +133,7 @@ Phase 04 UI Grounding and Task Reasoning is complete, including the original Tas
 - [x] Experiment 05: Real Web Text Input
 - [x] Experiment 06: Web Information Extraction
 - [x] Experiment 07: Adaptive Web Recovery
-- [ ] Experiment 08: Multi-Step Real Web Agent
+- [x] Experiment 08: Multi-Step Real Web Agent
 - [ ] Experiment 09: Live OpenAI Web Agent
 - [ ] Experiment 10: Cross-Site Generalization
 
@@ -199,4 +199,10 @@ Live validation on `https://www.python.org/` targeted `"Privacy Notice"` as a `l
 
 Experiment 05.07 final automated validation: focused Phase 05.07-related tests `52 passed`; complete suite passed with `PYTHONPATH=src python -m pytest -q` as `1250 passed in 4.74s`; `git diff --check` passed. This is intentionally not a generic arbitrary web recovery planner. Current limitations remain: narrow recovery decision space, downward bounded viewport search only, no bidirectional search, no LLM-based recovery choice, and no automatic click after recovery.
 
-Phase 05.08 Increment 1 added structured real-web text input to the planning and agent-loop layers without completing the full multi-step live experiment. Planning now includes `PlanOperation.TYPE_INTO_TARGET` and a frozen/slotted `WebTextInputStep` with `goal`, `target`, `input_text`, and `max_attempts`; `max_attempts` is currently required to be exactly `1`. `StructuredPlan` can now contain `WebTextInputStep`. `AgentLoop` dispatches this step through the existing production `TextInputController` and does not duplicate its grounding, viewport-recovery, focus, `type_text`, or semantic value-verification logic. The optional `web_text_input_observer` dependency is required only when this step executes. `_StateRecordingExecutor` records controller-executed actions exactly once into `AgentState`, preserving future viewport-search scroll actions, the focus click, and `type_text` in real execution order. Existing `InsertTextStep` semantics remain unchanged. This increment does not add `LLMReasoner` schema support, a semantic extraction step, the Phase 05.08 live multi-step harness, or live browser actions. Validation: focused tests `240 passed`; full suite `1279 passed in 4.73s`; `git diff --check` passed.
+Experiment 05.08 completed the current bounded multi-step real-web AgentLoop workflow on `https://www.python.org/`. Increment 1 added `PlanOperation.TYPE_INTO_TARGET` and frozen/slotted `WebTextInputStep` support to `StructuredPlan`; `AgentLoop` dispatches that step through the existing production `TextInputController`. The submit/navigation step reuses the existing `click_target` `PlanStep`. The final live workflow used one `StructuredPlan` and one `AgentLoop.run(plan)` call, with no manual sequencing outside AgentLoop and no hardcoded coordinates in the plan.
+
+The formal live task resolved the `"Search This Site"` `text_field`, typed `typing`, resolved and clicked the `"GO"` `button`, and verified the result page by the appearance of the `"Results"` `heading`. Initial `"Results"` grounding was `not_found`; final `"Results"` grounding was `resolved`. Live acceptance passed with `AgentLoopResult` status `completed`, `AgentState` status `succeeded`, `2 / 2` completed plan steps, `3` action executions, exact tool order `click_mouse -> type_text -> click_mouse`, all `ToolResult`s successful, no scroll action in the validated happy path, final app `Google Chrome`, and empty final perception warnings.
+
+Formal evidence is `assets/screenshots/phase05_real_web_autonomy/experiment_08_multi_step_real_web_agent.png`. Candidate evidence was promoted only after acceptance passed. Validation: focused tests `245 passed`; full suite `1321 passed in 5.21s`; `git diff --check` passed; live Experiment 05.08 acceptance passed.
+
+Experiment 05.08 remains bounded. Verification still uses the predefined postcondition marker `"Results"`, `LLMReasoner` does not yet emit `TYPE_INTO_TARGET`, `StructuredPlan` has no semantic extraction step yet, and cross-site generalization is not complete.

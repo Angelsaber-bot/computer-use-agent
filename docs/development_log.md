@@ -4198,3 +4198,69 @@ Make the existing production real-web text input workflow expressible in `Struct
 Phase 05.08 Increment 1 is complete for structured real-web text input planning and AgentLoop execution through the existing `TextInputController`.
 
 This does not complete Phase 05.08 as a whole.
+
+### Phase 05 Experiment 08: Multi-Step Real Web Agent
+
+**Date:** September 8, 2026
+
+**Objective:**
+
+Run a bounded two-step real-web workflow on python.org through one production `StructuredPlan` and one production `AgentLoop.run(plan)` call.
+
+**Architecture:**
+
+- `StructuredPlan` supports `WebTextInputStep` through Increment 1.
+- `AgentLoop` dispatches `WebTextInputStep` through the existing production `TextInputController`.
+- The existing `click_target` `PlanStep` is reused for submit/navigation.
+- The workflow is not manually sequenced outside `AgentLoop`.
+- The plan contains no hardcoded coordinates.
+
+**Formal Live Task:**
+
+- Website: `https://www.python.org/`
+- Step 1: resolve `"Search This Site"` as a `text_field` and type `typing`.
+- Step 2: resolve `"GO"` as a `button` and click it.
+- Verification marker: `"Results"` as a `heading`.
+- Initial `"Results"` grounding: `not_found`.
+- Final `"Results"` grounding: `resolved`.
+
+**Live Acceptance:**
+
+- `AgentLoopResult` status: `completed`
+- `AgentState` status: `succeeded`
+- Completed plan steps: `2 / 2`
+- Action executions: `3`
+- Exact tool order:
+  - `click_mouse`
+  - `type_text`
+  - `click_mouse`
+- All `ToolResult`s succeeded.
+- No scroll action occurred in the validated happy path.
+- Final app remained `Google Chrome`.
+- Final perception warnings were empty.
+- Experiment acceptance passed.
+
+**Evidence:**
+
+- Formal evidence: `assets/screenshots/phase05_real_web_autonomy/experiment_08_multi_step_real_web_agent.png`
+- Candidate evidence was promoted only after acceptance passed.
+
+**Validation:**
+
+- Focused tests: `245 passed`
+- Full suite: `1321 passed in 5.21s`
+- `git diff --check`: passed
+- Live Experiment 05.08 acceptance passed
+
+**Current Status:**
+
+Experiment 05.08 is complete for the current bounded python.org multi-step real-web AgentLoop workflow.
+
+Important limitations:
+
+- Verification still uses the predefined postcondition marker `"Results"`.
+- `LLMReasoner` does not yet emit `TYPE_INTO_TARGET`.
+- `StructuredPlan` has no semantic extraction step yet.
+- Cross-site generalization is not complete.
+
+This does not claim dynamic postcondition discovery or arbitrary web autonomy.
