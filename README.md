@@ -236,3 +236,24 @@ The formal live execution passed. Planning acceptance passed; initial state was 
 Formal evidence is `assets/screenshots/phase05_real_web_autonomy/experiment_09_live_openai_web_agent.png`. Candidate evidence was promoted only after full execution acceptance passed. Validation: Increment 3 focused suite `414 passed`; complete repository suite `1405 passed in 5.74s`; `git diff --check` passed; real OpenAI planning-only acceptance passed; and real OpenAI plus real AgentLoop execution acceptance passed.
 
 Experiment 05.09 remains bounded to the predefined python.org workflow. `"Results"` remains a predefined postcondition marker. There is no dynamic postcondition discovery yet, no semantic extraction step emitted by the LLM plan yet, and cross-site generalization is not complete. This does not claim arbitrary web autonomy.
+
+### Phase 06: Evidence-Grounded Interactive Agent
+
+- [x] Experiment 01: Interactive Task Runtime
+- [ ] Experiment 02: Agent Workspace
+- [ ] Experiment 03: Evidence-Grounded Task State
+- [ ] Experiment 04: Adaptive Next-Step Reasoning
+- [ ] Experiment 05: Task-Level Verification and Reconciliation
+- [ ] Experiment 06: Persistence and Resume
+- [ ] Experiment 07: Controlled Reliability Benchmark
+- [ ] Experiment 08: DeltaMath External Transfer
+- [ ] Experiment 09: Useful Cross-Application Workflow
+- [ ] Experiment 10: Integrated Phase 06 Demonstration
+
+Experiment 06.01 introduced the reusable interactive task runtime under `src/computer_agent/runtime/`. It adds a runtime-owned task lifecycle, cooperative pause/resume/stop control, structured runtime events, and a synchronous event bus without changing the existing Phase 04-05 `AgentLoop`.
+
+`RuntimeControl` uses explicit safe checkpoints. A pause request blocks future progress only when execution reaches `control.checkpoint()`; it does not interrupt an action halfway through. Resume wakes a paused checkpoint, while stop wakes a paused checkpoint and raises `RuntimeStopRequested` so the runtime can terminate cleanly.
+
+The deterministic Experiment 06.01 acceptance harness validates two independent scenarios. The first demonstrates `started -> paused -> resumed -> completed` and proves that worker progress does not cross the checkpoint while paused. The second demonstrates `started -> paused -> stop_requested -> stopped` and proves that no worker progress occurs after the stop request.
+
+Final Experiment 06.01 validation: focused runtime and experiment tests `30 passed`; complete repository suite `1738 passed in 7.11s`; `pip check` reported no broken requirements; `git diff --check` passed; and direct Experiment 06.01 acceptance passed.

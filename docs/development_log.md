@@ -4439,3 +4439,65 @@ Formal live Khan evidence:
 `assets/screenshots/phase05_real_web_autonomy/experiment_10_khan_agent_loop_execution.png`
 
 Experiment 10 is complete.
+
+## Phase 06: Evidence-Grounded Interactive Agent
+
+### Experiment 01: Interactive Task Runtime
+
+**Date:** September 11, 2026
+
+**Objective:**
+
+Introduce a reusable interactive task-runtime layer that can own task lifecycle and expose deterministic pause, resume, stop, and progress events without modifying or coupling the existing deterministic `AgentLoop` to a GUI.
+
+**Production Files:**
+
+- `src/computer_agent/runtime/models.py`
+- `src/computer_agent/runtime/control.py`
+- `src/computer_agent/runtime/events.py`
+- `src/computer_agent/runtime/task_runtime.py`
+- `src/computer_agent/runtime/__init__.py`
+
+**Implemented:**
+
+- Added `RuntimeStatus` with `created`, `running`, `paused`, `stopped`, `completed`, and `failed`.
+- Added `RuntimeTask` as the runtime-owned lifecycle record for one user task.
+- Added structured `RuntimeEvent` and `RuntimeEventType`.
+- Added synchronous `RuntimeEventBus` with subscribe, unsubscribe, and publish behavior.
+- Added thread-safe `RuntimeControl`.
+- Added cooperative `pause()`, `resume()`, and `request_stop()` behavior.
+- Added `checkpoint()` as the explicit safe control boundary.
+- A paused checkpoint blocks until resume or stop.
+- A stop request wakes paused checkpoints and raises `RuntimeStopRequested`.
+- Added `TaskRuntime`, which owns lifecycle transitions, control, worker execution, failure capture, and external runtime events.
+- Runtime control remains independent of Qt, PySide6, the LLM reasoner, perception, and `AgentLoop`.
+- Existing Phase 01-05 production behavior was not modified.
+
+**Formal Experiment:**
+
+`experiments/phase06_interactive_agent/experiment_01_interactive_task_runtime.py`
+
+Scenario 1 validates:
+
+`task_started -> progress -> task_paused -> task_resumed -> progress -> task_completed`
+
+The worker reaches a cooperative checkpoint, pause is accepted, progress is proven to remain blocked during the paused interval, resume is accepted, and the worker then completes.
+
+Scenario 2 validates:
+
+`task_started -> progress -> task_paused -> stop_requested -> task_stopped`
+
+The worker reaches a cooperative checkpoint, pause is accepted, stop wakes the paused checkpoint, the runtime terminates cleanly, and no forbidden post-stop progress occurs.
+
+**Validation:**
+
+- Focused Phase 06 runtime and Experiment 01 tests: `30 passed in 0.44s`
+- Complete repository test suite: `1738 passed in 7.11s`
+- `pip check`: no broken requirements
+- `git diff --check`: passed
+- Direct Experiment 06.01 execution: passed
+- Both deterministic lifecycle scenarios: passed
+
+**Result:**
+
+Experiment 06.01 established the control and event substrate required for the Phase 06 Agent Workspace and later interactive observe-decide-execute-verify loops. Pause and stop are cooperative and occur only at explicit safe runtime checkpoints rather than interrupting an action midway.
