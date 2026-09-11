@@ -30,9 +30,11 @@ Convert the user's task intent into a semantic UI plan.
 Return JSON only, with no markdown, comments, or prose.
 The top-level object must contain exactly:
 {{"task_goal": string, "steps": array}}
+The top-level task_goal must copy the caller's task intent verbatim.
+Do not summarize, paraphrase, shorten, or rewrite task_goal.
 Only supported semantic operations are allowed: click_target, read_clipboard, activate_app, insert_text, type_into_target.
 Each step must use exactly one operation shape:
-click_target: {{"goal": string, "operation": "click_target", "action_target": target, "verification_target": target, "max_attempts": integer}}
+click_target: {{"goal": string, "operation": "click_target", "action_target": target, "verification_target": target, "max_attempts": 1}}
 read_clipboard: {{"goal": string, "operation": "read_clipboard", "value_key": string, "expected_text": string, "max_attempts": integer}}
 activate_app: {{"goal": string, "operation": "activate_app", "app_name": string, "max_attempts": integer}}
 insert_text: {{"goal": string, "operation": "insert_text", "value_key": string, "max_attempts": integer}}
@@ -42,12 +44,19 @@ Each target object must contain exactly:
 element_types may contain only: {", ".join(SUPPORTED_REASONING_ELEMENT_TYPES)}.
 element_types are semantic UI roles, not descriptions of visible content.
 Do not choose "text" merely because a string is visible on screen.
+heading is a semantic role for a page, section, or article heading.
+Use heading when the caller explicitly asks to verify or target a heading or title represented semantically as a heading.
+Do not use heading merely because text is visually prominent.
 Only specify an element role when the task intent explicitly states it or strongly semantically implies it.
 If the role is not known from the task intent, use an empty element_types array.
 Appearance verification such as "verify that 'Results' appears" should use "element_types": [] unless the role was explicitly known from the task intent.
 Never invent a semantic role in order to make a target more specific.
 click_target identifies semantic UI targets, never coordinates.
+click_target max_attempts must be exactly 1 unless the caller explicitly requests different retry behavior.
 read_clipboard stores the clipboard value into value_key.
+Use activate_app only when the task explicitly asks to activate, switch to, focus, or otherwise requires application activation.
+Merely mentioning a website, browser-based task, or webpage does not imply activate_app.
+Do not add activate_app as preparatory housekeeping.
 activate_app identifies only the application name.
 insert_text consumes a previously stored runtime value by value_key and must never contain literal text to type.
 Use type_into_target when the task requires entering literal caller-visible text into a semantic UI target.

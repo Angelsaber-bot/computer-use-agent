@@ -8,6 +8,7 @@ import re
 from typing import TypeAlias
 
 from computer_agent.grounding.models import TargetSpec
+from computer_agent.verification.models import VerificationSpec
 
 
 MAX_PLAN_STEP_ATTEMPTS = 3
@@ -33,8 +34,9 @@ class PlanStep:
     goal: str
     operation: PlanOperation
     action_target: TargetSpec
-    verification_target: TargetSpec
+    verification_target: TargetSpec | None = None
     max_attempts: int = 1
+    verification_spec: VerificationSpec | None = None
 
     def __post_init__(self) -> None:
         _validate_non_empty_string(self.goal, "goal")
@@ -48,10 +50,35 @@ class PlanStep:
         if not isinstance(self.action_target, TargetSpec):
             raise ValueError("action_target must be a TargetSpec")
 
-        if not isinstance(self.verification_target, TargetSpec):
-            raise ValueError("verification_target must be a TargetSpec")
-
         _validate_max_attempts(self.max_attempts)
+        has_legacy_target = self.verification_target is not None
+        has_generic_spec = self.verification_spec is not None
+
+        if has_legacy_target == has_generic_spec:
+            raise ValueError(
+                "PlanStep requires exactly one of verification_target "
+                "or verification_spec"
+            )
+
+        if has_legacy_target:
+            if not isinstance(self.verification_target, TargetSpec):
+                raise ValueError("verification_target must be a TargetSpec")
+            return
+
+        if not isinstance(self.verification_spec, VerificationSpec):
+            raise ValueError("verification_spec must be a VerificationSpec")
+
+        if not self.verification_spec.after_conditions:
+            raise ValueError(
+                "generic PlanStep verification_spec requires at least "
+                "one after_condition"
+            )
+
+        if self.max_attempts != 1:
+            raise ValueError(
+                "generic PlanStep verification_spec requires max_attempts "
+                "of exactly 1"
+            )
 
 
 @dataclass(frozen=True, slots=True)

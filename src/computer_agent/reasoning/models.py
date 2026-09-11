@@ -11,6 +11,7 @@ from computer_agent.planning.models import StructuredPlan
 SUPPORTED_REASONING_ELEMENT_TYPES = (
     "button",
     "checkbox",
+    "heading",
     "popup_button",
     "radio_button",
     "text_field",

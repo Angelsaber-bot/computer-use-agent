@@ -304,6 +304,22 @@ def test_valid_one_step_response_returns_ready_plan():
     assert len(client.calls) == 1
 
 
+def test_exact_returned_task_goal_is_parsed_normally():
+    task = (
+        'On Wikipedia, search for "computer vision" and verify that the '
+        '"Computer vision" article heading appears.'
+    )
+
+    result, client, _reasoner = _reason(
+        _response(task_goal=task),
+        task=task,
+    )
+
+    assert result.status is ReasoningStatus.READY
+    assert result.plan.task_goal == task
+    assert client.calls[0]["user_prompt"].endswith(task)
+
+
 def test_valid_existing_click_target_response_remains_ready_plan_step():
     result, client, _reasoner = _reason(_response())
 
@@ -343,6 +359,24 @@ def test_valid_activate_app_response_returns_typed_step():
     assert step.goal == "Switch to TextEdit"
     assert step.app_name == "TextEdit"
     assert step.max_attempts == 2
+    assert len(client.calls) == 1
+
+
+def test_activate_app_remains_valid_when_explicitly_requested():
+    result, client, _reasoner = _reason(
+        _response(
+            task_goal="Switch to TextEdit",
+            steps=[_activate_app_step_json()],
+        ),
+        task="Switch to TextEdit",
+    )
+
+    assert result.status is ReasoningStatus.READY
+    step = result.plan.steps[0]
+    assert isinstance(step, ActivateAppStep)
+    assert step.operation is PlanOperation.ACTIVATE_APP
+    assert step.app_name == "TextEdit"
+    assert step.max_attempts == 1
     assert len(client.calls) == 1
 
 
@@ -631,7 +665,6 @@ def test_empty_reasoning_element_types_reach_ready_as_empty_tuple():
 @pytest.mark.parametrize(
     "element_types",
     [
-        ("heading",),
         ("page title",),
         ("navigation item",),
         ("link",),
@@ -701,6 +734,17 @@ def test_system_prompt_documents_appearance_verification_role_policy():
     assert "unless the role was explicitly known" in prompt
 
 
+def test_system_prompt_documents_heading_role_policy():
+    reasoner = LLMReasoner(client=FakeLLMClient(_response()))
+    prompt = reasoner.system_prompt
+
+    assert "heading is a semantic role for a page, section, or article heading" in prompt
+    assert "verify or target a heading or title represented semantically" in prompt
+    assert "Do not use heading merely because text is visually prominent" in prompt
+    assert "If the role is not known from the task intent" in prompt
+    assert "empty element_types array" in prompt
+
+
 def test_system_prompt_documents_type_into_target_policy():
     reasoner = LLMReasoner(client=FakeLLMClient(_response()))
     prompt = reasoner.system_prompt
@@ -714,6 +758,47 @@ def test_system_prompt_documents_type_into_target_policy():
     assert "max_attempts must be exactly 1" in prompt
     assert "never coordinates" in prompt
     assert "tool names" in prompt
+
+
+def test_system_prompt_requires_verbatim_task_goal_preservation():
+    reasoner = LLMReasoner(client=FakeLLMClient(_response()))
+    prompt = reasoner.system_prompt
+
+    assert "task_goal must copy the caller's task intent verbatim" in prompt
+    assert "Do not summarize, paraphrase, shorten, or rewrite task_goal" in prompt
+
+
+def test_system_prompt_says_web_tasks_do_not_imply_activate_app():
+    reasoner = LLMReasoner(client=FakeLLMClient(_response()))
+    prompt = reasoner.system_prompt
+
+    assert "Use activate_app only when the task explicitly asks" in prompt
+    assert "activate, switch to, focus" in prompt
+    assert "website, browser-based task, or webpage does not imply activate_app" in prompt
+    assert "Do not add activate_app as preparatory housekeeping" in prompt
+
+
+def test_system_prompt_requires_single_attempt_generated_click_target():
+    reasoner = LLMReasoner(client=FakeLLMClient(_response()))
+    prompt = reasoner.system_prompt
+
+    assert (
+        'click_target: {"goal": string, "operation": "click_target", '
+        '"action_target": target, "verification_target": target, '
+        '"max_attempts": 1}'
+    ) in prompt
+    assert "click_target max_attempts must be exactly 1" in prompt
+
+
+def test_type_into_target_single_attempt_behavior_remains_unchanged():
+    result, _client, _reasoner = _reason(
+        _response(steps=[_type_into_target_step_json(max_attempts=1)])
+    )
+
+    assert result.status is ReasoningStatus.READY
+    step = result.plan.steps[0]
+    assert isinstance(step, WebTextInputStep)
+    assert step.max_attempts == 1
 
 
 def test_final_plan_is_constructed_through_injected_planner_seam():

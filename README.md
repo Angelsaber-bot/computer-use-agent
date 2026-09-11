@@ -135,7 +135,21 @@ Phase 04 UI Grounding and Task Reasoning is complete, including the original Tas
 - [x] Experiment 07: Adaptive Web Recovery
 - [x] Experiment 08: Multi-Step Real Web Agent
 - [x] Experiment 09: Live OpenAI Web Agent
-- [ ] Experiment 10: Cross-Site Generalization
+- [x] Experiment 10: Cross-Site Generalization
+
+Experiment 05.10 completed the cross-site generalization milestone on Khan
+Academy SAT Math. Khan read-only perception/grounding qualification,
+deterministic offline planning, live OpenAI planning-only qualification, and
+gated live production `AgentLoop` execution all passed. The accepted live run
+completed exactly one semantic `click_mouse` action and one plan step, produced
+one generic state-transition verification with `4 verified, 0 failed, 0
+inconclusive`, resolved the final `Unit 2: Foundations: Algebra` heading,
+promoted formal evidence, and ended with `Execution acceptance: passed`.
+
+An earlier live attempt was correctly rejected by the fail-closed precondition
+gate before any browser action or evidence promotion. Subsequent read-only
+qualification and the successful live rerun confirmed the Khan semantic
+contract without weakening grounding or verification safety.
 
 Experiment 05.01 moved the production perception pipeline from controlled HTML fixtures to a real public website. A raw macOS Accessibility audit of `https://www.python.org/` in Google Chrome visited `682` Accessibility nodes and confirmed that real webpages expose semantic roles including `AXLink`, `AXHeading`, `AXStaticText`, `AXTextField`, `AXButton`, and `AXWebArea`.
 

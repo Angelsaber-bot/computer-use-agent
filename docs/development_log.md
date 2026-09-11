@@ -4399,3 +4399,43 @@ Important limitations:
 - There is no semantic extraction step emitted by the LLM plan yet.
 - Cross-site generalization is not complete.
 - This does not claim arbitrary web autonomy.
+
+### Phase 05 Experiment 10: Cross-Site Generalization
+
+Experiment 10 completed the Khan Academy SAT Math cross-site validation path.
+Khan read-only perception/grounding qualification passed, deterministic offline
+Khan planning passed, live OpenAI planning-only qualification passed, and gated
+live execution through the production `AgentLoop` passed.
+
+The live execution path requires `--live-openai --execute`, rejects `--execute`
+alone, performs exactly one OpenAI planning request before browser execution,
+converts the accepted semantic plan to the generic Khan state-transition
+contract, checks fail-closed macOS/Accessibility/Chrome/Khan preconditions
+before constructing the executor, and delegates the single `CLICK_TARGET` step
+to the production `AgentLoop`. The plan contains no coordinates or direct tool
+arguments.
+
+The successful manual live qualification started on the Khan Academy SAT Math
+course page. Initial semantic gates resolved the `SAT Math` heading, confirmed
+the destination `Unit 2: Foundations: Algebra` heading was absent, and resolved
+the `UNIT 2 Foundations: Algebra` action target. `AgentLoop` then completed
+exactly one plan step and exactly one `click_mouse` action. The generic
+`StateTransitionVerifier` recorded one full before/after verification call with
+`4 verified, 0 failed, 0 inconclusive`: before execution the `SAT Math` heading
+was present and the Unit 2 destination heading was absent; after execution the
+Unit 2 destination heading was present and the `SAT Math` heading was absent.
+The independent final destination grounding also resolved successfully, no final
+perception warnings were reported, formal evidence was promoted, and the run
+ended with `Execution acceptance: passed`.
+
+The first manual execution attempt was rejected by the fail-closed precondition
+gate before any action was executed or evidence was promoted. Follow-up
+read-only probes using the same production `KhanLiveEnvironment`, `UIGrounder`,
+and `StateObserver` resolved the expected semantic targets, and the subsequent
+live rerun passed without lowering safety thresholds or weakening the semantic
+contract.
+
+Formal live Khan evidence:
+`assets/screenshots/phase05_real_web_autonomy/experiment_10_khan_agent_loop_execution.png`
+
+Experiment 10 is complete.

@@ -54,8 +54,12 @@ from computer_agent.verification import (
     ActionVerificationResult,
     ActionVerificationStatus,
     ActionVerifier,
+    PresenceExpectation,
     StateVerificationResult,
     StateVerificationStatus,
+    StateTransitionVerifier,
+    UIStateCondition,
+    VerificationSpec,
 )
 
 
@@ -214,6 +218,54 @@ def _step(
         operation=PlanOperation.CLICK_TARGET,
         action_target=_target(action_text),
         verification_target=_target(verification_text),
+        max_attempts=max_attempts,
+    )
+
+
+def _generic_verification_spec(
+    *,
+    before_conditions=None,
+    after_conditions=None,
+) -> VerificationSpec:
+    if before_conditions is None:
+        before_conditions = (
+            UIStateCondition(
+                target=_target("OLD_STATE"),
+                expectation=PresenceExpectation.PRESENT,
+            ),
+        )
+
+    if after_conditions is None:
+        after_conditions = (
+            UIStateCondition(
+                target=_target("NEW_STATE"),
+                expectation=PresenceExpectation.PRESENT,
+            ),
+            UIStateCondition(
+                target=_target("OLD_STATE"),
+                expectation=PresenceExpectation.ABSENT,
+            ),
+        )
+
+    return VerificationSpec(
+        before_conditions=tuple(before_conditions),
+        after_conditions=tuple(after_conditions),
+    )
+
+
+def _generic_step(
+    goal: str = "Click generic target",
+    *,
+    action_text: str = "MENU",
+    verification_spec: VerificationSpec | None = None,
+    max_attempts: int = 1,
+) -> PlanStep:
+    return PlanStep(
+        goal=goal,
+        operation=PlanOperation.CLICK_TARGET,
+        action_target=_target(action_text),
+        verification_target=None,
+        verification_spec=verification_spec or _generic_verification_spec(),
         max_attempts=max_attempts,
     )
 
@@ -633,6 +685,22 @@ class RecordingStateVerifier:
         return result
 
 
+class RecordingStateTransitionVerifier:
+    def __init__(self) -> None:
+        self._verifier = StateTransitionVerifier()
+        self.calls = []
+
+    def verify(self, **kwargs):
+        result = self._verifier.verify(**kwargs)
+        self.calls.append(
+            {
+                **kwargs,
+                "result": result,
+            }
+        )
+        return result
+
+
 class RecordingSleeper:
     def __init__(self) -> None:
         self.calls = []
@@ -672,10 +740,13 @@ def _agent_loop(
     executor,
     verifier,
     recovery,
+    state_transition_verifier=None,
     state_verifier=None,
     allowed_app_names=None,
     frontmost_app_settle_timeout_seconds=0.0,
     frontmost_app_settle_poll_seconds=0.1,
+    post_action_settle_timeout_seconds=0.0,
+    post_action_settle_poll_seconds=0.1,
     settling_sleep=None,
     web_text_input_observer=None,
     text_input_controller_factory=None,
@@ -689,6 +760,7 @@ def _agent_loop(
         action_grounder=action_grounder,
         executor=executor,
         verifier=verifier,
+        state_transition_verifier=state_transition_verifier,
         recovery=recovery,
         state_verifier=state_verifier,
         allowed_app_names=allowed_app_names,
@@ -697,6 +769,12 @@ def _agent_loop(
         ),
         frontmost_app_settle_poll_seconds=(
             frontmost_app_settle_poll_seconds
+        ),
+        post_action_settle_timeout_seconds=(
+            post_action_settle_timeout_seconds
+        ),
+        post_action_settle_poll_seconds=(
+            post_action_settle_poll_seconds
         ),
         settling_sleep=settling_sleep,
         web_text_input_observer=web_text_input_observer,
@@ -966,6 +1044,857 @@ def test_failed_verification_retry_ready_executes_recovery_action():
     assert recovery.calls[0]["completed_attempts"] == 1
     assert recovery.calls[0]["max_attempts"] == 2
     assert recovery.calls[0]["target_spec"] is step.action_target
+
+
+def test_click_settling_can_verify_after_one_delayed_poll():
+    step = _step()
+    plan = _plan(step)
+    before = _snapshot(second=0)
+    after_first = _snapshot(second=1)
+    after_poll = _snapshot(second=2)
+    action = _action()
+    executor = RecordingExecutor()
+    verifier = RecordingVerifier(
+        (
+            ActionVerificationStatus.INCONCLUSIVE,
+            ActionVerificationStatus.VERIFIED,
+        )
+    )
+    recovery = RecordingRecovery(())
+    sleeper = RecordingSleeper()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception(
+            (
+                before,
+                after_first,
+                after_poll,
+            )
+        ),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=executor,
+        verifier=verifier,
+        recovery=recovery,
+        post_action_settle_timeout_seconds=0.1,
+        post_action_settle_poll_seconds=0.1,
+        settling_sleep=sleeper,
+    ).run(plan)
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    assert result.completed_plan_steps == 1
+    assert executor.calls == [action]
+    assert len(result.state.steps) == 1
+    assert result.state.steps[0].action is action
+    assert result.state.steps[0].action.tool_name == "click_mouse"
+    assert sleeper.calls == [0.1]
+    assert recovery.calls == []
+    assert verifier.calls[0]["before_snapshot"] is before
+    assert verifier.calls[0]["after_snapshot"] is after_first
+    assert verifier.calls[1]["before_snapshot"] is before
+    assert verifier.calls[1]["after_snapshot"] is after_poll
+    assert verifier.calls[1]["action"] is action
+    assert verifier.calls[1]["tool_result"] is result.state.steps[0].result
+    assert verifier.calls[1]["target_spec"] is step.verification_target
+
+
+def test_click_settling_allows_multiple_polls_then_verifies():
+    step = _step()
+    before = _snapshot(second=0)
+    after_first = _snapshot(second=1)
+    after_poll_1 = _snapshot(second=2)
+    after_poll_2 = _snapshot(second=3)
+    action = _action()
+    executor = RecordingExecutor()
+    recovery = RecordingRecovery(())
+    sleeper = RecordingSleeper()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception(
+            (
+                before,
+                after_first,
+                after_poll_1,
+                after_poll_2,
+            )
+        ),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=executor,
+        verifier=RecordingVerifier(
+            (
+                ActionVerificationStatus.INCONCLUSIVE,
+                ActionVerificationStatus.INCONCLUSIVE,
+                ActionVerificationStatus.VERIFIED,
+            )
+        ),
+        recovery=recovery,
+        post_action_settle_timeout_seconds=0.2,
+        post_action_settle_poll_seconds=0.1,
+        settling_sleep=sleeper,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    assert executor.calls == [action]
+    assert len(result.state.steps) == 1
+    assert sleeper.calls == [0.1, 0.1]
+    assert recovery.calls == []
+
+
+def test_click_settling_exhausts_before_recovery_begins():
+    step = _step(max_attempts=2)
+    before = _snapshot(second=0)
+    after_first = _snapshot(second=1)
+    after_poll = _snapshot(second=2)
+    action = _action()
+    latest_verification = _verification(ActionVerificationStatus.FAILED)
+    executor = RecordingExecutor()
+    verifier = RecordingVerifier(
+        (
+            _verification(ActionVerificationStatus.INCONCLUSIVE),
+            latest_verification,
+        )
+    )
+    recovery = RecordingRecovery((_recovery_blocked("settled but unresolved"),))
+    sleeper = RecordingSleeper()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception(
+            (
+                before,
+                after_first,
+                after_poll,
+            )
+        ),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=executor,
+        verifier=verifier,
+        recovery=recovery,
+        post_action_settle_timeout_seconds=0.1,
+        post_action_settle_poll_seconds=0.1,
+        settling_sleep=sleeper,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.BLOCKED
+    assert executor.calls == [action]
+    assert sleeper.calls == [0.1]
+    assert len(recovery.calls) == 1
+    assert recovery.calls[0]["verification_result"] is latest_verification
+    assert recovery.calls[0]["latest_snapshot"] is after_poll
+    assert recovery.calls[0]["completed_attempts"] == 1
+    assert verifier.calls[1]["before_snapshot"] is before
+
+
+def test_click_settling_decimal_boundary_performs_exact_poll_count():
+    step = _step(max_attempts=2)
+    before = _snapshot(second=0)
+    after_first = _snapshot(second=1)
+    settling_snapshots = tuple(
+        _snapshot(second=second)
+        for second in range(2, 7)
+    )
+    action = _action()
+    perception = SequencePerception(
+        (
+            before,
+            after_first,
+            *settling_snapshots,
+        )
+    )
+    verifier = RecordingVerifier(
+        (
+            ActionVerificationStatus.INCONCLUSIVE,
+            *(
+                ActionVerificationStatus.INCONCLUSIVE
+                for _index in range(5)
+            ),
+        )
+    )
+    recovery = RecordingRecovery((_recovery_blocked("not settled"),))
+    sleeper = RecordingSleeper()
+
+    result = _agent_loop(
+        perception_engine=perception,
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=RecordingExecutor(),
+        verifier=verifier,
+        recovery=recovery,
+        post_action_settle_timeout_seconds=0.5,
+        post_action_settle_poll_seconds=0.1,
+        settling_sleep=sleeper,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.BLOCKED
+    assert sleeper.calls == [0.1, 0.1, 0.1, 0.1, 0.1]
+    assert perception.calls == 7
+    assert len(verifier.calls) == 6
+    assert all(
+        call["before_snapshot"] is before
+        for call in verifier.calls
+    )
+    assert [
+        call["after_snapshot"]
+        for call in verifier.calls[1:]
+    ] == list(settling_snapshots)
+    assert len(recovery.calls) == 1
+
+
+def test_semantic_retry_starts_only_after_click_settling_exhausts():
+    events = []
+    step = _step(max_attempts=2)
+    before = _snapshot(second=0)
+    after_first = _snapshot(second=1)
+    after_poll = _snapshot(second=2)
+    after_retry = _snapshot(second=3)
+    first_action = _action(x=11, y=22)
+    retry_action = _action(x=77, y=88, reason="prepared by recovery")
+
+    class EventExecutor(RecordingExecutor):
+        def execute(self, action):
+            events.append(f"execute:{action.arguments['x']}")
+            return super().execute(action)
+
+    class EventRecovery(RecordingRecovery):
+        def prepare_retry(self, **kwargs):
+            events.append("recovery")
+            return super().prepare_retry(**kwargs)
+
+    class EventSleeper(RecordingSleeper):
+        def __call__(self, seconds):
+            events.append("settle")
+            super().__call__(seconds)
+
+    recovery = EventRecovery((_retry_ready(retry_action),))
+    sleeper = EventSleeper()
+    executor = EventExecutor()
+    verifier = RecordingVerifier(
+        (
+            ActionVerificationStatus.INCONCLUSIVE,
+            ActionVerificationStatus.INCONCLUSIVE,
+            ActionVerificationStatus.VERIFIED,
+        )
+    )
+
+    result = _agent_loop(
+        perception_engine=SequencePerception(
+            (
+                before,
+                after_first,
+                after_poll,
+                after_retry,
+            )
+        ),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(first_action),)
+        ),
+        executor=executor,
+        verifier=verifier,
+        recovery=recovery,
+        post_action_settle_timeout_seconds=0.1,
+        post_action_settle_poll_seconds=0.1,
+        settling_sleep=sleeper,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    assert executor.calls == [first_action, retry_action]
+    assert events == ["execute:11", "settle", "recovery", "execute:77"]
+    assert len(result.state.steps) == 2
+    assert recovery.calls[0]["latest_snapshot"] is after_poll
+    assert verifier.calls[2]["before_snapshot"] is after_poll
+    assert verifier.calls[2]["after_snapshot"] is after_retry
+
+
+def test_successful_immediate_click_verification_does_not_sleep():
+    action = _action()
+    recovery = RecordingRecovery(())
+    sleeper = RecordingSleeper()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception(
+            (
+                _snapshot(second=0),
+                _snapshot(second=1),
+            )
+        ),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=RecordingExecutor(),
+        verifier=RecordingVerifier((ActionVerificationStatus.VERIFIED,)),
+        recovery=recovery,
+        post_action_settle_timeout_seconds=0.2,
+        post_action_settle_poll_seconds=0.1,
+        settling_sleep=sleeper,
+    ).run(_plan(_step()))
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    assert sleeper.calls == []
+    assert recovery.calls == []
+
+
+def test_failed_tool_result_does_not_use_click_settling():
+    action = _action()
+    recovery = RecordingRecovery((_recovery_blocked("execution failed"),))
+    sleeper = RecordingSleeper()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception(
+            (
+                _snapshot(second=0),
+                _snapshot(second=1),
+            )
+        ),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=RecordingExecutor((False,)),
+        verifier=RecordingVerifier((ActionVerificationStatus.FAILED,)),
+        recovery=recovery,
+        post_action_settle_timeout_seconds=0.2,
+        post_action_settle_poll_seconds=0.1,
+        settling_sleep=sleeper,
+    ).run(_plan(_step(max_attempts=2)))
+
+    assert result.status is AgentLoopStatus.BLOCKED
+    assert sleeper.calls == []
+    assert len(result.state.steps) == 1
+    assert recovery.calls[0]["tool_result"].success is False
+
+
+def test_zero_click_settling_timeout_preserves_immediate_recovery_behavior():
+    action = _action()
+    recovery = RecordingRecovery((_recovery_blocked("no settle"),))
+    sleeper = RecordingSleeper()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception(
+            (
+                _snapshot(second=0),
+                _snapshot(second=1),
+            )
+        ),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=RecordingExecutor(),
+        verifier=RecordingVerifier((ActionVerificationStatus.INCONCLUSIVE,)),
+        recovery=recovery,
+        post_action_settle_timeout_seconds=0.0,
+        post_action_settle_poll_seconds=0.1,
+        settling_sleep=sleeper,
+    ).run(_plan(_step(max_attempts=2)))
+
+    assert result.status is AgentLoopStatus.BLOCKED
+    assert sleeper.calls == []
+    assert len(recovery.calls) == 1
+
+
+def test_generic_immediate_verified_transition_completes_without_recovery():
+    step = _generic_step()
+    before = _snapshot(
+        (
+            _element(text="OLD_STATE"),
+            _element(text="MENU"),
+        ),
+        second=0,
+    )
+    after = _snapshot((_element(text="NEW_STATE"),), second=1)
+    action = _action()
+    executor = RecordingExecutor()
+    verifier = RecordingVerifier(())
+    recovery = RecordingRecovery(())
+    state_transition_verifier = RecordingStateTransitionVerifier()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception((before, after)),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=executor,
+        verifier=verifier,
+        state_transition_verifier=state_transition_verifier,
+        recovery=recovery,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    assert result.completed_plan_steps == 1
+    assert executor.calls == [action]
+    assert len(result.state.steps) == 1
+    assert result.state.steps[0].action is action
+    assert verifier.calls == []
+    assert recovery.calls == []
+    assert len(state_transition_verifier.calls) == 2
+    assert state_transition_verifier.calls[1]["before_snapshot"] is before
+    assert state_transition_verifier.calls[1]["after_snapshot"] is after
+
+
+def test_generic_before_precondition_failed_blocks_before_execution():
+    step = _generic_step()
+    before = _snapshot((_element(text="MENU"),), second=0)
+    executor = RecordingExecutor()
+    verifier = RecordingVerifier(())
+    recovery = RecordingRecovery(())
+    state_transition_verifier = RecordingStateTransitionVerifier()
+    perception = SequencePerception((before,))
+
+    result = _agent_loop(
+        perception_engine=perception,
+        grounder=RecordingGrounder(()),
+        action_grounder=RecordingActionGrounder(()),
+        executor=executor,
+        verifier=verifier,
+        state_transition_verifier=state_transition_verifier,
+        recovery=recovery,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.BLOCKED
+    assert result.completed_plan_steps == 0
+    assert executor.calls == []
+    assert result.state.steps == []
+    assert verifier.calls == []
+    assert recovery.calls == []
+    assert "generic verification preconditions were not verified" in result.reason
+    assert state_transition_verifier.calls[0]["after_snapshot"] is before
+    assert perception.calls == 1
+
+
+def test_generic_before_precondition_inconclusive_blocks_before_execution():
+    step = _generic_step()
+    before = _snapshot(
+        (
+            _element(text="OLD_STATE", x=10),
+            _element(text="OLD_STATE", x=120),
+            _element(text="MENU"),
+        ),
+        second=0,
+    )
+    executor = RecordingExecutor()
+    recovery = RecordingRecovery(())
+    state_transition_verifier = RecordingStateTransitionVerifier()
+    perception = SequencePerception((before,))
+
+    result = _agent_loop(
+        perception_engine=perception,
+        grounder=RecordingGrounder(()),
+        action_grounder=RecordingActionGrounder(()),
+        executor=executor,
+        verifier=RecordingVerifier(()),
+        state_transition_verifier=state_transition_verifier,
+        recovery=recovery,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.BLOCKED
+    assert executor.calls == []
+    assert result.state.steps == []
+    assert recovery.calls == []
+    assert "generic verification preconditions were not verified" in result.reason
+    assert state_transition_verifier.calls[0]["after_snapshot"] is before
+    assert perception.calls == 1
+
+
+def test_generic_immediate_failed_after_state_exhausts_without_recovery():
+    step = _generic_step()
+    before = _snapshot(
+        (
+            _element(text="OLD_STATE"),
+            _element(text="MENU"),
+        ),
+        second=0,
+    )
+    after = _snapshot((), second=1)
+    action = _action()
+    executor = RecordingExecutor()
+    recovery = RecordingRecovery(())
+
+    result = _agent_loop(
+        perception_engine=SequencePerception((before, after)),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=executor,
+        verifier=RecordingVerifier(()),
+        state_transition_verifier=RecordingStateTransitionVerifier(),
+        recovery=recovery,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.EXHAUSTED
+    assert executor.calls == [action]
+    assert len(result.state.steps) == 1
+    assert recovery.calls == []
+    assert "generic state transition verification failed" in result.reason
+
+
+def test_generic_immediate_inconclusive_after_state_blocks_without_recovery():
+    step = _generic_step()
+    before = _snapshot(
+        (
+            _element(text="OLD_STATE"),
+            _element(text="MENU"),
+        ),
+        second=0,
+    )
+    after = _snapshot(
+        (
+            _element(text="NEW_STATE", x=10),
+            _element(text="NEW_STATE", x=120),
+        ),
+        second=1,
+    )
+    action = _action()
+    executor = RecordingExecutor()
+    recovery = RecordingRecovery(())
+
+    result = _agent_loop(
+        perception_engine=SequencePerception((before, after)),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=executor,
+        verifier=RecordingVerifier(()),
+        state_transition_verifier=RecordingStateTransitionVerifier(),
+        recovery=recovery,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.BLOCKED
+    assert executor.calls == [action]
+    assert len(result.state.steps) == 1
+    assert recovery.calls == []
+    assert "generic state transition verification was inconclusive" in result.reason
+
+
+def test_generic_settling_eventually_verifies_without_duplicate_action():
+    step = _generic_step()
+    before = _snapshot(
+        (
+            _element(text="OLD_STATE"),
+            _element(text="MENU"),
+        ),
+        second=0,
+    )
+    after_first = _snapshot((), second=1)
+    after_poll = _snapshot((_element(text="NEW_STATE"),), second=2)
+    action = _action()
+    executor = RecordingExecutor()
+    recovery = RecordingRecovery(())
+    sleeper = RecordingSleeper()
+    state_transition_verifier = RecordingStateTransitionVerifier()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception((before, after_first, after_poll)),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=executor,
+        verifier=RecordingVerifier(()),
+        state_transition_verifier=state_transition_verifier,
+        recovery=recovery,
+        post_action_settle_timeout_seconds=0.1,
+        post_action_settle_poll_seconds=0.1,
+        settling_sleep=sleeper,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    assert executor.calls == [action]
+    assert len(result.state.steps) == 1
+    assert sleeper.calls == [0.1]
+    assert recovery.calls == []
+    assert all(
+        call["before_snapshot"] is before
+        for call in state_transition_verifier.calls
+    )
+    assert state_transition_verifier.calls[1]["after_snapshot"] is after_first
+    assert state_transition_verifier.calls[2]["after_snapshot"] is after_poll
+
+
+def test_generic_settling_expires_failed_as_exhausted_without_recovery():
+    step = _generic_step()
+    before = _snapshot(
+        (
+            _element(text="OLD_STATE"),
+            _element(text="MENU"),
+        ),
+        second=0,
+    )
+    after_snapshots = tuple(_snapshot((), second=second) for second in (1, 2, 3))
+    action = _action()
+    executor = RecordingExecutor()
+    recovery = RecordingRecovery(())
+    sleeper = RecordingSleeper()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception((before, *after_snapshots)),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=executor,
+        verifier=RecordingVerifier(()),
+        state_transition_verifier=RecordingStateTransitionVerifier(),
+        recovery=recovery,
+        post_action_settle_timeout_seconds=0.2,
+        post_action_settle_poll_seconds=0.1,
+        settling_sleep=sleeper,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.EXHAUSTED
+    assert executor.calls == [action]
+    assert len(result.state.steps) == 1
+    assert sleeper.calls == [0.1, 0.1]
+    assert recovery.calls == []
+    assert "generic state transition verification failed" in result.reason
+
+
+def test_generic_settling_expires_inconclusive_as_blocked_without_recovery():
+    step = _generic_step()
+    before = _snapshot(
+        (
+            _element(text="OLD_STATE"),
+            _element(text="MENU"),
+        ),
+        second=0,
+    )
+    after_snapshots = tuple(
+        _snapshot(
+            (
+                _element(text="NEW_STATE", x=10),
+                _element(text="NEW_STATE", x=120),
+            ),
+            second=second,
+        )
+        for second in (1, 2, 3)
+    )
+    action = _action()
+    executor = RecordingExecutor()
+    recovery = RecordingRecovery(())
+    sleeper = RecordingSleeper()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception((before, *after_snapshots)),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=executor,
+        verifier=RecordingVerifier(()),
+        state_transition_verifier=RecordingStateTransitionVerifier(),
+        recovery=recovery,
+        post_action_settle_timeout_seconds=0.2,
+        post_action_settle_poll_seconds=0.1,
+        settling_sleep=sleeper,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.BLOCKED
+    assert executor.calls == [action]
+    assert len(result.state.steps) == 1
+    assert sleeper.calls == [0.1, 0.1]
+    assert recovery.calls == []
+    assert "generic state transition verification was inconclusive" in result.reason
+
+
+def test_generic_stale_initial_after_can_verify_on_later_fresh_settling_poll():
+    step = _generic_step()
+    before = _snapshot(
+        (
+            _element(text="OLD_STATE"),
+            _element(text="MENU"),
+        ),
+        second=2,
+    )
+    after_equal = _snapshot((_element(text="NEW_STATE"),), second=2)
+    after_poll = _snapshot((_element(text="NEW_STATE"),), second=3)
+    action = _action()
+    executor = RecordingExecutor()
+    sleeper = RecordingSleeper()
+    state_transition_verifier = RecordingStateTransitionVerifier()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception((before, after_equal, after_poll)),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=executor,
+        verifier=RecordingVerifier(()),
+        state_transition_verifier=state_transition_verifier,
+        recovery=RecordingRecovery(()),
+        post_action_settle_timeout_seconds=0.1,
+        post_action_settle_poll_seconds=0.1,
+        settling_sleep=sleeper,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    assert executor.calls == [action]
+    assert len(result.state.steps) == 1
+    assert sleeper.calls == [0.1]
+    assert (
+        state_transition_verifier.calls[1]["result"].status
+        is StateVerificationStatus.INCONCLUSIVE
+    )
+    assert "not newer" in state_transition_verifier.calls[1]["result"].reason
+    assert (
+        state_transition_verifier.calls[2]["result"].status
+        is StateVerificationStatus.VERIFIED
+    )
+
+
+def test_failed_tool_result_does_not_perform_generic_settling():
+    step = _generic_step()
+    before = _snapshot(
+        (
+            _element(text="OLD_STATE"),
+            _element(text="MENU"),
+        ),
+        second=0,
+    )
+    action = _action()
+    executor = RecordingExecutor((False,))
+    sleeper = RecordingSleeper()
+    recovery = RecordingRecovery(())
+    state_transition_verifier = RecordingStateTransitionVerifier()
+    perception = SequencePerception(
+        (
+            before,
+            _snapshot(second=1),
+        )
+    )
+
+    result = _agent_loop(
+        perception_engine=perception,
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=executor,
+        verifier=RecordingVerifier(()),
+        state_transition_verifier=state_transition_verifier,
+        recovery=recovery,
+        post_action_settle_timeout_seconds=0.2,
+        post_action_settle_poll_seconds=0.1,
+        settling_sleep=sleeper,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.EXHAUSTED
+    assert executor.calls == [action]
+    assert len(result.state.steps) == 1
+    assert result.state.steps[0].result.success is False
+    assert perception.calls == 2
+    assert sleeper.calls == []
+    assert len(state_transition_verifier.calls) == 1
+    assert recovery.calls == []
+    assert "generic click tool failed" in result.reason
+
+
+def test_zero_generic_settling_timeout_preserves_immediate_result():
+    step = _generic_step()
+    before = _snapshot(
+        (
+            _element(text="OLD_STATE"),
+            _element(text="MENU"),
+        ),
+        second=0,
+    )
+    after = _snapshot((), second=1)
+    action = _action()
+    executor = RecordingExecutor()
+    sleeper = RecordingSleeper()
+    state_transition_verifier = RecordingStateTransitionVerifier()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception((before, after)),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=executor,
+        verifier=RecordingVerifier(()),
+        state_transition_verifier=state_transition_verifier,
+        recovery=RecordingRecovery(()),
+        post_action_settle_timeout_seconds=0.0,
+        post_action_settle_poll_seconds=0.1,
+        settling_sleep=sleeper,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.EXHAUSTED
+    assert executor.calls == [action]
+    assert sleeper.calls == []
+    assert len(state_transition_verifier.calls) == 2
+
+
+def test_legacy_verification_target_uses_legacy_verifier_only():
+    action = _action()
+    verifier = RecordingVerifier((ActionVerificationStatus.VERIFIED,))
+    state_transition_verifier = RecordingStateTransitionVerifier()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception(
+            (
+                _snapshot(second=0),
+                _snapshot(second=1),
+            )
+        ),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(action),)
+        ),
+        executor=RecordingExecutor(),
+        verifier=verifier,
+        state_transition_verifier=state_transition_verifier,
+        recovery=RecordingRecovery(()),
+    ).run(_plan(_step()))
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    assert len(verifier.calls) == 1
+    assert state_transition_verifier.calls == []
+
+
+def test_generic_verification_spec_uses_state_transition_verifier_only():
+    step = _generic_step()
+    before = _snapshot(
+        (
+            _element(text="OLD_STATE"),
+            _element(text="MENU"),
+        ),
+        second=0,
+    )
+    after = _snapshot((_element(text="NEW_STATE"),), second=1)
+    verifier = RecordingVerifier(())
+    recovery = RecordingRecovery(())
+    state_transition_verifier = RecordingStateTransitionVerifier()
+
+    result = _agent_loop(
+        perception_engine=SequencePerception((before, after)),
+        grounder=RecordingGrounder((_grounding(GroundingStatus.RESOLVED),)),
+        action_grounder=RecordingActionGrounder(
+            (_ready_action_grounding(_action()),)
+        ),
+        executor=RecordingExecutor(),
+        verifier=verifier,
+        state_transition_verifier=state_transition_verifier,
+        recovery=recovery,
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    assert len(state_transition_verifier.calls) == 2
+    assert verifier.calls == []
+    assert recovery.calls == []
 
 
 def test_multiple_retries_pass_updated_attempt_counts_until_exhausted():
@@ -2419,14 +3348,18 @@ def test_dependency_injection_exposes_custom_and_default_components():
     assert isinstance(loop.grounder, UIGrounder)
     assert isinstance(loop.action_grounder, ActionGrounder)
     assert isinstance(loop.verifier, ActionVerifier)
+    assert isinstance(loop.state_transition_verifier, StateTransitionVerifier)
     assert isinstance(loop.recovery, ActionRecovery)
     assert loop.verifier.grounder is loop.grounder
+    assert loop.state_transition_verifier.grounder is loop.grounder
     assert loop.recovery.grounder is loop.grounder
     assert loop.recovery.action_grounder is loop.action_grounder
     assert loop.state_verifier is None
     assert loop.web_text_input_observer is None
     assert loop.text_input_controller_factory is None
     assert loop.allowed_app_names == frozenset()
+    assert loop.post_action_settle_timeout_seconds == 0.5
+    assert loop.post_action_settle_poll_seconds == 0.1
 
 
 def test_dependency_injection_accepts_state_verifier_and_app_allowlist():
@@ -2466,7 +3399,28 @@ def test_explicit_concrete_grounder_is_reused_by_default_components():
 
     assert loop.grounder is grounder
     assert loop.verifier.grounder is grounder
+    assert loop.state_transition_verifier.grounder is grounder
     assert loop.recovery.grounder is grounder
+
+
+def test_custom_compatible_grounder_is_reused_by_default_state_transition_verifier():
+    perception_engine = SequencePerception(())
+    executor = RecordingExecutor()
+    grounder = RecordingGrounder(())
+    verifier = RecordingVerifier(())
+    recovery = RecordingRecovery(())
+
+    loop = AgentLoop(
+        perception_engine=perception_engine,
+        grounder=grounder,
+        executor=executor,
+        verifier=verifier,
+        recovery=recovery,
+    )
+
+    assert loop.grounder is grounder
+    assert isinstance(loop.state_transition_verifier, StateTransitionVerifier)
+    assert loop.state_transition_verifier.grounder is grounder
 
 
 def test_explicit_concrete_action_grounder_is_reused_by_default_recovery():
@@ -2519,6 +3473,7 @@ def test_fully_explicit_custom_dependency_injection_remains_valid():
     action_grounder = RecordingActionGrounder(())
     executor = RecordingExecutor()
     verifier = RecordingVerifier(())
+    state_transition_verifier = RecordingStateTransitionVerifier()
     recovery = RecordingRecovery(())
 
     loop = AgentLoop(
@@ -2527,6 +3482,7 @@ def test_fully_explicit_custom_dependency_injection_remains_valid():
         action_grounder=action_grounder,
         executor=executor,
         verifier=verifier,
+        state_transition_verifier=state_transition_verifier,
         recovery=recovery,
     )
 
@@ -2535,6 +3491,7 @@ def test_fully_explicit_custom_dependency_injection_remains_valid():
     assert loop.action_grounder is action_grounder
     assert loop.executor is executor
     assert loop.verifier is verifier
+    assert loop.state_transition_verifier is state_transition_verifier
     assert loop.recovery is recovery
 
 
@@ -2565,6 +3522,11 @@ def test_fully_explicit_custom_dependency_injection_remains_valid():
             "verifier",
             object(),
             "verifier",
+        ),
+        (
+            "state_transition_verifier",
+            object(),
+            "state_transition_verifier",
         ),
         (
             "recovery",
@@ -2630,6 +3592,66 @@ def test_invalid_dependencies_are_rejected(keyword, value, message):
     ],
 )
 def test_invalid_frontmost_app_settling_configuration_is_rejected(
+    keyword,
+    value,
+    message,
+):
+    kwargs = {
+        "perception_engine": SequencePerception(()),
+        "executor": RecordingExecutor(),
+        keyword: value,
+    }
+
+    with pytest.raises(ValueError, match=message):
+        AgentLoop(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("keyword", "value", "message"),
+    [
+        (
+            "post_action_settle_timeout_seconds",
+            -0.1,
+            "non-negative",
+        ),
+        (
+            "post_action_settle_timeout_seconds",
+            float("nan"),
+            "finite",
+        ),
+        (
+            "post_action_settle_timeout_seconds",
+            True,
+            "numeric",
+        ),
+        (
+            "post_action_settle_timeout_seconds",
+            object(),
+            "numeric",
+        ),
+        (
+            "post_action_settle_poll_seconds",
+            0,
+            "positive",
+        ),
+        (
+            "post_action_settle_poll_seconds",
+            -0.1,
+            "positive",
+        ),
+        (
+            "post_action_settle_poll_seconds",
+            False,
+            "numeric",
+        ),
+        (
+            "post_action_settle_poll_seconds",
+            object(),
+            "numeric",
+        ),
+    ],
+)
+def test_invalid_post_action_settling_configuration_is_rejected(
     keyword,
     value,
     message,

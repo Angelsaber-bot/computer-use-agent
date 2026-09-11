@@ -444,6 +444,13 @@ def test_submit_verification_failure_fails_synthetic_workflow():
                 elements=(experiment._submit_element(),),
                 seconds=3,
             ),
+            *(
+                experiment._snapshot(
+                    elements=(experiment._submit_element(),),
+                    seconds=seconds,
+                )
+                for seconds in range(4, 9)
+            ),
         ),
     )
 

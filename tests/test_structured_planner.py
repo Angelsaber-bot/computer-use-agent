@@ -20,6 +20,11 @@ from computer_agent.planning import (
     StructuredPlanner,
     WebTextInputStep,
 )
+from computer_agent.verification import (
+    PresenceExpectation,
+    UIStateCondition,
+    VerificationSpec,
+)
 import computer_agent.planning.models as planning_models
 import computer_agent.planning.structured_planner as structured_planner_module
 
@@ -44,6 +49,25 @@ def _step(
         action_target=action_target or _target("Settings"),
         verification_target=verification_target or _target("Settings panel"),
         max_attempts=max_attempts,
+    )
+
+
+def _verification_spec(
+    *,
+    before_conditions=(),
+    after_conditions=None,
+) -> VerificationSpec:
+    if after_conditions is None:
+        after_conditions = (
+            UIStateCondition(
+                target=_target("Settings panel"),
+                expectation=PresenceExpectation.PRESENT,
+            ),
+        )
+
+    return VerificationSpec(
+        before_conditions=tuple(before_conditions),
+        after_conditions=tuple(after_conditions),
     )
 
 
@@ -197,6 +221,117 @@ def test_existing_plan_step_constructor_remains_click_target_compatible():
     assert step.action_target is action_target
     assert step.verification_target is verification_target
     assert step.max_attempts == 2
+
+
+def test_existing_positional_verification_target_remains_compatible():
+    action_target = _target("Settings")
+    verification_target = _target("Settings panel")
+
+    step = PlanStep(
+        "Open settings",
+        PlanOperation.CLICK_TARGET,
+        action_target,
+        verification_target,
+        2,
+    )
+
+    assert step.action_target is action_target
+    assert step.verification_target is verification_target
+    assert step.verification_spec is None
+    assert step.max_attempts == 2
+
+
+def test_generic_plan_step_constructs_with_verification_spec():
+    verification_spec = _verification_spec()
+
+    step = PlanStep(
+        goal="Open settings",
+        operation=PlanOperation.CLICK_TARGET,
+        action_target=_target("Settings"),
+        verification_target=None,
+        verification_spec=verification_spec,
+        max_attempts=1,
+    )
+
+    assert step.verification_target is None
+    assert step.verification_spec is verification_spec
+    assert step.max_attempts == 1
+
+
+def test_plan_step_rejects_both_verification_modes():
+    with pytest.raises(ValueError, match="exactly one"):
+        PlanStep(
+            goal="Open settings",
+            operation=PlanOperation.CLICK_TARGET,
+            action_target=_target("Settings"),
+            verification_target=_target("Settings panel"),
+            verification_spec=_verification_spec(),
+        )
+
+
+def test_plan_step_rejects_missing_verification_mode():
+    with pytest.raises(ValueError, match="exactly one"):
+        PlanStep(
+            goal="Open settings",
+            operation=PlanOperation.CLICK_TARGET,
+            action_target=_target("Settings"),
+            verification_target=None,
+            verification_spec=None,
+        )
+
+
+def test_plan_step_rejects_invalid_verification_spec_type():
+    with pytest.raises(ValueError, match="verification_spec"):
+        PlanStep(
+            goal="Open settings",
+            operation=PlanOperation.CLICK_TARGET,
+            action_target=_target("Settings"),
+            verification_target=None,
+            verification_spec=object(),
+        )
+
+
+def test_generic_plan_step_rejects_verification_spec_without_after_conditions():
+    before_only_spec = VerificationSpec(
+        before_conditions=(
+            UIStateCondition(
+                target=_target("Settings"),
+                expectation=PresenceExpectation.PRESENT,
+            ),
+        ),
+        after_conditions=(),
+    )
+
+    with pytest.raises(ValueError, match="after_condition"):
+        PlanStep(
+            goal="Open settings",
+            operation=PlanOperation.CLICK_TARGET,
+            action_target=_target("Settings"),
+            verification_target=None,
+            verification_spec=before_only_spec,
+        )
+
+
+@pytest.mark.parametrize("max_attempts", [2, 3])
+def test_generic_plan_step_rejects_retry_attempts(max_attempts):
+    with pytest.raises(ValueError, match="max_attempts"):
+        PlanStep(
+            goal="Open settings",
+            operation=PlanOperation.CLICK_TARGET,
+            action_target=_target("Settings"),
+            verification_target=None,
+            verification_spec=_verification_spec(),
+            max_attempts=max_attempts,
+        )
+
+
+@pytest.mark.parametrize("max_attempts", [1, 2, 3])
+def test_legacy_plan_step_allows_existing_valid_retry_range(max_attempts):
+    step = _step(max_attempts=max_attempts)
+
+    assert step.verification_target == _target("Settings panel")
+    assert step.verification_spec is None
+    assert step.max_attempts == max_attempts
 
 
 @pytest.mark.parametrize(
@@ -622,6 +757,34 @@ def test_structured_plan_accepts_mixed_click_and_web_text_input_steps():
         PlanOperation.CLICK_TARGET,
         PlanOperation.TYPE_INTO_TARGET,
     )
+
+
+def test_structured_plan_accepts_legacy_and_generic_plan_steps():
+    legacy_step = _step("Open settings")
+    generic_step = PlanStep(
+        goal="Open advanced settings",
+        operation=PlanOperation.CLICK_TARGET,
+        action_target=_target("Advanced"),
+        verification_target=None,
+        verification_spec=_verification_spec(),
+    )
+
+    plan = StructuredPlan(
+        task_goal="Open nested settings",
+        steps=(
+            legacy_step,
+            generic_step,
+        ),
+    )
+
+    assert plan.steps == (
+        legacy_step,
+        generic_step,
+    )
+    assert plan.steps[0].verification_target is not None
+    assert plan.steps[0].verification_spec is None
+    assert plan.steps[1].verification_target is None
+    assert plan.steps[1].verification_spec is generic_step.verification_spec
 
 
 def test_structured_planner_accepts_mixed_semantic_step_types():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Collection
+from fractions import Fraction
 import math
 import time
 
@@ -16,7 +17,7 @@ from computer_agent.agent.text_input import (
 from computer_agent.core.models import Action, ToolResult
 from computer_agent.grounding.action_grounder import ActionGrounder
 from computer_agent.grounding.action_models import ActionGroundingStatus
-from computer_agent.grounding.models import GroundingStatus
+from computer_agent.grounding.models import GroundingStatus, TargetSpec
 from computer_agent.grounding.ui_grounder import UIGrounder
 from computer_agent.planning.models import (
     ActivateAppStep,
@@ -33,11 +34,17 @@ from computer_agent.verification.action_verifier import ActionVerifier
 from computer_agent.verification.models import (
     ActionVerificationStatus,
     StateVerificationStatus,
+    VerificationSpec,
+)
+from computer_agent.verification.state_transition_verifier import (
+    StateTransitionVerifier,
 )
 
 
 _DEFAULT_FRONTMOST_APP_SETTLE_TIMEOUT_SECONDS = 1.0
 _DEFAULT_FRONTMOST_APP_SETTLE_POLL_SECONDS = 0.1
+_DEFAULT_POST_ACTION_SETTLE_TIMEOUT_SECONDS = 0.5
+_DEFAULT_POST_ACTION_SETTLE_POLL_SECONDS = 0.1
 
 
 class AgentLoop:
@@ -51,6 +58,7 @@ class AgentLoop:
         action_grounder: object | None = None,
         executor: object,
         verifier: object | None = None,
+        state_transition_verifier: object | None = None,
         recovery: object | None = None,
         state_verifier: object | None = None,
         allowed_app_names: Collection[str] | None = None,
@@ -59,6 +67,12 @@ class AgentLoop:
         ),
         frontmost_app_settle_poll_seconds: float = (
             _DEFAULT_FRONTMOST_APP_SETTLE_POLL_SECONDS
+        ),
+        post_action_settle_timeout_seconds: float = (
+            _DEFAULT_POST_ACTION_SETTLE_TIMEOUT_SECONDS
+        ),
+        post_action_settle_poll_seconds: float = (
+            _DEFAULT_POST_ACTION_SETTLE_POLL_SECONDS
         ),
         settling_sleep: Callable[[float], None] = time.sleep,
         web_text_input_observer: Callable[[], object] | None = None,
@@ -100,6 +114,16 @@ class AgentLoop:
             "verifier",
         )
 
+        if state_transition_verifier is None:
+            state_transition_verifier = StateTransitionVerifier(
+                grounder=grounder
+            )
+        _require_method(
+            state_transition_verifier,
+            "verify",
+            "state_transition_verifier",
+        )
+
         if recovery is None:
             recovery = _default_recovery(
                 grounder,
@@ -133,6 +157,16 @@ class AgentLoop:
             "frontmost_app_settle_poll_seconds",
             allow_zero=False,
         )
+        post_action_settle_timeout_seconds = _validate_seconds(
+            post_action_settle_timeout_seconds,
+            "post_action_settle_timeout_seconds",
+            allow_zero=True,
+        )
+        post_action_settle_poll_seconds = _validate_seconds(
+            post_action_settle_poll_seconds,
+            "post_action_settle_poll_seconds",
+            allow_zero=False,
+        )
         if not callable(settling_sleep):
             raise ValueError("settling_sleep must be callable")
 
@@ -155,6 +189,7 @@ class AgentLoop:
         self._action_grounder = action_grounder
         self._executor = executor
         self._verifier = verifier
+        self._state_transition_verifier = state_transition_verifier
         self._recovery = recovery
         self._state_verifier = state_verifier
         self._allowed_app_names = _normalize_allowed_app_names(
@@ -165,6 +200,12 @@ class AgentLoop:
         )
         self._frontmost_app_settle_poll_seconds = (
             frontmost_app_settle_poll_seconds
+        )
+        self._post_action_settle_timeout_seconds = (
+            post_action_settle_timeout_seconds
+        )
+        self._post_action_settle_poll_seconds = (
+            post_action_settle_poll_seconds
         )
         self._settling_sleep = settling_sleep
         self._web_text_input_observer = web_text_input_observer
@@ -203,6 +244,12 @@ class AgentLoop:
         return self._verifier
 
     @property
+    def state_transition_verifier(self) -> object:
+        """Return the generic state transition verifier used by this loop."""
+
+        return self._state_transition_verifier
+
+    @property
     def recovery(self) -> object:
         """Return the recovery policy used by this loop."""
 
@@ -231,6 +278,18 @@ class AgentLoop:
         """Return exact application names authorized for activation."""
 
         return self._allowed_app_names
+
+    @property
+    def post_action_settle_timeout_seconds(self) -> float:
+        """Return the click post-action verification settling timeout."""
+
+        return self._post_action_settle_timeout_seconds
+
+    @property
+    def post_action_settle_poll_seconds(self) -> float:
+        """Return the click post-action verification settling poll interval."""
+
+        return self._post_action_settle_poll_seconds
 
     def run(self, plan: StructuredPlan) -> AgentLoopResult:
         """Run all plan steps until completion or a typed terminal outcome."""
@@ -322,6 +381,15 @@ class AgentLoop:
     ) -> AgentLoopResult | None:
         before_snapshot = self._perception_engine.observe()
 
+        if step.verification_spec is not None:
+            return self._run_generic_click_step(
+                plan=plan,
+                state=state,
+                step=step,
+                completed_plan_steps=completed_plan_steps,
+                before_snapshot=before_snapshot,
+            )
+
         grounding_result = self._grounder.ground(
             step.action_target,
             before_snapshot.fused_elements,
@@ -387,6 +455,26 @@ class AgentLoop:
             ):
                 return None
 
+            if (
+                tool_result.success
+                and self._post_action_settle_timeout_seconds > 0.0
+            ):
+                after_snapshot, verification_result = (
+                    self._verify_click_target_with_settling(
+                        action=action,
+                        tool_result=tool_result,
+                        before_snapshot=before_snapshot,
+                        after_snapshot=after_snapshot,
+                        verification_result=verification_result,
+                        target_spec=step.verification_target,
+                    )
+                )
+                if (
+                    verification_result.status
+                    is ActionVerificationStatus.VERIFIED
+                ):
+                    return None
+
             recovery_result = self._recovery.prepare_retry(
                 verification_result=verification_result,
                 tool_result=tool_result,
@@ -447,6 +535,262 @@ class AgentLoop:
             raise RuntimeError(
                 f"unsupported recovery status: {recovery_result.status}"
             )
+
+    def _run_generic_click_step(
+        self,
+        *,
+        plan: StructuredPlan,
+        state: AgentState,
+        step: PlanStep,
+        completed_plan_steps: int,
+        before_snapshot: object,
+    ) -> AgentLoopResult | None:
+        verification_spec = step.verification_spec
+        if verification_spec is None:
+            raise RuntimeError(
+                "generic click step requires verification_spec"
+            )
+
+        before_precondition_result = (
+            self._verify_generic_before_conditions(
+                before_snapshot=before_snapshot,
+                verification_spec=verification_spec,
+            )
+        )
+        if (
+            before_precondition_result is not None
+            and before_precondition_result.status
+            is not StateVerificationStatus.VERIFIED
+        ):
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.BLOCKED,
+                reason=(
+                    "generic verification preconditions were not "
+                    "verified: "
+                    f"{before_precondition_result.reason}"
+                ),
+            )
+
+        grounding_result = self._grounder.ground(
+            step.action_target,
+            before_snapshot.fused_elements,
+        )
+        if grounding_result.status is not GroundingStatus.RESOLVED:
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.BLOCKED,
+                reason=(
+                    "initial grounding was "
+                    f"{grounding_result.status.value}: "
+                    f"{grounding_result.reason}"
+                ),
+            )
+
+        action_grounding_result = self._action_grounder.ground_click(
+            grounding_result,
+            before_snapshot.frame.screen_size,
+        )
+        if (
+            action_grounding_result.status
+            is not ActionGroundingStatus.READY
+        ):
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.BLOCKED,
+                reason=(
+                    "initial action grounding was "
+                    f"{action_grounding_result.status.value}: "
+                    f"{action_grounding_result.reason}"
+                ),
+            )
+
+        action = action_grounding_result.action
+        if action is None:
+            raise RuntimeError(
+                "READY action grounding did not contain an action"
+            )
+
+        tool_result = self._executor.execute(action)
+        state.record_step(action, tool_result)
+        after_snapshot = self._perception_engine.observe()
+        if not tool_result.success:
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.EXHAUSTED,
+                reason=(
+                    "generic click tool failed: "
+                    f"{tool_result.error}"
+                ),
+            )
+
+        after_snapshot, verification_result = (
+            self._verify_state_transition_with_settling(
+                before_snapshot=before_snapshot,
+                after_snapshot=after_snapshot,
+                verification_spec=verification_spec,
+            )
+        )
+
+        if (
+            verification_result.status
+            is StateVerificationStatus.VERIFIED
+        ):
+            return None
+
+        if (
+            verification_result.status
+            is StateVerificationStatus.FAILED
+        ):
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.EXHAUSTED,
+                reason=(
+                    "generic state transition verification failed: "
+                    f"{verification_result.reason}"
+                ),
+            )
+
+        if (
+            verification_result.status
+            is StateVerificationStatus.INCONCLUSIVE
+        ):
+            return _terminal_failure(
+                plan=plan,
+                state=state,
+                completed_plan_steps=completed_plan_steps,
+                status=AgentLoopStatus.BLOCKED,
+                reason=(
+                    "generic state transition verification was "
+                    "inconclusive: "
+                    f"{verification_result.reason}"
+                ),
+            )
+
+        raise RuntimeError(
+            "unsupported generic state transition verification status: "
+            f"{verification_result.status}"
+        )
+
+    def _verify_generic_before_conditions(
+        self,
+        *,
+        before_snapshot: object,
+        verification_spec: VerificationSpec,
+    ):
+        if not verification_spec.before_conditions:
+            return None
+
+        before_only_spec = VerificationSpec(
+            before_conditions=verification_spec.before_conditions,
+            after_conditions=(),
+        )
+        return self._state_transition_verifier.verify(
+            before_snapshot=before_snapshot,
+            after_snapshot=before_snapshot,
+            verification_spec=before_only_spec,
+        )
+
+    def _verify_state_transition_with_settling(
+        self,
+        *,
+        before_snapshot: object,
+        after_snapshot: object,
+        verification_spec: VerificationSpec,
+    ) -> tuple[object, object]:
+        latest_after_snapshot = after_snapshot
+        latest_verification_result = self._state_transition_verifier.verify(
+            before_snapshot=before_snapshot,
+            after_snapshot=latest_after_snapshot,
+            verification_spec=verification_spec,
+        )
+        if (
+            latest_verification_result.status
+            is StateVerificationStatus.VERIFIED
+        ):
+            return latest_after_snapshot, latest_verification_result
+
+        remaining_seconds = Fraction(
+            str(self._post_action_settle_timeout_seconds)
+        )
+        poll_seconds = Fraction(str(self._post_action_settle_poll_seconds))
+
+        while remaining_seconds > 0:
+            sleep_seconds = min(
+                poll_seconds,
+                remaining_seconds,
+            )
+            self._settling_sleep(float(sleep_seconds))
+            remaining_seconds -= sleep_seconds
+
+            latest_after_snapshot = self._perception_engine.observe()
+            latest_verification_result = (
+                self._state_transition_verifier.verify(
+                    before_snapshot=before_snapshot,
+                    after_snapshot=latest_after_snapshot,
+                    verification_spec=verification_spec,
+                )
+            )
+            if (
+                latest_verification_result.status
+                is StateVerificationStatus.VERIFIED
+            ):
+                return latest_after_snapshot, latest_verification_result
+
+        return latest_after_snapshot, latest_verification_result
+
+    def _verify_click_target_with_settling(
+        self,
+        *,
+        action: Action,
+        tool_result: ToolResult,
+        before_snapshot: object,
+        after_snapshot: object,
+        verification_result: object,
+        target_spec: TargetSpec,
+    ) -> tuple[object, object]:
+        remaining_seconds = Fraction(
+            str(self._post_action_settle_timeout_seconds)
+        )
+        poll_seconds = Fraction(str(self._post_action_settle_poll_seconds))
+        latest_after_snapshot = after_snapshot
+        latest_verification_result = verification_result
+
+        while remaining_seconds > 0:
+            sleep_seconds = min(
+                poll_seconds,
+                remaining_seconds,
+            )
+            self._settling_sleep(float(sleep_seconds))
+            remaining_seconds -= sleep_seconds
+
+            latest_after_snapshot = self._perception_engine.observe()
+            latest_verification_result = (
+                self._verifier.verify_target_appeared(
+                    action=action,
+                    tool_result=tool_result,
+                    before_snapshot=before_snapshot,
+                    after_snapshot=latest_after_snapshot,
+                    target_spec=target_spec,
+                )
+            )
+            if (
+                latest_verification_result.status
+                is ActionVerificationStatus.VERIFIED
+            ):
+                return latest_after_snapshot, latest_verification_result
+
+        return latest_after_snapshot, latest_verification_result
 
     def _run_read_clipboard_step(
         self,
