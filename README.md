@@ -257,3 +257,13 @@ Experiment 06.01 introduced the reusable interactive task runtime under `src/com
 The deterministic Experiment 06.01 acceptance harness validates two independent scenarios. The first demonstrates `started -> paused -> resumed -> completed` and proves that worker progress does not cross the checkpoint while paused. The second demonstrates `started -> paused -> stop_requested -> stopped` and proves that no worker progress occurs after the stop request.
 
 Final Experiment 06.01 validation: focused runtime and experiment tests `30 passed`; complete repository suite `1738 passed in 7.11s`; `pip check` reported no broken requirements; `git diff --check` passed; and direct Experiment 06.01 acceptance passed.
+
+Experiment 06.02 added the first interactive desktop Agent Workspace under `src/computer_agent/app/`. The PySide6 application is a real front end for the Phase 06 `TaskRuntime`: users can enter a task, start execution, pause at cooperative safe checkpoints, resume execution, stop safely, and observe runtime activity through a structured event stream.
+
+The workspace architecture keeps GUI concerns separate from runtime execution. `WorkspaceController` owns the active `TaskRuntime`, while `RuntimeEventBridge` forwards runtime events into the Qt main thread before UI updates. Worker threads never directly modify Qt widgets.
+
+Experiment 06.02 also exposed and corrected a lifecycle event-ordering race under concurrent resume/completion. `TaskRuntime` now serializes lifecycle transitions and event publication with a reentrant transition lock, preserving consistent ordering between status updates and emitted runtime events.
+
+The formal Experiment 06.02 harness runs the real workspace offscreen and verifies workspace construction, runtime event delivery, pause checkpoint blocking, resume continuation, terminal state, and final control-state behavior. The visible application remains available through `python -m computer_agent.app`.
+
+Final Experiment 06.02 validation: workspace focused suite `13 passed`; runtime/workspace focused suite `21 passed`; complete repository suite `1751 passed in 7.71s`; `pip check` reported no broken requirements; `git diff --check` passed; manual visible Workspace validation passed for Start, Pause, Resume, and Stop; and formal Experiment 06.02 acceptance passed.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from threading import RLock
 
 from computer_agent.runtime.control import (
     RuntimeControl,
@@ -43,6 +44,7 @@ class TaskRuntime:
         self._worker = worker
         self._control = RuntimeControl()
         self._event_bus = event_bus or RuntimeEventBus()
+        self._transition_lock = RLock()
 
     @property
     def task(self) -> RuntimeTask:
@@ -63,11 +65,12 @@ class TaskRuntime:
                 f"cannot run task with status {self._task.status.value}"
             )
 
-        self._task.set_status(RuntimeStatus.RUNNING)
-        self._emit(
-            RuntimeEventType.TASK_STARTED,
-            "Task runtime started.",
-        )
+        with self._transition_lock:
+            self._task.set_status(RuntimeStatus.RUNNING)
+            self._emit(
+                RuntimeEventType.TASK_STARTED,
+                "Task runtime started.",
+            )
 
         try:
             self._worker(
@@ -76,74 +79,80 @@ class TaskRuntime:
                 self._publish_progress,
             )
         except RuntimeStopRequested:
-            self._task.set_status(RuntimeStatus.STOPPED)
-            self._emit(
-                RuntimeEventType.TASK_STOPPED,
-                "Task stopped at a safe runtime checkpoint.",
-            )
+            with self._transition_lock:
+                self._task.set_status(RuntimeStatus.STOPPED)
+                self._emit(
+                    RuntimeEventType.TASK_STOPPED,
+                    "Task stopped at a safe runtime checkpoint.",
+                )
             return
         except Exception as error:
-            self._task.last_error = str(error)
-            self._task.set_status(RuntimeStatus.FAILED)
-            self._emit(
-                RuntimeEventType.TASK_FAILED,
-                "Task runtime failed.",
-                error=str(error),
-            )
+            with self._transition_lock:
+                self._task.last_error = str(error)
+                self._task.set_status(RuntimeStatus.FAILED)
+                self._emit(
+                    RuntimeEventType.TASK_FAILED,
+                    "Task runtime failed.",
+                    error=str(error),
+                )
             return
 
-        self._task.set_status(RuntimeStatus.COMPLETED)
-        self._emit(
-            RuntimeEventType.TASK_COMPLETED,
-            "Task runtime completed.",
-        )
+        with self._transition_lock:
+            self._task.set_status(RuntimeStatus.COMPLETED)
+            self._emit(
+                RuntimeEventType.TASK_COMPLETED,
+                "Task runtime completed.",
+            )
 
     def pause(self) -> bool:
         """Request cooperative pause."""
-        if self._task.status is not RuntimeStatus.RUNNING:
-            return False
+        with self._transition_lock:
+            if self._task.status is not RuntimeStatus.RUNNING:
+                return False
 
-        if not self._control.pause():
-            return False
+            if not self._control.pause():
+                return False
 
-        self._task.set_status(RuntimeStatus.PAUSED)
-        self._emit(
-            RuntimeEventType.TASK_PAUSED,
-            "Task runtime paused.",
-        )
-        return True
+            self._task.set_status(RuntimeStatus.PAUSED)
+            self._emit(
+                RuntimeEventType.TASK_PAUSED,
+                "Task runtime paused.",
+            )
+            return True
 
     def resume(self) -> bool:
         """Resume cooperative execution."""
-        if self._task.status is not RuntimeStatus.PAUSED:
-            return False
+        with self._transition_lock:
+            if self._task.status is not RuntimeStatus.PAUSED:
+                return False
 
-        if not self._control.resume():
-            return False
+            if not self._control.resume():
+                return False
 
-        self._task.set_status(RuntimeStatus.RUNNING)
-        self._emit(
-            RuntimeEventType.TASK_RESUMED,
-            "Task runtime resumed.",
-        )
-        return True
+            self._task.set_status(RuntimeStatus.RUNNING)
+            self._emit(
+                RuntimeEventType.TASK_RESUMED,
+                "Task runtime resumed.",
+            )
+            return True
 
     def stop(self) -> bool:
         """Request clean termination at the next safe checkpoint."""
-        if self._task.status not in (
-            RuntimeStatus.RUNNING,
-            RuntimeStatus.PAUSED,
-        ):
-            return False
+        with self._transition_lock:
+            if self._task.status not in (
+                RuntimeStatus.RUNNING,
+                RuntimeStatus.PAUSED,
+            ):
+                return False
 
-        if not self._control.request_stop():
-            return False
+            if not self._control.request_stop():
+                return False
 
-        self._emit(
-            RuntimeEventType.STOP_REQUESTED,
-            "Task stop requested.",
-        )
-        return True
+            self._emit(
+                RuntimeEventType.STOP_REQUESTED,
+                "Task stop requested.",
+            )
+            return True
 
     def _publish_progress(self, message: str) -> None:
         if not isinstance(message, str) or not message.strip():
@@ -160,11 +169,12 @@ class TaskRuntime:
         message: str,
         **data: object,
     ) -> None:
-        self._event_bus.publish(
-            RuntimeEvent(
-                event_type=event_type,
-                task_id=self._task.task_id,
-                message=message,
-                data=dict(data),
+        with self._transition_lock:
+            self._event_bus.publish(
+                RuntimeEvent(
+                    event_type=event_type,
+                    task_id=self._task.task_id,
+                    message=message,
+                    data=dict(data),
+                )
             )
-        )

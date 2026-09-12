@@ -4501,3 +4501,93 @@ The worker reaches a cooperative checkpoint, pause is accepted, stop wakes the p
 **Result:**
 
 Experiment 06.01 established the control and event substrate required for the Phase 06 Agent Workspace and later interactive observe-decide-execute-verify loops. Pause and stop are cooperative and occur only at explicit safe runtime checkpoints rather than interrupting an action midway.
+
+### Experiment 02: Agent Workspace
+
+**Date:** September 12, 2026
+
+**Objective:**
+
+Expose the Phase 06 interactive runtime through a real desktop workspace while preserving separation between Qt presentation logic and runtime execution.
+
+**Production Files:**
+
+- `src/computer_agent/app/__init__.py`
+- `src/computer_agent/app/__main__.py`
+- `src/computer_agent/app/event_bridge.py`
+- `src/computer_agent/app/workspace_controller.py`
+- `src/computer_agent/app/main_window.py`
+- `src/computer_agent/runtime/task_runtime.py`
+
+**Implemented:**
+
+- Added PySide6 `6.11.2` as the application dependency.
+- Added a visible desktop Agent Workspace.
+- Added task text input and real Start, Pause/Resume, and Stop controls.
+- Added current runtime status and current-activity display.
+- Added a user-readable runtime activity log.
+- Added `WorkspaceController` as the boundary between Qt and `TaskRuntime`.
+- Added `RuntimeEventBridge` so worker-thread runtime events enter the Qt main thread through queued signal delivery.
+- The GUI does not directly control worker implementation details.
+- The worker thread never directly updates Qt widgets.
+- Completing or stopping a task restores the appropriate terminal UI controls.
+- Closing the application requests safe runtime termination if a task remains active.
+
+**Concurrency Finding:**
+
+Initial workspace integration exposed two event-ordering problems.
+
+First, runtime events emitted from the worker thread were queued into Qt while main-thread control events could be delivered synchronously. A paused UI could therefore be overwritten by an earlier `TASK_STARTED` event that was processed later. The workspace now uses an explicit Qt queued connection for all runtime event delivery.
+
+Second, full-repository testing exposed a race between Resume and rapid worker completion. The worker could wake immediately after `RuntimeControl.resume()` and emit completion concurrently with the resume lifecycle transition.
+
+`TaskRuntime` now owns a reentrant lifecycle transition lock. Runtime lifecycle status changes and corresponding event publication are serialized for:
+
+- task start;
+- pause;
+- resume;
+- stop request;
+- stopped;
+- failed;
+- completed.
+
+This preserves consistent event ordering without interrupting the cooperative safe-checkpoint execution model.
+
+**Formal Experiment:**
+
+`experiments/phase06_interactive_agent/experiment_02_agent_workspace.py`
+
+The deterministic offscreen acceptance harness uses the real `MainWindow`, `WorkspaceController`, `TaskRuntime`, `RuntimeControl`, and runtime event bridge.
+
+It verifies:
+
+- required workspace widgets exist;
+- Start creates a real runtime task;
+- runtime events reach the workspace;
+- Pause enters the Paused UI state;
+- the worker cannot cross its cooperative checkpoint while paused;
+- Resume allows the worker to continue;
+- the runtime reaches Completed;
+- activity evidence contains start, pause, resume, progress, and completion events;
+- terminal controls return to a safe state.
+
+Manual visible validation separately confirmed real Start, Pause, Resume, and Stop operation in the macOS workspace.
+
+**Validation:**
+
+- Workspace focused tests: `13 passed`
+- Runtime/workspace focused tests: `21 passed`
+- Complete repository suite: `1751 passed in 7.71s`
+- `pip check`: no broken requirements
+- `git diff --check`: passed
+- Manual visible Workspace Start: passed
+- Manual visible Workspace Pause: passed
+- Manual visible Workspace Resume: passed
+- Manual visible Workspace Stop: passed
+- Formal Experiment 06.02: passed
+
+**Result:**
+
+Experiment 06.02 converted the Phase 06 runtime into an interactive desktop product surface. The workspace is now a real controller and observer of task execution rather than a display-only GUI.
+
+The current worker used for standalone workspace demonstration remains deterministic. Evidence-grounded semantic task progress, claims, uncertainty, and persistent task state are intentionally deferred to Experiment 06.03.

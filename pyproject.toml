@@ -18,8 +18,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+app = [
+    "PySide6==6.11.2",
+]
 dev = [
     "pytest==9.1.1",
+    "PySide6==6.11.2",
 ]
 
 [tool.setuptools.packages.find]
