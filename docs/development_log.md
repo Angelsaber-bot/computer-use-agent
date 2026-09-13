@@ -4802,3 +4802,96 @@ The integrated in-app demo shows:
 3. Stage 3: current confirmation evidence records `Submission REG-42`, the side effect is confirmed, the subgoal is verified, the completion gate opens, and adaptive reasoning returns `COMPLETE`.
 
 No browser action or paid OpenAI call is performed by the deterministic workspace demo.
+
+## Phase 06.05 — Persistent Restart-Safe Task Resume
+
+Phase 06.05 introduced durable evidence-grounded task checkpoints and deterministic restart recovery.
+
+### Persistence
+
+Added:
+
+- `src/computer_agent/task/persistence.py`
+- versioned JSON-compatible `TaskState` serialization
+- complete round-trip restoration
+- cross-record reference validation
+- corrupt-checkpoint rejection
+- unsupported-schema rejection
+- atomic checkpoint replacement
+- failure behavior that preserves the previous valid checkpoint
+
+Persistence is intentionally lossless. Loading a checkpoint reconstructs the saved semantic state without applying recovery policy.
+
+### Restart Recovery
+
+Added:
+
+- `src/computer_agent/task/recovery.py`
+- `prepare_state_for_resume(...)`
+- `ResumePreparationReport`
+- restart-time evidence freshness handling
+
+Current environment-dependent evidence is marked stale after restart. Existing `TaskStateTransitions` then invalidates verified claims and subgoals that no longer have current supporting evidence.
+
+User-confirmation evidence is preserved because it represents durable user authorization rather than a volatile observation of the environment.
+
+`COMPLETED` and `CANCELLED` tasks are not resumable through this recovery path.
+
+### Side-Effect Safety Across Restart
+
+Non-idempotent side effects preserve:
+
+- side-effect state
+- side-effect ID
+- idempotence metadata
+- semantic action key
+
+An `EXECUTED` or `UNKNOWN` non-idempotent side effect therefore remains represented in `blocked_action_keys` after checkpoint reload and restart preparation.
+
+The existing Phase 06.04 adaptive safety guard remains authoritative. Persistence does not redefine its semantics.
+
+### Formal Experiment
+
+Added:
+
+- `experiments/phase06_interactive_agent/experiment_05_persistent_task_resume.py`
+- `tests/test_experiment_05_persistent_task_resume.py`
+- `tests/test_task_state_persistence.py`
+- `tests/test_task_recovery.py`
+
+Formal acceptance sequence:
+
+1. Build evidence-grounded task progress.
+2. Execute a non-idempotent Submit side effect.
+3. Mark the external outcome UNKNOWN.
+4. Save an atomic checkpoint.
+5. Discard the original in-memory `TaskState`.
+6. Load a new object from disk.
+7. Prepare the state for restart.
+8. Confirm old environment evidence becomes stale.
+9. Confirm dependent verified progress becomes unknown.
+10. Confirm the UNKNOWN side effect survives.
+11. Confirm duplicate Submit remains blocked.
+12. Let the model boundary propose the unsafe Submit.
+13. Reject it deterministically.
+14. Perform one bounded safety replan.
+15. Select `Check status`.
+16. Add fresh post-restart confirmation evidence.
+17. Confirm the side effect.
+18. Re-verify the claim and subgoal.
+19. Open the deterministic completion gate.
+20. Complete the task.
+21. Save and reload the final completed checkpoint.
+
+The experiment passed all acceptance conditions.
+
+### Final Validation
+
+- formal Experiment 06.05: passed
+- focused persistence/recovery tests: passed
+- Phase 06 regression: passed
+- full repository: `1849 passed`
+- `pip check`: no broken requirements
+- `git diff --check`: clean
+
+Phase 06.05 remains deterministic and headless. Real browser restart/resume validation is deferred to Experiment 06.06.

@@ -336,3 +336,19 @@ Live OpenAI validation exposed an important reliability finding: prompt instruct
 The live validation performs reasoning only and does not click the browser or create real external side effects.
 
 Final Phase 06.04 validation completed with 1822 passing tests, no broken Python requirements, and a clean `git diff --check`.
+
+#### Experiment 06.05: Persistent Restart-Safe Task Resume
+
+Experiment 06.05 adds versioned persistent checkpoints and restart-safe recovery for evidence-grounded `TaskState`.
+
+`TaskStateStore` serializes complete semantic task state into inspectable JSON, preserves IDs and timezone-aware timestamps, validates cross-record references on load, rejects unsupported schema versions and corrupt checkpoints, and writes checkpoints atomically through a temporary file followed by `os.replace()`.
+
+Restart preparation is intentionally separate from persistence. Loading a checkpoint reproduces the saved facts without silently changing them. `prepare_state_for_resume(...)` then applies restart policy: environment-dependent current evidence becomes stale, verified claims and subgoals that depend on stale evidence become unknown, and resumable tasks return to a paused state before new observation.
+
+External side-effect history survives restart. In particular, an `EXECUTED` or `UNKNOWN` non-idempotent side effect keeps its semantic `action_key`, so the existing adaptive reasoning safety layer continues to reject unsafe duplicate actions after a process restart.
+
+The deterministic Experiment 06.05 acceptance scenario saves a task after a Submit action has an UNKNOWN external outcome, destroys the original in-memory state, loads a new `TaskState` from disk, invalidates old environment evidence, preserves the UNKNOWN non-idempotent side effect, and invokes the existing `AdaptiveDecisionEngine`. A duplicate Submit proposal is rejected by the deterministic safety gate, the bounded replan chooses `Check status`, fresh confirmation evidence re-verifies the task, the completion gate opens, and the final completed state survives a second checkpoint save/load cycle.
+
+Experiment 06.05 does not yet claim live website restart recovery. The restart and reconciliation scenario is deterministic and headless. Live browser validation is the next experiment.
+
+Final Phase 06.05 validation completed with 1849 passing tests, no broken Python requirements, and a clean `git diff --check`.
