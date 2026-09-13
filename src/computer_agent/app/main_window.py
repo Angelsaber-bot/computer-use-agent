@@ -30,6 +30,9 @@ from computer_agent.app.evidence_demo import (
 )
 from computer_agent.app.task_state_bridge import TaskStateBridge
 from computer_agent.app.task_state_panel import TaskStatePanel
+from computer_agent.app.storage import (
+    create_default_task_store,
+)
 from computer_agent.app.workspace_controller import (
     WorkspaceController,
 )
@@ -42,7 +45,10 @@ from computer_agent.runtime import (
 from computer_agent.reasoning import (
     AdaptiveDecisionSnapshot,
 )
-from computer_agent.task import TaskStateSnapshot
+from computer_agent.task import (
+    TaskStateSnapshot,
+    TaskStateStore,
+)
 
 
 class MainWindow(QMainWindow):
@@ -53,6 +59,7 @@ class MainWindow(QMainWindow):
         *,
         worker_factory: Callable[[], RuntimeWorker] | None = None,
         semantic_worker_factory: Callable | None = None,
+        task_store: TaskStateStore | None = None,
     ) -> None:
         super().__init__()
 
@@ -61,6 +68,15 @@ class MainWindow(QMainWindow):
         self._adaptive_decision_bridge = (
             AdaptiveDecisionBridge(self)
         )
+
+        if (
+            task_store is None
+            and worker_factory is None
+            and semantic_worker_factory is None
+        ):
+            task_store = (
+                create_default_task_store()
+            )
 
         if (
             worker_factory is not None
@@ -81,6 +97,7 @@ class MainWindow(QMainWindow):
                 adaptive_decision_listener=(
                     self._adaptive_decision_bridge.publish
                 ),
+                task_store=task_store,
             )
         elif worker_factory is not None:
             self._controller = WorkspaceController(
@@ -90,6 +107,7 @@ class MainWindow(QMainWindow):
                 adaptive_decision_listener=(
                     self._adaptive_decision_bridge.publish
                 ),
+                task_store=task_store,
             )
         else:
             self._controller = WorkspaceController(
@@ -99,6 +117,7 @@ class MainWindow(QMainWindow):
                 adaptive_decision_listener=(
                     self._adaptive_decision_bridge.publish
                 ),
+                task_store=task_store,
             )
 
         self._build_ui()
@@ -170,6 +189,19 @@ class MainWindow(QMainWindow):
             self._start_task
         )
         button_row.addWidget(self._start_button)
+
+        self._resume_last_button = QPushButton(
+            "Resume Last Task"
+        )
+        self._resume_last_button.setObjectName(
+            "resumeLastButton"
+        )
+        self._resume_last_button.clicked.connect(
+            self._resume_last_task
+        )
+        button_row.addWidget(
+            self._resume_last_button
+        )
 
         self._pause_button = QPushButton("Pause")
         self._pause_button.setObjectName("pauseButton")
@@ -317,12 +349,75 @@ class MainWindow(QMainWindow):
 
         self._task_input.setReadOnly(True)
         self._start_button.setEnabled(False)
+        self._resume_last_button.setEnabled(False)
         self._pause_button.setEnabled(True)
         self._stop_button.setEnabled(True)
 
         self._status_value.setText("Starting")
         self._current_value.setText(
             "Waiting for the runtime to begin."
+        )
+
+    @Slot()
+    def _resume_last_task(self) -> None:
+        try:
+            task_id = (
+                self._controller
+                .latest_resumable_task_id()
+            )
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(
+                self,
+                "Unable to Resume Task",
+                str(error),
+            )
+            return
+
+        if task_id is None:
+            QMessageBox.information(
+                self,
+                "No Task to Resume",
+                "No resumable task checkpoint was found.",
+            )
+            self._refresh_resume_last_button()
+            return
+
+        self._activity_log.clear()
+        self._task_state_panel.clear()
+        self._adaptive_decision_panel.clear()
+
+        try:
+            task = self._controller.restore_task(
+                task_id
+            )
+        except (
+            OSError,
+            ValueError,
+            RuntimeError,
+        ) as error:
+            QMessageBox.critical(
+                self,
+                "Unable to Resume Task",
+                str(error),
+            )
+            return
+
+        self._task_input.setPlainText(
+            task.goal
+        )
+        self._task_input.setReadOnly(True)
+
+        self._start_button.setEnabled(False)
+        self._resume_last_button.setEnabled(False)
+        self._pause_button.setEnabled(True)
+        self._stop_button.setEnabled(True)
+
+        self._status_value.setText(
+            "Restoring"
+        )
+        self._current_value.setText(
+            "Loading persisted task state and "
+            "re-observing the current environment."
         )
 
     @Slot()
@@ -434,11 +529,28 @@ class MainWindow(QMainWindow):
             f"{event.message}"
         )
 
+    def _refresh_resume_last_button(
+        self,
+    ) -> None:
+        try:
+            task_id = (
+                self._controller
+                .latest_resumable_task_id()
+            )
+        except (OSError, ValueError):
+            task_id = None
+
+        self._resume_last_button.setEnabled(
+            task_id is not None
+            and not self._controller.running
+        )
+
     def _set_idle_controls(self) -> None:
         self._start_button.setEnabled(True)
         self._pause_button.setEnabled(False)
         self._stop_button.setEnabled(False)
         self._pause_button.setText("Pause")
+        self._refresh_resume_last_button()
 
     def _set_terminal_controls(self) -> None:
         self._task_input.setReadOnly(False)
@@ -446,6 +558,7 @@ class MainWindow(QMainWindow):
         self._pause_button.setEnabled(False)
         self._stop_button.setEnabled(False)
         self._pause_button.setText("Pause")
+        self._refresh_resume_last_button()
 
     def closeEvent(
         self,

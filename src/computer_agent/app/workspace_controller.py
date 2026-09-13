@@ -19,6 +19,8 @@ from computer_agent.reasoning import (
 from computer_agent.task import (
     TaskState,
     TaskStateSnapshot,
+    TaskStateStore,
+    prepare_state_for_resume,
 )
 
 
@@ -54,6 +56,7 @@ class WorkspaceController:
         adaptive_decision_listener: (
             AdaptiveDecisionListener | None
         ) = None,
+        task_store: TaskStateStore | None = None,
     ) -> None:
         if not callable(event_listener):
             raise ValueError(
@@ -105,6 +108,17 @@ class WorkspaceController:
                 "adaptive_decision_listener must be callable"
             )
 
+        if (
+            task_store is not None
+            and not isinstance(
+                task_store,
+                TaskStateStore,
+            )
+        ):
+            raise ValueError(
+                "task_store must be a TaskStateStore or None"
+            )
+
         self._worker_factory = worker_factory
         self._semantic_worker_factory = (
             semantic_worker_factory
@@ -116,6 +130,7 @@ class WorkspaceController:
         self._adaptive_decision_listener = (
             adaptive_decision_listener
         )
+        self._task_store = task_store
 
         self._runtime: TaskRuntime | None = None
         self._task_state: TaskState | None = None
@@ -151,81 +166,156 @@ class WorkspaceController:
         )
 
     def start(self, goal: str) -> RuntimeTask:
-        """Create and start one interactive task."""
-
+        """Create and start one new interactive task."""
         if not isinstance(goal, str) or not goal.strip():
             raise ValueError(
                 "goal must be a non-empty string"
             )
 
         with self._lock:
-            if self._runtime is not None:
-                status = self._runtime.task.status
+            self._ensure_start_allowed_locked()
 
-                if status in (
-                    RuntimeStatus.CREATED,
-                    RuntimeStatus.RUNNING,
-                    RuntimeStatus.PAUSED,
-                ):
-                    raise RuntimeError(
-                        "cannot start a new task while "
-                        "another task is active"
-                    )
-
-            task = RuntimeTask(goal=goal)
+            task = RuntimeTask(
+                goal=goal
+            )
             task_state = TaskState(
                 goal=goal,
                 task_id=task.task_id,
             )
 
-            event_bus = RuntimeEventBus()
-            event_bus.subscribe(
-                self._event_listener
-            )
-
-            if (
-                self._semantic_worker_factory
-                is not None
-            ):
-                worker = (
-                    self._semantic_worker_factory(
-                        task_state,
-                        lambda: self._publish_task_state(
-                            task_state
-                        ),
-                        self._publish_adaptive_decision,
-                    )
-                )
-            else:
-                assert self._worker_factory is not None
-                worker = self._worker_factory()
-
-            runtime = TaskRuntime(
+            return self._launch_locked(
                 task=task,
-                worker=worker,
-                event_bus=event_bus,
+                task_state=task_state,
             )
 
-            thread = Thread(
-                target=runtime.run,
-                name=(
-                    "computer-agent-task-"
-                    f"{task.task_id}"
-                ),
-                daemon=True,
+    def restore_task(
+        self,
+        task_id: str,
+    ) -> RuntimeTask:
+        """Load and restart one persisted semantic task."""
+        if (
+            not isinstance(task_id, str)
+            or not task_id.strip()
+        ):
+            raise ValueError(
+                "task_id must be a non-empty string"
             )
 
-            self._runtime = runtime
-            self._task_state = task_state
-            self._thread = thread
+        if self._task_store is None:
+            raise RuntimeError(
+                "task persistence is not configured"
+            )
 
-            self._publish_task_state(
+        if self._semantic_worker_factory is None:
+            raise RuntimeError(
+                "persisted semantic tasks require "
+                "a semantic worker factory"
+            )
+
+        with self._lock:
+            self._ensure_start_allowed_locked()
+
+            task_state = self._task_store.load(
+                task_id
+            )
+
+            prepare_state_for_resume(
                 task_state
             )
 
-            thread.start()
+            task = RuntimeTask(
+                goal=task_state.goal,
+                task_id=task_state.task_id,
+            )
 
-            return task
+            return self._launch_locked(
+                task=task,
+                task_state=task_state,
+            )
+
+    def _ensure_start_allowed_locked(
+        self,
+    ) -> None:
+        if self._runtime is None:
+            return
+
+        status = self._runtime.task.status
+
+        if status in (
+            RuntimeStatus.CREATED,
+            RuntimeStatus.RUNNING,
+            RuntimeStatus.PAUSED,
+        ):
+            raise RuntimeError(
+                "cannot start a new task while "
+                "another task is active"
+            )
+
+    def _launch_locked(
+        self,
+        *,
+        task: RuntimeTask,
+        task_state: TaskState,
+    ) -> RuntimeTask:
+        event_bus = RuntimeEventBus()
+        event_bus.subscribe(
+            self._event_listener
+        )
+
+        if (
+            self._semantic_worker_factory
+            is not None
+        ):
+            worker = (
+                self._semantic_worker_factory(
+                    task_state,
+                    lambda: self._publish_task_state(
+                        task_state
+                    ),
+                    self._publish_adaptive_decision,
+                )
+            )
+        else:
+            assert self._worker_factory is not None
+            worker = self._worker_factory()
+
+        runtime = TaskRuntime(
+            task=task,
+            worker=worker,
+            event_bus=event_bus,
+        )
+
+        thread = Thread(
+            target=runtime.run,
+            name=(
+                "computer-agent-task-"
+                f"{task.task_id}"
+            ),
+            daemon=True,
+        )
+
+        self._runtime = runtime
+        self._task_state = task_state
+        self._thread = thread
+
+        self._publish_task_state(
+            task_state
+        )
+
+        thread.start()
+
+        return task
+
+    def latest_resumable_task_id(
+        self,
+    ) -> str | None:
+        """Return the most recent resumable persisted task ID."""
+        store = self._task_store
+
+        if store is None:
+            return None
+
+        return store.latest_resumable_task_id()
 
     def pause(self) -> bool:
         runtime = self.runtime
@@ -270,6 +360,11 @@ class WorkspaceController:
         self,
         state: TaskState,
     ) -> None:
+        store = self._task_store
+
+        if store is not None:
+            store.save(state)
+
         listener = self._task_state_listener
 
         if listener is None:

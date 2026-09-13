@@ -319,3 +319,116 @@ def test_workspace_event_bridge_delivers_runtime_event(
         qapp,
         lambda: received == [event],
     )
+
+
+def test_workspace_resume_last_task_uses_persisted_checkpoint(
+    qapp,
+    tmp_path,
+) -> None:
+    from computer_agent.task import (
+        TaskState,
+        TaskStateStatus,
+        TaskStateStore,
+    )
+
+    release = Event()
+
+    store = TaskStateStore(
+        tmp_path
+    )
+
+    persisted = TaskState(
+        goal="Resume persisted workspace task",
+        task_id="workspace-resume-ui-task",
+        status=TaskStateStatus.PAUSED,
+    )
+
+    store.save(
+        persisted
+    )
+
+    def semantic_factory(
+        state,
+        publish_state,
+        publish_decision,
+    ):
+        def worker(
+            task,
+            control,
+            progress,
+        ) -> None:
+            state.status = (
+                TaskStateStatus.RUNNING
+            )
+            state.touch()
+            publish_state()
+
+            progress(
+                "Restored persisted workspace task."
+            )
+
+            if not release.wait(
+                timeout=1.0
+            ):
+                raise RuntimeError(
+                    "resume UI release timeout"
+                )
+
+        return worker
+
+    window = MainWindow(
+        semantic_worker_factory=(
+            semantic_factory
+        ),
+        task_store=store,
+    )
+
+    resume_button = window.findChild(
+        QPushButton,
+        "resumeLastButton",
+    )
+    task_input = window.findChild(
+        QPlainTextEdit,
+        "taskInput",
+    )
+
+    assert resume_button is not None
+    assert task_input is not None
+    assert resume_button.isEnabled()
+
+    resume_button.click()
+
+    assert _wait_until(
+        qapp,
+        lambda: (
+            window.controller.task
+            is not None
+        ),
+    )
+
+    task = window.controller.task
+
+    assert task is not None
+    assert (
+        task.task_id
+        == persisted.task_id
+    )
+    assert (
+        task_input.toPlainText()
+        == persisted.goal
+    )
+    assert (
+        task_input.isReadOnly()
+    )
+    assert (
+        resume_button.isEnabled()
+        is False
+    )
+
+    release.set()
+
+    assert window.controller.wait(
+        timeout=1.0
+    )
+
+    window.close()

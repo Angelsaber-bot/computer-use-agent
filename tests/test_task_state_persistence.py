@@ -373,3 +373,90 @@ def test_failed_atomic_replace_preserves_old_checkpoint(
     assert not list(
         tmp_path.glob(".task-state-*.tmp")
     )
+
+
+def test_store_finds_latest_resumable_task(
+    tmp_path,
+) -> None:
+    from datetime import (
+        datetime,
+        timezone,
+    )
+
+    from computer_agent.task import (
+        TaskState,
+        TaskStateStatus,
+        TaskStateStore,
+    )
+
+    store = TaskStateStore(
+        tmp_path
+    )
+
+    older = TaskState(
+        goal="Older resumable task",
+        task_id="older-resumable",
+        status=TaskStateStatus.PAUSED,
+        updated_at=datetime(
+            2026,
+            9,
+            13,
+            10,
+            0,
+            tzinfo=timezone.utc,
+        ),
+    )
+
+    newer_resumable = TaskState(
+        goal="Newer resumable task",
+        task_id="newer-resumable",
+        status=TaskStateStatus.WAITING_USER,
+        updated_at=datetime(
+            2026,
+            9,
+            13,
+            10,
+            30,
+            tzinfo=timezone.utc,
+        ),
+    )
+
+    newest_terminal = TaskState(
+        goal="Newest completed task",
+        task_id="newest-terminal",
+        status=TaskStateStatus.COMPLETED,
+        updated_at=datetime(
+            2026,
+            9,
+            13,
+            11,
+            0,
+            tzinfo=timezone.utc,
+        ),
+    )
+
+    store.save(older)
+    store.save(newest_terminal)
+    store.save(newer_resumable)
+
+    assert (
+        store.latest_resumable_task_id()
+        == "newer-resumable"
+    )
+
+
+def test_store_latest_resumable_returns_none_without_checkpoints(
+    tmp_path,
+) -> None:
+    from computer_agent.task import (
+        TaskStateStore,
+    )
+
+    store = TaskStateStore(
+        tmp_path
+    )
+
+    assert (
+        store.latest_resumable_task_id()
+        is None
+    )

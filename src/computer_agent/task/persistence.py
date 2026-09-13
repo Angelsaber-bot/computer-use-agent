@@ -692,6 +692,90 @@ class TaskStateStore:
 
         return state
 
+    def latest_resumable_task_id(
+        self,
+    ) -> str | None:
+        """Return the newest non-terminal persisted task ID."""
+        if not self._directory.is_dir():
+            return None
+
+        candidates: list[TaskState] = []
+
+        try:
+            paths = tuple(
+                self._directory.glob("*.json")
+            )
+        except OSError as error:
+            raise TaskStatePersistenceError(
+                "failed to inspect checkpoint directory: "
+                f"{error}"
+            ) from error
+
+        for path in paths:
+            try:
+                raw_text = path.read_text(
+                    encoding="utf-8"
+                )
+            except OSError as error:
+                raise TaskStatePersistenceError(
+                    "failed to inspect task checkpoint: "
+                    f"{error}"
+                ) from error
+
+            try:
+                payload = json.loads(
+                    raw_text
+                )
+            except json.JSONDecodeError as error:
+                raise TaskStatePersistenceError(
+                    "task checkpoint contains invalid JSON"
+                ) from error
+
+            if not isinstance(
+                payload,
+                dict,
+            ):
+                raise TaskStatePersistenceError(
+                    "task checkpoint root must be a dictionary"
+                )
+
+            state = task_state_from_payload(
+                payload
+            )
+
+            expected_path = self.checkpoint_path(
+                state.task_id
+            )
+
+            if path.name != expected_path.name:
+                raise TaskStatePersistenceError(
+                    "checkpoint filename does not match "
+                    "its persisted task_id"
+                )
+
+            if state.status in (
+                TaskStateStatus.COMPLETED,
+                TaskStateStatus.CANCELLED,
+            ):
+                continue
+
+            candidates.append(
+                state
+            )
+
+        if not candidates:
+            return None
+
+        latest = max(
+            candidates,
+            key=lambda state: (
+                state.updated_at,
+                state.task_id,
+            ),
+        )
+
+        return latest.task_id
+
     def exists(
         self,
         task_id: str,

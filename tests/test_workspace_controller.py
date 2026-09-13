@@ -194,3 +194,260 @@ def test_workspace_controller_allows_new_task_after_completion() -> None:
     assert second.status is RuntimeStatus.COMPLETED
 
     assert first.task_id != second.task_id
+
+
+def test_workspace_controller_persists_semantic_state(
+    tmp_path,
+) -> None:
+    from computer_agent.task import (
+        TaskStateStatus,
+        TaskStateStore,
+    )
+
+    store = TaskStateStore(
+        tmp_path
+    )
+
+    def semantic_factory(
+        state,
+        publish_state,
+        publish_decision,
+    ):
+        def worker(
+            task,
+            control,
+            progress,
+        ) -> None:
+            state.status = (
+                TaskStateStatus.RUNNING
+            )
+            state.touch()
+            publish_state()
+
+        return worker
+
+    controller = WorkspaceController(
+        semantic_worker_factory=(
+            semantic_factory
+        ),
+        event_listener=lambda event: None,
+        task_store=store,
+    )
+
+    task = controller.start(
+        "Persist workspace task"
+    )
+
+    assert controller.wait(
+        timeout=1.0
+    )
+
+    assert store.exists(
+        task.task_id
+    )
+
+    restored = store.load(
+        task.task_id
+    )
+
+    assert (
+        restored.task_id
+        == task.task_id
+    )
+    assert (
+        restored.goal
+        == "Persist workspace task"
+    )
+    assert (
+        restored.status
+        is TaskStateStatus.RUNNING
+    )
+
+
+def test_workspace_controller_restores_semantic_task(
+    tmp_path,
+) -> None:
+    from threading import Event
+
+    from computer_agent.task import (
+        ClaimRecord,
+        ClaimStatus,
+        EvidenceFreshness,
+        EvidenceKind,
+        EvidenceRecord,
+        SubgoalRecord,
+        SubgoalStatus,
+        TaskState,
+        TaskStateStatus,
+        TaskStateStore,
+    )
+
+    store = TaskStateStore(
+        tmp_path
+    )
+
+    evidence = EvidenceRecord(
+        evidence_id="evidence-live-browser",
+        summary=(
+            "The current browser contains "
+            "the intended search query."
+        ),
+        source="Live browser observation",
+        kind=EvidenceKind.VERIFICATION,
+    )
+
+    claim = ClaimRecord(
+        claim_id="claim-query-entered",
+        statement=(
+            "The intended search query "
+            "has been entered."
+        ),
+        status=ClaimStatus.VERIFIED,
+        evidence_ids=(
+            evidence.evidence_id,
+        ),
+    )
+
+    subgoal = SubgoalRecord(
+        subgoal_id="subgoal-enter-query",
+        description=(
+            "Enter the intended search query."
+        ),
+        status=SubgoalStatus.VERIFIED,
+        claim_ids=(
+            claim.claim_id,
+        ),
+    )
+
+    persisted = TaskState(
+        goal=(
+            "Search python.org and continue "
+            "after restart."
+        ),
+        task_id="workspace-persisted-task",
+        status=TaskStateStatus.PAUSED,
+        evidence={
+            evidence.evidence_id: evidence,
+        },
+        claims={
+            claim.claim_id: claim,
+        },
+        subgoals={
+            subgoal.subgoal_id: subgoal,
+        },
+    )
+
+    store.save(
+        persisted
+    )
+
+    release = Event()
+
+    def semantic_factory(
+        state,
+        publish_state,
+        publish_decision,
+    ):
+        def worker(
+            task,
+            control,
+            progress,
+        ) -> None:
+            if not release.wait(
+                timeout=1.0
+            ):
+                raise RuntimeError(
+                    "restore worker release timeout"
+                )
+
+        return worker
+
+    controller = WorkspaceController(
+        semantic_worker_factory=(
+            semantic_factory
+        ),
+        event_listener=lambda event: None,
+        task_store=store,
+    )
+
+    task = controller.restore_task(
+        persisted.task_id
+    )
+
+    restored = controller.task_state
+
+    assert restored is not None
+    assert restored is not persisted
+
+    assert (
+        task.task_id
+        == persisted.task_id
+    )
+    assert (
+        restored.task_id
+        == persisted.task_id
+    )
+    assert (
+        restored.goal
+        == persisted.goal
+    )
+    assert (
+        restored.status
+        is TaskStateStatus.PAUSED
+    )
+
+    assert (
+        restored.evidence[
+            evidence.evidence_id
+        ].freshness
+        is EvidenceFreshness.STALE
+    )
+
+    assert (
+        restored.claims[
+            claim.claim_id
+        ].status
+        is ClaimStatus.UNKNOWN
+    )
+
+    assert (
+        restored.subgoals[
+            subgoal.subgoal_id
+        ].status
+        is SubgoalStatus.UNKNOWN
+    )
+
+    release.set()
+
+    assert controller.wait(
+        timeout=1.0
+    )
+
+    checkpoint = store.load(
+        persisted.task_id
+    )
+
+    assert (
+        checkpoint.evidence[
+            evidence.evidence_id
+        ].freshness
+        is EvidenceFreshness.STALE
+    )
+
+
+def test_workspace_controller_restore_requires_persistence() -> None:
+    controller = WorkspaceController(
+        semantic_worker_factory=(
+            lambda state, publish_state, publish_decision:
+            lambda task, control, progress: None
+        ),
+        event_listener=lambda event: None,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="task persistence is not configured",
+    ):
+        controller.restore_task(
+            "missing-task"
+        )
