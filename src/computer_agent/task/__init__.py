@@ -27,6 +27,7 @@ from computer_agent.task.recovery import (
     prepare_state_for_resume,
 )
 from computer_agent.task.snapshot import (
+    ArtifactSnapshot,
     EvidenceSnapshot,
     SideEffectSnapshot,
     SubgoalSnapshot,
@@ -46,6 +47,7 @@ __all__ = [
     "SubgoalSnapshot",
     "SideEffectSnapshot",
     "EvidenceSnapshot",
+    "ArtifactSnapshot",
     "ArtifactRecord",
     "ClaimRecord",
     "ClaimStatus",

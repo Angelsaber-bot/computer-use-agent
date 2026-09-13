@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QLabel,
     QPlainTextEdit,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -35,6 +37,15 @@ class AdaptiveDecisionPanel(QWidget):
         )
         observation_layout = QFormLayout(
             observation_group
+        )
+
+        self._source_value = QLabel("None")
+        self._source_value.setObjectName(
+            "decisionSource"
+        )
+        observation_layout.addRow(
+            "Source:",
+            self._source_value,
         )
 
         self._application_value = QLabel("None")
@@ -69,7 +80,7 @@ class AdaptiveDecisionPanel(QWidget):
         layout.addWidget(observation_group)
 
         attempts_group = QGroupBox(
-            "Decision Attempts"
+            "Decision Trace"
         )
         attempts_layout = QVBoxLayout(
             attempts_group
@@ -99,7 +110,7 @@ class AdaptiveDecisionPanel(QWidget):
             "attemptCount"
         )
         safety_layout.addRow(
-            "Attempt count:",
+            "Model attempts:",
             self._attempt_count_value,
         )
 
@@ -148,6 +159,12 @@ class AdaptiveDecisionPanel(QWidget):
             "Final Decision"
         )
         final_layout = QFormLayout(final_group)
+        final_layout.setRowWrapPolicy(
+            QFormLayout.RowWrapPolicy.WrapLongRows
+        )
+        final_layout.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
 
         self._final_type_value = QLabel("None")
         self._final_type_value.setObjectName(
@@ -171,7 +188,9 @@ class AdaptiveDecisionPanel(QWidget):
         self._target_value.setObjectName(
             "finalTarget"
         )
-        self._target_value.setWordWrap(True)
+        _configure_wrapped_value_label(
+            self._target_value
+        )
         final_layout.addRow(
             "Target:",
             self._target_value,
@@ -181,7 +200,9 @@ class AdaptiveDecisionPanel(QWidget):
         self._effect_value.setObjectName(
             "finalEffect"
         )
-        self._effect_value.setWordWrap(True)
+        _configure_wrapped_value_label(
+            self._effect_value
+        )
         final_layout.addRow(
             "Expected effect:",
             self._effect_value,
@@ -191,7 +212,9 @@ class AdaptiveDecisionPanel(QWidget):
         self._final_summary_value.setObjectName(
             "finalSummary"
         )
-        self._final_summary_value.setWordWrap(True)
+        _configure_wrapped_value_label(
+            self._final_summary_value
+        )
         final_layout.addRow(
             "Summary/question:",
             self._final_summary_value,
@@ -203,6 +226,7 @@ class AdaptiveDecisionPanel(QWidget):
         self.clear()
 
     def clear(self) -> None:
+        self._source_value.setText("None")
         self._application_value.setText("None")
         self._window_value.setText("None")
         self._visible_text_view.setPlainText(
@@ -235,6 +259,11 @@ class AdaptiveDecisionPanel(QWidget):
             raise ValueError(
                 "snapshot must be an AdaptiveDecisionSnapshot"
             )
+
+        self._source_value.setText(
+            snapshot.decision_source
+            or "None"
+        )
 
         self._application_value.setText(
             snapshot.observation_application
@@ -296,6 +325,21 @@ class AdaptiveDecisionPanel(QWidget):
             or snapshot.question
             or "None"
         )
+
+
+def _configure_wrapped_value_label(
+    label: QLabel,
+) -> None:
+    label.setWordWrap(True)
+    label.setMinimumWidth(0)
+    label.setAlignment(
+        Qt.AlignmentFlag.AlignLeft
+        | Qt.AlignmentFlag.AlignTop
+    )
+    label.setSizePolicy(
+        QSizePolicy.Policy.Expanding,
+        QSizePolicy.Policy.MinimumExpanding,
+    )
 
 
 def _format_attempts(

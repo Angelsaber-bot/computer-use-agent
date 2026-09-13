@@ -1,3 +1,6 @@
+import subprocess
+
+import pytest
 from unittest.mock import patch
 
 from computer_agent.control.computer_controller import ComputerController
@@ -131,3 +134,133 @@ def test_open_url(mock_run):
         ["open", "-a", "Google Chrome", "https://example.com"],
         check=True
     )
+
+@patch("computer_agent.control.computer_controller.subprocess.run")
+def test_open_url_in_new_chrome_window(mock_run):
+    controller = ComputerController()
+
+    controller.open_url(
+        "https://example.com",
+        browser="Google Chrome",
+        new_window=True,
+    )
+
+    mock_run.assert_called_once()
+
+    command = mock_run.call_args.args[0]
+
+    assert command[0] == "osascript"
+    assert command[1] == "-e"
+    assert "make new window" in command[2]
+    assert (
+        "set URL of active tab of taskWindow"
+        in command[2]
+    )
+    assert command[-1] == "https://example.com"
+    assert (
+        mock_run.call_args.kwargs["check"]
+        is True
+    )
+
+
+@patch(
+    "computer_agent.control.computer_controller.subprocess.run"
+)
+def test_open_task_chrome_window_creates_marker_tab(mock_run):
+    controller = ComputerController()
+
+    marker_url = controller.open_task_chrome_window(
+        "https://www.python.org/",
+        "task-123",
+    )
+
+    assert marker_url == (
+        "about:blank#computer-agent-task=task-123"
+    )
+    mock_run.assert_called_once()
+
+    command = mock_run.call_args.args[0]
+
+    assert command[0] == "osascript"
+    assert command[1] == "-e"
+    assert "make new window" in command[2]
+    assert "make new tab at end of tabs" in command[2]
+    assert "set active tab index of taskWindow to 1" in command[2]
+    assert command[-2] == "https://www.python.org/"
+    assert command[-1] == marker_url
+
+
+@patch(
+    "computer_agent.control.computer_controller.subprocess.run"
+)
+def test_activate_task_chrome_window_selects_working_tab(mock_run):
+    controller = ComputerController()
+
+    controller.activate_task_chrome_window(
+        "about:blank#computer-agent-task=task-123",
+        "https://www.python.org/",
+    )
+
+    mock_run.assert_called_once()
+
+    command = mock_run.call_args.args[0]
+
+    assert command[0] == "osascript"
+    assert command[1] == "-e"
+    assert "markerFoundInWindow" in command[2]
+    assert "workingTabCount is not 1" in command[2]
+    assert "foundWindowCount is greater than 1" in command[2]
+    assert (
+        "set active tab index of selectedWindow to selectedTabIndex"
+        in command[2]
+    )
+    assert command[-2] == "about:blank#computer-agent-task=task-123"
+    assert command[-1] == "https://www.python.org/"
+
+
+def test_activate_task_chrome_window_rejects_invalid_marker():
+    controller = ComputerController()
+
+    with pytest.raises(
+        ValueError,
+        match="marker_url must be a valid",
+    ):
+        controller.activate_task_chrome_window(
+            "chrome-window-id:48291",
+            "https://www.python.org/",
+        )
+
+
+def test_activate_task_chrome_window_rejects_empty_working_prefix():
+    controller = ComputerController()
+
+    with pytest.raises(
+        ValueError,
+        match="working_url_prefix must be a non-empty string",
+    ):
+        controller.activate_task_chrome_window(
+            "about:blank#computer-agent-task=task-123",
+            " ",
+        )
+
+
+@patch(
+    "computer_agent.control.computer_controller.subprocess.run"
+)
+def test_activate_task_chrome_window_fails_closed_when_chrome_rejects(
+    mock_run,
+):
+    mock_run.side_effect = subprocess.CalledProcessError(
+        1,
+        ["osascript"],
+    )
+    controller = ComputerController()
+
+    with pytest.raises(
+        RuntimeError,
+        match="could not be safely resumed",
+    ):
+        controller.activate_task_chrome_window(
+            "about:blank#computer-agent-task=task-123",
+            "https://www.python.org/",
+        )

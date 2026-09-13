@@ -9,10 +9,13 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QLayout,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -144,14 +147,18 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self.setWindowTitle("Computer Agent")
-        self.resize(780, 640)
+        self.setMinimumSize(640, 360)
+        self.resize(760, 520)
 
         central = QWidget()
         self.setCentralWidget(central)
 
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(14)
+        layout.setSizeConstraint(
+            QLayout.SizeConstraint.SetNoConstraint
+        )
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
 
         title = QLabel("Computer Agent")
         title.setStyleSheet(
@@ -178,7 +185,7 @@ class MainWindow(QMainWindow):
         self._task_input.setPlaceholderText(
             "Describe what you want the agent to do..."
         )
-        self._task_input.setFixedHeight(95)
+        self._task_input.setFixedHeight(68)
         layout.addWidget(self._task_input)
 
         button_row = QHBoxLayout()
@@ -248,6 +255,11 @@ class MainWindow(QMainWindow):
 
         tabs = QTabWidget()
         tabs.setObjectName("workspaceTabs")
+        tabs.setMinimumHeight(0)
+        tabs.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Ignored,
+        )
 
         self._task_state_panel = TaskStatePanel()
         activity_tab = QWidget()
@@ -263,6 +275,11 @@ class MainWindow(QMainWindow):
         self._activity_log = QPlainTextEdit()
         self._activity_log.setObjectName("activityLog")
         self._activity_log.setReadOnly(True)
+        self._activity_log.setMinimumHeight(0)
+        self._activity_log.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Ignored,
+        )
         self._activity_log.setPlaceholderText(
             "Runtime events will appear here."
         )
@@ -276,17 +293,46 @@ class MainWindow(QMainWindow):
             "Overview / Activity",
         )
 
+        task_state_scroll = QScrollArea()
+        task_state_scroll.setObjectName(
+            "taskStateScroll"
+        )
+        task_state_scroll.setWidgetResizable(
+            True
+        )
+        task_state_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        task_state_scroll.setWidget(
+            self._task_state_panel
+        )
+
         tabs.addTab(
-            self._task_state_panel,
+            task_state_scroll,
             "Task State",
         )
 
         self._adaptive_decision_panel = (
             AdaptiveDecisionPanel()
         )
+
+        adaptive_scroll = QScrollArea()
+        adaptive_scroll.setObjectName(
+            "adaptiveDecisionScroll"
+        )
+        adaptive_scroll.setWidgetResizable(
+            True
+        )
+        adaptive_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        adaptive_scroll.setWidget(
+            self._adaptive_decision_panel
+        )
+
         tabs.addTab(
-            self._adaptive_decision_panel,
-            "Adaptive Decision",
+            adaptive_scroll,
+            "Decision / Safety",
         )
 
         layout.addWidget(tabs, stretch=1)

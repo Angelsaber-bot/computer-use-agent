@@ -75,6 +75,7 @@ def test_registered_computer_tool_executes_action(
     assert result.output == {
         "url": "https://example.com",
         "browser": "Google Chrome",
+        "new_window": False,
     }
 
     controller.open_url.assert_called_once_with(

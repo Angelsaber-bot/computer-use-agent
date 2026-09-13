@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QFormLayout,
     QGroupBox,
     QLabel,
     QPlainTextEdit,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -25,6 +28,57 @@ class TaskStatePanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
+
+        summary_group = QGroupBox(
+            "Task Summary"
+        )
+        summary_layout = QFormLayout(
+            summary_group
+        )
+        summary_layout.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
+
+        self._goal_value = QLabel("None")
+        self._goal_value.setObjectName(
+            "taskStateGoal"
+        )
+        self._goal_value.setWordWrap(True)
+        self._goal_value.setMinimumHeight(0)
+        self._goal_value.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        summary_layout.addRow(
+            "Goal:",
+            self._goal_value,
+        )
+
+        self._status_value = QLabel("None")
+        self._status_value.setObjectName(
+            "taskStateStatus"
+        )
+        summary_layout.addRow(
+            "Status:",
+            self._status_value,
+        )
+
+        self._task_id_value = QLabel("None")
+        self._task_id_value.setObjectName(
+            "taskStateId"
+        )
+        self._task_id_value.setTextInteractionFlags(
+            self._task_id_value.textInteractionFlags()
+            | Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        summary_layout.addRow(
+            "Task ID:",
+            self._task_id_value,
+        )
+
+        layout.addWidget(
+            summary_group
+        )
 
         progress_group = QGroupBox("Task Progress")
         progress_layout = QVBoxLayout(progress_group)
@@ -47,6 +101,23 @@ class TaskStatePanel(QWidget):
         evidence_layout.addWidget(self._evidence_view)
 
         layout.addWidget(evidence_group)
+
+        artifacts_group = QGroupBox(
+            "Resources / Artifacts"
+        )
+        artifacts_layout = QVBoxLayout(artifacts_group)
+
+        self._artifacts_view = QPlainTextEdit()
+        self._artifacts_view.setObjectName(
+            "artifactsView"
+        )
+        self._artifacts_view.setReadOnly(True)
+        self._artifacts_view.setFixedHeight(90)
+        artifacts_layout.addWidget(
+            self._artifacts_view
+        )
+
+        layout.addWidget(artifacts_group)
 
         effect_group = QGroupBox("Side Effects")
         effect_layout = QVBoxLayout(effect_group)
@@ -90,11 +161,18 @@ class TaskStatePanel(QWidget):
         self.clear()
 
     def clear(self) -> None:
+        self._goal_value.setText("None")
+        self._status_value.setText("None")
+        self._task_id_value.setText("None")
+
         self._progress_view.setPlainText(
             "No semantic task progress yet."
         )
         self._evidence_view.setPlainText(
             "No evidence recorded yet."
+        )
+        self._artifacts_view.setPlainText(
+            "No resources recorded yet."
         )
         self._side_effects_view.setPlainText(
             "No side effects recorded yet."
@@ -113,8 +191,19 @@ class TaskStatePanel(QWidget):
                 "snapshot must be a TaskStateSnapshot"
             )
 
+        self._goal_value.setText(
+            snapshot.goal
+        )
+        self._status_value.setText(
+            snapshot.status.upper()
+        )
+        self._task_id_value.setText(
+            snapshot.task_id
+        )
+
         self._render_progress(snapshot)
         self._render_evidence(snapshot)
+        self._render_artifacts(snapshot)
         self._render_side_effects(snapshot)
         self._render_completion(snapshot)
 
@@ -170,6 +259,25 @@ class TaskStatePanel(QWidget):
 
         self._evidence_view.setPlainText(
             "\n\n".join(blocks)
+        )
+
+    def _render_artifacts(
+        self,
+        snapshot: TaskStateSnapshot,
+    ) -> None:
+        if not snapshot.artifacts:
+            self._artifacts_view.setPlainText(
+                "No resources recorded yet."
+            )
+            return
+
+        self._artifacts_view.setPlainText(
+            "\n\n".join(
+                f"{item.description}\n"
+                f"{item.location}\n"
+                f"ID: {item.artifact_id}"
+                for item in snapshot.artifacts
+            )
         )
 
     def _render_side_effects(

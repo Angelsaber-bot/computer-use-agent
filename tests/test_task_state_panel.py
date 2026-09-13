@@ -10,14 +10,17 @@ os.environ.setdefault(
 )
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
     QPlainTextEdit,
+    QSizePolicy,
 )
 
 from computer_agent.app.task_state_panel import TaskStatePanel
 from computer_agent.task import (
+    ArtifactRecord,
     ClaimRecord,
     EvidenceFreshness,
     EvidenceKind,
@@ -111,6 +114,114 @@ def test_task_state_panel_renders_verified_progress(
     assert (
         "Current external state satisfies the requirement."
         in evidence.toPlainText()
+    )
+
+
+def test_task_state_snapshot_includes_artifacts() -> None:
+    state = TaskState(
+        goal="Search python.org for typing.",
+        task_id="task-123",
+    )
+    artifact = ArtifactRecord(
+        artifact_id="live-web-browser-window",
+        description=(
+            "Agent-owned Google Chrome task window."
+        ),
+        location=(
+            "about:blank#computer-agent-task=task-123"
+        ),
+    )
+
+    state.artifacts[artifact.artifact_id] = artifact
+
+    snapshot = TaskStateSnapshot.from_state(state)
+
+    assert len(snapshot.artifacts) == 1
+    assert (
+        snapshot.artifacts[0].artifact_id
+        == "live-web-browser-window"
+    )
+    assert (
+        snapshot.artifacts[0].description
+        == "Agent-owned Google Chrome task window."
+    )
+    assert (
+        snapshot.artifacts[0].location
+        == "about:blank#computer-agent-task=task-123"
+    )
+
+
+def test_task_state_panel_renders_artifacts(
+    qapp,
+) -> None:
+    state = TaskState(
+        goal="Search python.org for typing.",
+        task_id="task-123",
+    )
+    state.artifacts[
+        "live-web-browser-window"
+    ] = ArtifactRecord(
+        artifact_id="live-web-browser-window",
+        description=(
+            "Agent-owned Google Chrome task window."
+        ),
+        location=(
+            "about:blank#computer-agent-task=task-123"
+        ),
+    )
+
+    panel = TaskStatePanel()
+    panel.render(
+        TaskStateSnapshot.from_state(state)
+    )
+
+    artifacts = panel.findChild(
+        QPlainTextEdit,
+        "artifactsView",
+    )
+
+    assert artifacts is not None
+    assert (
+        "Agent-owned Google Chrome task window."
+        in artifacts.toPlainText()
+    )
+    assert (
+        "about:blank#computer-agent-task=task-123"
+        in artifacts.toPlainText()
+    )
+
+
+def test_task_state_goal_label_wraps_without_fixed_height(
+    qapp,
+) -> None:
+    panel = TaskStatePanel()
+    goal = panel.findChild(
+        QLabel,
+        "taskStateGoal",
+    )
+    task_id = panel.findChild(
+        QLabel,
+        "taskStateId",
+    )
+
+    assert goal is not None
+    assert task_id is not None
+    assert goal.wordWrap() is True
+    assert goal.minimumHeight() == 0
+    assert (
+        goal.sizePolicy().horizontalPolicy()
+        == QSizePolicy.Policy.Expanding
+    )
+    assert (
+        goal.sizePolicy().verticalPolicy()
+        == QSizePolicy.Policy.Preferred
+    )
+    selectable_flag = (
+        task_id.textInteractionFlags()
+        & Qt.TextInteractionFlag.TextSelectableByMouse
+    )
+    assert selectable_flag == (
+        Qt.TextInteractionFlag.TextSelectableByMouse
     )
 
 

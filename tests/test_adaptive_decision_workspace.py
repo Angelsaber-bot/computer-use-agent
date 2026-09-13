@@ -15,8 +15,10 @@ import pytest
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import (
     QApplication,
+    QFormLayout,
     QLabel,
     QPlainTextEdit,
+    QSizePolicy,
     QTabWidget,
 )
 
@@ -42,6 +44,7 @@ from computer_agent.reasoning import (
     AdaptiveDecisionOutcome,
     AdaptiveDecisionSnapshot,
     AdaptiveReasoningContext,
+    DecisionAttemptSnapshot,
     NextStepDecision,
     NextStepDecisionType,
     NextStepReasoningResult,
@@ -299,6 +302,10 @@ def test_adaptive_decision_panel_renders_reasoning_snapshot(
         QLabel,
         "finalTarget",
     )
+    source = panel.findChild(
+        QLabel,
+        "decisionSource",
+    )
 
     assert observation is not None
     assert attempts is not None
@@ -306,7 +313,9 @@ def test_adaptive_decision_panel_renders_reasoning_snapshot(
     assert replan is not None
     assert blocked is not None
     assert final_target is not None
+    assert source is not None
 
+    assert source.text() == "Adaptive model"
     assert "Submit" in observation.toPlainText()
     assert attempt_count.text() == "2"
     assert replan.text() == "YES"
@@ -325,6 +334,138 @@ def test_adaptive_decision_panel_renders_reasoning_snapshot(
     assert final_target.text() == "Check status"
 
 
+def test_adaptive_decision_panel_renders_deterministic_source(
+    qapp,
+) -> None:
+    snapshot = AdaptiveDecisionSnapshot(
+        observation_application="Google Chrome",
+        observation_window=None,
+        observation_text=("Python", "Search This Site"),
+        decision_source="Deterministic live policy",
+        model_attempts=0,
+        safety_replan_used=False,
+        final_status="ACCEPTED",
+        final_decision_type="ACTION",
+        operation="click_target",
+        target_text="GO",
+        expected_effect="Submit the verified query.",
+        question=None,
+        completion_summary=None,
+        blocked_reason=None,
+        blocked_action_keys=(),
+        attempts=(
+            DecisionAttemptSnapshot(
+                attempt_number=1,
+                status="DETERMINISTIC",
+                decision_type="ACTION",
+                operation="click_target",
+                target_text="GO",
+                result="ACCEPTED",
+                reason="Fresh value evidence verified.",
+            ),
+        ),
+    )
+
+    panel = AdaptiveDecisionPanel()
+    panel.render(snapshot)
+
+    source = panel.findChild(
+        QLabel,
+        "decisionSource",
+    )
+    attempt_count = panel.findChild(
+        QLabel,
+        "attemptCount",
+    )
+    attempts = panel.findChild(
+        QPlainTextEdit,
+        "decisionAttempts",
+    )
+
+    assert source is not None
+    assert attempt_count is not None
+    assert attempts is not None
+    assert source.text() == "Deterministic live policy"
+    assert attempt_count.text() == "0"
+    assert "ACTION -> GO  ACCEPTED" in attempts.toPlainText()
+
+
+def test_adaptive_decision_final_effect_wraps_without_fixed_height(
+    qapp,
+) -> None:
+    expected_effect = (
+        "Reload the persistent checkpoint, take a fresh\n"
+        "browser observation, and continue toward search\n"
+        "submission."
+    )
+    snapshot = AdaptiveDecisionSnapshot(
+        observation_application="Google Chrome",
+        observation_window=None,
+        observation_text=("Python", "Search This Site"),
+        decision_source="Deterministic live policy",
+        model_attempts=0,
+        safety_replan_used=False,
+        final_status="ACCEPTED",
+        final_decision_type="WAIT",
+        operation="resume_after_restart",
+        target_text="Resume Last Task",
+        expected_effect=expected_effect,
+        question=None,
+        completion_summary=None,
+        blocked_reason=None,
+        blocked_action_keys=(),
+        attempts=(),
+    )
+
+    panel = AdaptiveDecisionPanel()
+    panel.render(snapshot)
+
+    target = panel.findChild(
+        QLabel,
+        "finalTarget",
+    )
+    effect = panel.findChild(
+        QLabel,
+        "finalEffect",
+    )
+    summary = panel.findChild(
+        QLabel,
+        "finalSummary",
+    )
+
+    assert target is not None
+    assert effect is not None
+    assert summary is not None
+
+    final_layout = effect.parentWidget().layout()
+
+    assert isinstance(
+        final_layout,
+        QFormLayout,
+    )
+    assert (
+        final_layout.rowWrapPolicy()
+        == QFormLayout.RowWrapPolicy.WrapLongRows
+    )
+    assert (
+        final_layout.fieldGrowthPolicy()
+        == QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+    )
+    assert target.wordWrap() is True
+    assert effect.wordWrap() is True
+    assert summary.wordWrap() is True
+    assert effect.minimumWidth() == 0
+    assert (
+        effect.sizePolicy().horizontalPolicy()
+        == QSizePolicy.Policy.Expanding
+    )
+    assert (
+        effect.sizePolicy().verticalPolicy()
+        != QSizePolicy.Policy.Fixed
+    )
+    assert effect.text() == expected_effect
+
+
 def test_main_window_contains_adaptive_decision_tab(
     qapp,
 ) -> None:
@@ -340,7 +481,7 @@ def test_main_window_contains_adaptive_decision_tab(
     )
 
     assert tabs is not None
-    assert "Adaptive Decision" in {
+    assert "Decision / Safety" in {
         tabs.tabText(index)
         for index in range(tabs.count())
     }

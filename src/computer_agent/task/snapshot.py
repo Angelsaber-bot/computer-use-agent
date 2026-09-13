@@ -32,6 +32,13 @@ class SideEffectSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactSnapshot:
+    artifact_id: str
+    description: str
+    location: str
+
+
+@dataclass(frozen=True, slots=True)
 class TaskStateSnapshot:
     """Immutable UI-safe view of one TaskState."""
 
@@ -41,6 +48,7 @@ class TaskStateSnapshot:
     subgoals: tuple[SubgoalSnapshot, ...]
     evidence: tuple[EvidenceSnapshot, ...]
     side_effects: tuple[SideEffectSnapshot, ...]
+    artifacts: tuple[ArtifactSnapshot, ...]
     pending_questions: tuple[str, ...]
     completion_allowed: bool
     completion_blockers: tuple[str, ...]
@@ -84,6 +92,14 @@ class TaskStateSnapshot:
                     action_key=item.action_key,
                 )
                 for item in state.side_effects.values()
+            ),
+            artifacts=tuple(
+                ArtifactSnapshot(
+                    artifact_id=item.artifact_id,
+                    description=item.description,
+                    location=item.location,
+                )
+                for item in state.artifacts.values()
             ),
             pending_questions=state.pending_questions,
             completion_allowed=not blockers,

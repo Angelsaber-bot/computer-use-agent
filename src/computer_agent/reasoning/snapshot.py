@@ -35,6 +35,7 @@ class AdaptiveDecisionSnapshot:
     observation_application: str | None
     observation_window: str | None
     observation_text: tuple[str, ...]
+    decision_source: str
     model_attempts: int
     safety_replan_used: bool
     final_status: str
@@ -90,6 +91,7 @@ class AdaptiveDecisionSnapshot:
             observation_text=tuple(
                 context.observation.visible_text
             ),
+            decision_source="Adaptive model",
             model_attempts=outcome.attempts,
             safety_replan_used=(
                 outcome.safety_replan_used

@@ -53,6 +53,7 @@ def test_open_url_tool_uses_default_browser():
     assert output == {
         "url": "https://example.com",
         "browser": "Google Chrome",
+        "new_window": False,
     }
 
 
@@ -76,6 +77,7 @@ def test_open_url_tool_accepts_explicit_safari_browser():
     assert output == {
         "url": "https://example.com",
         "browser": "Safari",
+        "new_window": False,
     }
 
 
@@ -129,6 +131,7 @@ def test_open_url_tool_accepts_file_fixture_url():
     assert output == {
         "url": fixture_url,
         "browser": "Google Chrome",
+        "new_window": False,
     }
 
 
@@ -360,3 +363,30 @@ def test_open_url_rejects_unsupported_browser_names(browser):
         tool.run(**arguments)
 
     controller.open_url.assert_not_called()
+
+
+def test_open_url_tool_can_request_new_chrome_window():
+    controller = Mock()
+    tool = OpenURLTool(controller)
+
+    arguments = tool.validate_arguments(
+        {
+            "url": "https://example.com",
+            "browser": "Google Chrome",
+            "new_window": True,
+        }
+    )
+
+    output = tool.run(**arguments)
+
+    controller.open_url.assert_called_once_with(
+        "https://example.com",
+        browser="Google Chrome",
+        new_window=True,
+    )
+
+    assert output == {
+        "url": "https://example.com",
+        "browser": "Google Chrome",
+        "new_window": True,
+    }

@@ -183,18 +183,33 @@ class OpenURLTool(ComputerTool):
             required=False,
             default="Google Chrome",
         ),
+        "new_window": ToolParameter(
+            bool,
+            "Whether to open the URL in a new browser window.",
+            required=False,
+            default=False,
+        ),
     }
 
     def run(self, **arguments):
         url = _validate_url(arguments["url"])
         browser = _validate_browser(arguments["browser"])
+        new_window = arguments["new_window"]
 
-        self.controller.open_url(
-            url,
-            browser=browser,
-        )
+        if new_window:
+            self.controller.open_url(
+                url,
+                browser=browser,
+                new_window=True,
+            )
+        else:
+            self.controller.open_url(
+                url,
+                browser=browser,
+            )
 
         return {
             "url": url,
             "browser": browser,
+            "new_window": new_window,
         }
