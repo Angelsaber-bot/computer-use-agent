@@ -304,6 +304,7 @@ class NextStepReasoningResult:
     status: NextStepReasoningStatus
     decision: NextStepDecision | None
     reason: str
+    rejected_decision: NextStepDecision | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(
@@ -333,12 +334,30 @@ class NextStepReasoningResult:
                     "a NextStepDecision"
                 )
 
+            if self.rejected_decision is not None:
+                raise ValueError(
+                    "READY results cannot contain "
+                    "a rejected_decision"
+                )
+
         if (
             self.status
             is NextStepReasoningStatus.BLOCKED
-            and self.decision is not None
         ):
-            raise ValueError(
-                "BLOCKED results must not "
-                "contain a decision"
-            )
+            if self.decision is not None:
+                raise ValueError(
+                    "BLOCKED results must not "
+                    "contain a decision"
+                )
+
+            if (
+                self.rejected_decision is not None
+                and not isinstance(
+                    self.rejected_decision,
+                    NextStepDecision,
+                )
+            ):
+                raise ValueError(
+                    "rejected_decision must be a "
+                    "NextStepDecision or None"
+                )

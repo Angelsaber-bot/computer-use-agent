@@ -32,6 +32,7 @@ class AdaptiveDecisionOutcome:
     result: NextStepReasoningResult
     attempts: int
     safety_replan_used: bool
+    attempt_results: tuple[NextStepReasoningResult, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(
@@ -58,6 +59,41 @@ class AdaptiveDecisionOutcome:
         ):
             raise ValueError(
                 "safety_replan_used must be a bool"
+            )
+
+        if not self.attempt_results:
+            object.__setattr__(
+                self,
+                "attempt_results",
+                (self.result,),
+            )
+
+        if not isinstance(
+            self.attempt_results,
+            tuple,
+        ):
+            raise ValueError(
+                "attempt_results must be a tuple"
+            )
+
+        if len(self.attempt_results) != self.attempts:
+            raise ValueError(
+                "attempt_results length must match attempts"
+            )
+
+        for attempt_result in self.attempt_results:
+            if not isinstance(
+                attempt_result,
+                NextStepReasoningResult,
+            ):
+                raise ValueError(
+                    "attempt_results must contain "
+                    "NextStepReasoningResult objects"
+                )
+
+        if self.attempt_results[-1] != self.result:
+            raise ValueError(
+                "last attempt result must be the final result"
             )
 
 
@@ -105,6 +141,7 @@ class AdaptiveDecisionEngine:
                 result=first,
                 attempts=1,
                 safety_replan_used=False,
+                attempt_results=(first,),
             )
 
         if (
@@ -115,6 +152,7 @@ class AdaptiveDecisionEngine:
                 result=first,
                 attempts=1,
                 safety_replan_used=False,
+                attempt_results=(first,),
             )
 
         retry_context = replace(
@@ -133,4 +171,8 @@ class AdaptiveDecisionEngine:
             result=second,
             attempts=2,
             safety_replan_used=True,
+            attempt_results=(
+                first,
+                second,
+            ),
         )

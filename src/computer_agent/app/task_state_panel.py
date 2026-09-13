@@ -184,8 +184,7 @@ class TaskStatePanel(QWidget):
 
         self._side_effects_view.setPlainText(
             "\n".join(
-                f"[{item.state.upper()}] "
-                f"{item.description}"
+                _side_effect_line(item)
                 for item in snapshot.side_effects
             )
         )
@@ -216,3 +215,23 @@ class TaskStatePanel(QWidget):
                 in snapshot.completion_blockers
             )
         )
+
+
+def _side_effect_line(
+    item,
+) -> str:
+    parts = [
+        f"[{item.state.upper()}] {item.description}",
+    ]
+
+    if item.idempotent is not None:
+        parts.append(
+            f"idempotent={item.idempotent}"
+        )
+
+    if item.action_key is not None:
+        parts.append(
+            f"action_key={item.action_key}"
+        )
+
+    return " | ".join(parts)

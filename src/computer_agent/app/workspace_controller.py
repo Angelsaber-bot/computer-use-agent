@@ -13,6 +13,9 @@ from computer_agent.runtime import (
     RuntimeWorker,
     TaskRuntime,
 )
+from computer_agent.reasoning import (
+    AdaptiveDecisionSnapshot,
+)
 from computer_agent.task import (
     TaskState,
     TaskStateSnapshot,
@@ -21,11 +24,19 @@ from computer_agent.task import (
 
 LegacyWorkerFactory = Callable[[], RuntimeWorker]
 SemanticWorkerFactory = Callable[
-    [TaskState, Callable[[], None]],
+    [
+        TaskState,
+        Callable[[], None],
+        Callable[[AdaptiveDecisionSnapshot], None],
+    ],
     RuntimeWorker,
 ]
 TaskStateListener = Callable[
     [TaskStateSnapshot],
+    None,
+]
+AdaptiveDecisionListener = Callable[
+    [AdaptiveDecisionSnapshot],
     None,
 ]
 
@@ -40,6 +51,9 @@ class WorkspaceController:
         worker_factory: LegacyWorkerFactory | None = None,
         semantic_worker_factory: SemanticWorkerFactory | None = None,
         task_state_listener: TaskStateListener | None = None,
+        adaptive_decision_listener: (
+            AdaptiveDecisionListener | None
+        ) = None,
     ) -> None:
         if not callable(event_listener):
             raise ValueError(
@@ -83,6 +97,14 @@ class WorkspaceController:
                 "task_state_listener must be callable"
             )
 
+        if (
+            adaptive_decision_listener is not None
+            and not callable(adaptive_decision_listener)
+        ):
+            raise ValueError(
+                "adaptive_decision_listener must be callable"
+            )
+
         self._worker_factory = worker_factory
         self._semantic_worker_factory = (
             semantic_worker_factory
@@ -90,6 +112,9 @@ class WorkspaceController:
         self._event_listener = event_listener
         self._task_state_listener = (
             task_state_listener
+        )
+        self._adaptive_decision_listener = (
+            adaptive_decision_listener
         )
 
         self._runtime: TaskRuntime | None = None
@@ -168,6 +193,7 @@ class WorkspaceController:
                         lambda: self._publish_task_state(
                             task_state
                         ),
+                        self._publish_adaptive_decision,
                     )
                 )
             else:
@@ -252,6 +278,17 @@ class WorkspaceController:
         listener(
             TaskStateSnapshot.from_state(state)
         )
+
+    def _publish_adaptive_decision(
+        self,
+        snapshot: AdaptiveDecisionSnapshot,
+    ) -> None:
+        listener = self._adaptive_decision_listener
+
+        if listener is None:
+            return
+
+        listener(snapshot)
 
 
 def create_workspace_demo_worker() -> RuntimeWorker:

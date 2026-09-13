@@ -18,6 +18,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from computer_agent.app.adaptive_decision_bridge import (
+    AdaptiveDecisionBridge,
+)
+from computer_agent.app.adaptive_decision_panel import (
+    AdaptiveDecisionPanel,
+)
 from computer_agent.app.event_bridge import RuntimeEventBridge
 from computer_agent.app.evidence_demo import (
     create_evidence_demo_worker,
@@ -33,6 +39,9 @@ from computer_agent.runtime import (
     RuntimeStatus,
     RuntimeWorker,
 )
+from computer_agent.reasoning import (
+    AdaptiveDecisionSnapshot,
+)
 from computer_agent.task import TaskStateSnapshot
 
 
@@ -43,23 +52,53 @@ class MainWindow(QMainWindow):
         self,
         *,
         worker_factory: Callable[[], RuntimeWorker] | None = None,
+        semantic_worker_factory: Callable | None = None,
     ) -> None:
         super().__init__()
 
         self._event_bridge = RuntimeEventBridge(self)
         self._task_state_bridge = TaskStateBridge(self)
+        self._adaptive_decision_bridge = (
+            AdaptiveDecisionBridge(self)
+        )
 
-        if worker_factory is None:
+        if (
+            worker_factory is not None
+            and semantic_worker_factory is not None
+        ):
+            raise ValueError(
+                "provide only one worker factory"
+            )
+
+        if (
+            worker_factory is None
+            and semantic_worker_factory is None
+        ):
             self._controller = WorkspaceController(
                 semantic_worker_factory=create_evidence_demo_worker,
                 event_listener=self._event_bridge.publish,
                 task_state_listener=self._task_state_bridge.publish,
+                adaptive_decision_listener=(
+                    self._adaptive_decision_bridge.publish
+                ),
             )
-        else:
+        elif worker_factory is not None:
             self._controller = WorkspaceController(
                 worker_factory=worker_factory,
                 event_listener=self._event_bridge.publish,
                 task_state_listener=self._task_state_bridge.publish,
+                adaptive_decision_listener=(
+                    self._adaptive_decision_bridge.publish
+                ),
+            )
+        else:
+            self._controller = WorkspaceController(
+                semantic_worker_factory=semantic_worker_factory,
+                event_listener=self._event_bridge.publish,
+                task_state_listener=self._task_state_bridge.publish,
+                adaptive_decision_listener=(
+                    self._adaptive_decision_bridge.publish
+                ),
             )
 
         self._build_ui()
@@ -70,6 +109,10 @@ class MainWindow(QMainWindow):
         )
         self._task_state_bridge.snapshot_received.connect(
             self._handle_task_state_snapshot,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._adaptive_decision_bridge.snapshot_received.connect(
+            self._handle_adaptive_decision_snapshot,
             Qt.ConnectionType.QueuedConnection,
         )
 
@@ -175,11 +218,6 @@ class MainWindow(QMainWindow):
         tabs.setObjectName("workspaceTabs")
 
         self._task_state_panel = TaskStatePanel()
-        tabs.addTab(
-            self._task_state_panel,
-            "Task State",
-        )
-
         activity_tab = QWidget()
         activity_layout = QVBoxLayout(activity_tab)
         activity_layout.setContentsMargins(8, 8, 8, 8)
@@ -203,7 +241,20 @@ class MainWindow(QMainWindow):
 
         tabs.addTab(
             activity_tab,
-            "Activity",
+            "Overview / Activity",
+        )
+
+        tabs.addTab(
+            self._task_state_panel,
+            "Task State",
+        )
+
+        self._adaptive_decision_panel = (
+            AdaptiveDecisionPanel()
+        )
+        tabs.addTab(
+            self._adaptive_decision_panel,
+            "Adaptive Decision",
         )
 
         layout.addWidget(tabs, stretch=1)
@@ -223,6 +274,21 @@ class MainWindow(QMainWindow):
             snapshot
         )
 
+    @Slot(object)
+    def _handle_adaptive_decision_snapshot(
+        self,
+        snapshot: object,
+    ) -> None:
+        if not isinstance(
+            snapshot,
+            AdaptiveDecisionSnapshot,
+        ):
+            return
+
+        self._adaptive_decision_panel.render(
+            snapshot
+        )
+
     @Slot()
     def _start_task(self) -> None:
         goal = self._task_input.toPlainText().strip()
@@ -237,6 +303,7 @@ class MainWindow(QMainWindow):
 
         self._activity_log.clear()
         self._task_state_panel.clear()
+        self._adaptive_decision_panel.clear()
 
         try:
             self._controller.start(goal)

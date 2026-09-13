@@ -4770,3 +4770,35 @@ Validation:
 - full suite: 1822 passed
 - pip check: no broken requirements
 - git diff --check: clean
+
+### Phase 06.04 Workspace Integration: Adaptive Decision Panel
+
+Phase 06.04 is now integrated into the existing PySide6 Agent Workspace launched by:
+
+`PYTHONPATH=src ./.venv/bin/python -m computer_agent.app`
+
+The workspace remains the single product surface for:
+
+- 06.02 Agent Workspace controls and runtime lifecycle;
+- 06.03 evidence-grounded `TaskState` visualization;
+- 06.04 adaptive next-step reasoning.
+
+The app now includes an `Adaptive Decision` tab that renders only UI-safe structured state:
+
+- current observation application, window, and visible text;
+- model attempt count;
+- bounded safety replan state;
+- deterministic validation result;
+- blocked semantic action keys;
+- public decision attempt summaries;
+- final accepted, blocked, user-question, or completion decision.
+
+The UI does not perform reasoning and does not call OpenAI. The default deterministic demo worker builds an `ObservationContext`, derives an `AdaptiveReasoningContext` from `TaskState`, runs `AdaptiveDecisionEngine.decide()`, converts the result to an immutable `AdaptiveDecisionSnapshot`, and sends it through a queued Qt bridge.
+
+The integrated in-app demo shows:
+
+1. Stage 1: the current observation contains Submit, Check status, and Submission status. With no unresolved side effect, the adaptive decision is `ACTION -> Submit`.
+2. Stage 2: the visible observation is unchanged, but `TaskState` records `Submit registration form` as `UNKNOWN`, `idempotent=False`, and `action_key=click_target:submit`. The first model proposal repeats Submit and is deterministically rejected. The bounded safety replan proposes `ACTION -> Check status`, which is accepted. Duplicate Submit execution remains zero.
+3. Stage 3: current confirmation evidence records `Submission REG-42`, the side effect is confirmed, the subgoal is verified, the completion gate opens, and adaptive reasoning returns `COMPLETE`.
+
+No browser action or paid OpenAI call is performed by the deterministic workspace demo.

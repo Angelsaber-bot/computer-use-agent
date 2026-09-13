@@ -298,7 +298,8 @@ class NextStepReasoner:
                 in context.blocked_action_keys
             ):
                 return _blocked(
-                    UNSAFE_RETRY_BLOCK_REASON
+                    UNSAFE_RETRY_BLOCK_REASON,
+                    rejected_decision=decision,
                 )
 
         if (
@@ -308,7 +309,8 @@ class NextStepReasoner:
         ):
             return _blocked(
                 "model proposed completion while "
-                "the deterministic completion gate is blocked"
+                "the deterministic completion gate is blocked",
+                rejected_decision=decision,
             )
 
         return NextStepReasoningResult(
@@ -826,9 +828,12 @@ def _semantic_action_key(
 
 def _blocked(
     reason: str,
+    *,
+    rejected_decision: NextStepDecision | None = None,
 ) -> NextStepReasoningResult:
     return NextStepReasoningResult(
         status=NextStepReasoningStatus.BLOCKED,
         decision=None,
         reason=reason,
+        rejected_decision=rejected_decision,
     )

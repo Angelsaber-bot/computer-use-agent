@@ -27,6 +27,8 @@ class EvidenceSnapshot:
 class SideEffectSnapshot:
     description: str
     state: str
+    idempotent: bool | None
+    action_key: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +80,8 @@ class TaskStateSnapshot:
                 SideEffectSnapshot(
                     description=item.description,
                     state=item.state.value,
+                    idempotent=item.idempotent,
+                    action_key=item.action_key,
                 )
                 for item in state.side_effects.values()
             ),

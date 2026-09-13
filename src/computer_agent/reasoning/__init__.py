@@ -26,11 +26,17 @@ from computer_agent.reasoning.models import (
 from computer_agent.reasoning.next_step_reasoner import (
     NextStepReasoner,
 )
+from computer_agent.reasoning.snapshot import (
+    AdaptiveDecisionSnapshot,
+    DecisionAttemptSnapshot,
+)
 
 __all__ = [
     "AdaptiveDecisionOutcome",
     "AdaptiveDecisionEngine",
+    "AdaptiveDecisionSnapshot",
     "AdaptiveReasoningContext",
+    "DecisionAttemptSnapshot",
     "LLMClient",
     "LLMReasoner",
     "NextStepDecision",
