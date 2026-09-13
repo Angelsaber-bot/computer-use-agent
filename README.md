@@ -267,3 +267,50 @@ Experiment 06.02 also exposed and corrected a lifecycle event-ordering race unde
 The formal Experiment 06.02 harness runs the real workspace offscreen and verifies workspace construction, runtime event delivery, pause checkpoint blocking, resume continuation, terminal state, and final control-state behavior. The visible application remains available through `python -m computer_agent.app`.
 
 Final Experiment 06.02 validation: workspace focused suite `13 passed`; runtime/workspace focused suite `21 passed`; complete repository suite `1751 passed in 7.71s`; `pip check` reported no broken requirements; `git diff --check` passed; manual visible Workspace validation passed for Start, Pause, Resume, and Stop; and formal Experiment 06.02 acceptance passed.
+
+### Phase 06 Experiment 03 — Evidence-Grounded Task State
+
+Experiment 06.03 introduced a semantic task-state layer above the existing runtime execution state.
+
+The runtime continues to represent how the machine is executing a task, while `TaskState` represents what the system currently believes about the user's real task and the evidence supporting those beliefs.
+
+The new `computer_agent.task` package provides structured models for:
+
+- task goals and immutable constraints;
+- semantic subgoals;
+- evidence-grounded claims;
+- evidence source, observation time, and freshness;
+- external side effects and uncertain outcomes;
+- task artifacts;
+- unresolved user questions;
+- semantic completion status.
+
+Evidence records distinguish `CURRENT`, `STALE`, `INVALIDATED`, and `UNKNOWN` freshness. A verified claim or subgoal cannot safely remain verified when its supporting evidence becomes stale. Stale evidence cannot simply be changed back to current; a fresh observation must create new evidence and explicit re-verification must occur.
+
+External side effects are tracked independently from low-level action success. A consequential action can move through:
+
+`INTENDED -> EXECUTED -> UNKNOWN -> CONFIRMED`
+
+This prevents successful action execution from being incorrectly treated as successful task completion when the external result is uncertain.
+
+Experiment 06.03 also added an evidence-grounded completion gate. Semantic task completion is blocked while required subgoals remain unverified, user questions remain unresolved, or external side effects remain intended, executed, unknown, or failed.
+
+The Agent Workspace now includes a visible `Task State` view with:
+
+- Task Progress;
+- Evidence with source, freshness, and observation time;
+- Side Effects;
+- Completion status and blockers.
+
+The visible deterministic demonstration shows evidence becoming stale, dependent progress becoming unknown, fresh evidence explicitly re-verifying the task, an external side effect remaining `UNKNOWN`, completion being blocked, and reconciliation evidence later moving the side effect to `CONFIRMED`.
+
+The demonstration intentionally uses deterministic external-state inputs. It validates the production semantic state and UI integration, but does not claim that Experiment 06.03 itself performs a real external website submission.
+
+Final Experiment 06.03 validation:
+
+- Phase 06 focused regression suite: `51 passed`
+- Complete repository suite: `1789 passed in 8.16s`
+- Formal Experiment 06.03 acceptance: passed
+- `pip check`: no broken requirements
+- `git diff --check`: passed
+- Manual visible Task State demonstration: passed

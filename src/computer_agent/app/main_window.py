@@ -13,14 +13,19 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from computer_agent.app.event_bridge import RuntimeEventBridge
+from computer_agent.app.evidence_demo import (
+    create_evidence_demo_worker,
+)
+from computer_agent.app.task_state_bridge import TaskStateBridge
+from computer_agent.app.task_state_panel import TaskStatePanel
 from computer_agent.app.workspace_controller import (
     WorkspaceController,
-    create_workspace_demo_worker,
 )
 from computer_agent.runtime import (
     RuntimeEvent,
@@ -28,6 +33,7 @@ from computer_agent.runtime import (
     RuntimeStatus,
     RuntimeWorker,
 )
+from computer_agent.task import TaskStateSnapshot
 
 
 class MainWindow(QMainWindow):
@@ -36,20 +42,34 @@ class MainWindow(QMainWindow):
     def __init__(
         self,
         *,
-        worker_factory: Callable[[], RuntimeWorker] = create_workspace_demo_worker,
+        worker_factory: Callable[[], RuntimeWorker] | None = None,
     ) -> None:
         super().__init__()
 
         self._event_bridge = RuntimeEventBridge(self)
-        self._controller = WorkspaceController(
-            worker_factory=worker_factory,
-            event_listener=self._event_bridge.publish,
-        )
+        self._task_state_bridge = TaskStateBridge(self)
+
+        if worker_factory is None:
+            self._controller = WorkspaceController(
+                semantic_worker_factory=create_evidence_demo_worker,
+                event_listener=self._event_bridge.publish,
+                task_state_listener=self._task_state_bridge.publish,
+            )
+        else:
+            self._controller = WorkspaceController(
+                worker_factory=worker_factory,
+                event_listener=self._event_bridge.publish,
+                task_state_listener=self._task_state_bridge.publish,
+            )
 
         self._build_ui()
 
         self._event_bridge.event_received.connect(
             self._handle_runtime_event,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._task_state_bridge.snapshot_received.connect(
+            self._handle_task_state_snapshot,
             Qt.ConnectionType.QueuedConnection,
         )
 
@@ -151,11 +171,24 @@ class MainWindow(QMainWindow):
         self._current_value.setWordWrap(True)
         layout.addWidget(self._current_value)
 
+        tabs = QTabWidget()
+        tabs.setObjectName("workspaceTabs")
+
+        self._task_state_panel = TaskStatePanel()
+        tabs.addTab(
+            self._task_state_panel,
+            "Task State",
+        )
+
+        activity_tab = QWidget()
+        activity_layout = QVBoxLayout(activity_tab)
+        activity_layout.setContentsMargins(8, 8, 8, 8)
+
         activity_header = QLabel("Activity")
         activity_header.setStyleSheet(
             "font-weight: 600;"
         )
-        layout.addWidget(activity_header)
+        activity_layout.addWidget(activity_header)
 
         self._activity_log = QPlainTextEdit()
         self._activity_log.setObjectName("activityLog")
@@ -163,7 +196,32 @@ class MainWindow(QMainWindow):
         self._activity_log.setPlaceholderText(
             "Runtime events will appear here."
         )
-        layout.addWidget(self._activity_log, stretch=1)
+        activity_layout.addWidget(
+            self._activity_log,
+            stretch=1,
+        )
+
+        tabs.addTab(
+            activity_tab,
+            "Activity",
+        )
+
+        layout.addWidget(tabs, stretch=1)
+
+    @Slot(object)
+    def _handle_task_state_snapshot(
+        self,
+        snapshot: object,
+    ) -> None:
+        if not isinstance(
+            snapshot,
+            TaskStateSnapshot,
+        ):
+            return
+
+        self._task_state_panel.render(
+            snapshot
+        )
 
     @Slot()
     def _start_task(self) -> None:
@@ -178,6 +236,7 @@ class MainWindow(QMainWindow):
             return
 
         self._activity_log.clear()
+        self._task_state_panel.clear()
 
         try:
             self._controller.start(goal)

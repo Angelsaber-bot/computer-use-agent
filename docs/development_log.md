@@ -4591,3 +4591,137 @@ Manual visible validation separately confirmed real Start, Pause, Resume, and St
 Experiment 06.02 converted the Phase 06 runtime into an interactive desktop product surface. The workspace is now a real controller and observer of task execution rather than a display-only GUI.
 
 The current worker used for standalone workspace demonstration remains deterministic. Evidence-grounded semantic task progress, claims, uncertainty, and persistent task state are intentionally deferred to Experiment 06.03.
+
+### Experiment 03: Evidence-Grounded Task State
+
+**Date:** September 12, 2026
+
+**Objective**
+
+Introduce semantic task state above the existing runtime lifecycle so that the agent can distinguish machine execution from evidence-grounded real-world task progress.
+
+**Architecture**
+
+Experiment 06.03 added `src/computer_agent/task/`.
+
+The Phase 06 architecture now distinguishes two different state layers:
+
+- `RuntimeTask` / execution state: what the machine is currently doing;
+- `TaskState`: what the system currently believes is true about the user's task and why.
+
+This distinction prevents low-level action success from automatically implying task-level success.
+
+**Task-State Models**
+
+The semantic state layer now records:
+
+- goal;
+- constraints;
+- subgoals;
+- claims;
+- evidence;
+- side effects;
+- artifacts;
+- pending questions;
+- semantic task status.
+
+Evidence records include source, observation timestamp, evidence kind, freshness, and optional uncertainty.
+
+Evidence freshness supports:
+
+- `CURRENT`
+- `STALE`
+- `INVALIDATED`
+- `UNKNOWN`
+
+**Evidence-Grounded Progress**
+
+Claims can only be verified using explicit current evidence.
+
+Subgoals can only be verified when their required claims are verified and still supported by current evidence.
+
+When supporting evidence becomes stale, dependent verified claims become `UNKNOWN`. Verified subgoals that depend on those claims also become `UNKNOWN`.
+
+Stale or invalidated evidence cannot be revived by directly changing its freshness back to `CURRENT`. Fresh information must be represented by a new evidence record followed by explicit re-verification.
+
+**External Side Effects**
+
+Experiment 06.03 introduced explicit external side-effect state:
+
+`INTENDED -> EXECUTED -> UNKNOWN -> CONFIRMED`
+
+An executed action does not imply that the external effect is confirmed.
+
+For example, a submission click may successfully execute while the resulting server state remains unknown. The system preserves this uncertainty rather than immediately retrying or declaring success.
+
+Fresh reconciliation evidence can later confirm the side effect.
+
+**Completion Gate**
+
+Semantic completion is no longer equivalent to runtime completion.
+
+`TaskStateTransitions.complete_task()` checks deterministic completion blockers before allowing the semantic task to become completed.
+
+Completion is blocked when:
+
+- required subgoals are not verified;
+- unresolved user questions remain;
+- a side effect is still intended;
+- a side effect was executed but not confirmed;
+- a side effect is unknown;
+- a side effect has failed.
+
+This establishes the core invariant:
+
+`execution finished != task completed`
+
+**Workspace Integration**
+
+Experiment 06.03 extended the PySide6 Agent Workspace with a visible `Task State` tab.
+
+The workspace now displays:
+
+- semantic task progress;
+- evidence source and freshness;
+- evidence observation time;
+- external side-effect status;
+- completion eligibility;
+- explicit completion blockers.
+
+Task-state data is transferred into Qt as immutable `TaskStateSnapshot` objects through a queued `TaskStateBridge`, keeping worker-thread state changes separate from GUI rendering.
+
+**Visible Demonstration**
+
+The deterministic visible demonstration performs the following semantic sequence:
+
+1. create current evidence;
+2. verify a claim;
+3. verify a subgoal;
+4. mark the original evidence stale;
+5. invalidate dependent verified progress;
+6. create fresh evidence;
+7. explicitly re-verify the claim and subgoal;
+8. execute a non-idempotent side effect;
+9. preserve its outcome as `UNKNOWN`;
+10. block semantic completion;
+11. add reconciliation evidence;
+12. confirm exactly one external result;
+13. allow semantic completion.
+
+The demonstration uses deterministic external-state inputs. It is intended to validate production task-state semantics and workspace presentation, not to claim real website execution.
+
+**Validation**
+
+- Phase 06 focused regression suite: `51 passed`
+- Complete repository suite: `1789 passed in 8.16s`
+- Formal Experiment 06.03: passed
+- `pip check`: passed
+- `git diff --check`: passed
+- Manual visible stale-evidence behavior: passed
+- Manual visible UNKNOWN side-effect behavior: passed
+- Manual visible completion blocking: passed
+- Manual visible reconciliation and confirmation: passed
+
+**Result**
+
+Experiment 06.03 established the evidence-grounded semantic state substrate required by later adaptive reasoning, task-level reconciliation, persistence, resume, and reliability evaluation.
