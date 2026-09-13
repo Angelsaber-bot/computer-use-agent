@@ -314,3 +314,25 @@ Final Experiment 06.03 validation:
 - `pip check`: no broken requirements
 - `git diff --check`: passed
 - Manual visible Task State demonstration: passed
+
+### Phase 06 Experiment 04 — Adaptive Next-Step Reasoning
+
+Phase 06 Experiment 04 replaces fixed whole-task planning with observation-conditioned next-step reasoning.
+
+The adaptive reasoning path consumes the user goal, immutable constraints, evidence-grounded TaskState, unresolved side effects, completion blockers, and the current UI observation. It returns exactly one semantic decision: ACTION, ASK_USER, or COMPLETE.
+
+A deterministic safety layer remains authoritative over model proposals. Non-idempotent actions whose prior external outcome is EXECUTED or UNKNOWN can be represented with persistent semantic action keys such as `click_target:submit`. If the model proposes the same blocked action again, the proposal is rejected before execution.
+
+`AdaptiveDecisionEngine` adds bounded safety-triggered replanning. An unsafe duplicate proposal may trigger exactly one additional reasoning attempt with structured deterministic rejection feedback. The second attempt is validated by the same safety rules and there is no unbounded retry loop.
+
+The formal deterministic Experiment 04 demonstrated that the same user goal and visible interface can produce different next actions when persistent TaskState changes:
+
+- before submission: `Submit`
+- after an UNKNOWN non-idempotent submission outcome: `Check status`
+- after evidence-backed confirmation and an open completion gate: `COMPLETE`
+
+Live OpenAI validation exposed an important reliability finding: prompt instructions alone did not reliably prevent a real model from proposing a duplicate non-idempotent Submit action under uncertain state. The deterministic action guard successfully rejected that proposal. After blocked-action context and rejection-aware adaptive reasoning were added, a later live reasoning-only run selected `Check status` directly for the UNKNOWN side effect.
+
+The live validation performs reasoning only and does not click the browser or create real external side effects.
+
+Final Phase 06.04 validation completed with 1822 passing tests, no broken Python requirements, and a clean `git diff --check`.

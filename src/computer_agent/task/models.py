@@ -188,6 +188,7 @@ class SideEffectRecord:
     external_reference: str | None = None
     evidence_ids: tuple[str, ...] = ()
     idempotent: bool | None = None
+    action_key: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.description, "description")
@@ -219,6 +220,12 @@ class SideEffectRecord:
         ):
             raise ValueError(
                 "idempotent must be bool or None"
+            )
+
+        if self.action_key is not None:
+            _require_text(
+                self.action_key,
+                "action_key",
             )
 
 

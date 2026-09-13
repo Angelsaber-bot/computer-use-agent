@@ -4725,3 +4725,48 @@ The demonstration uses deterministic external-state inputs. It is intended to va
 **Result**
 
 Experiment 06.03 established the evidence-grounded semantic state substrate required by later adaptive reasoning, task-level reconciliation, persistence, resume, and reliability evaluation.
+
+### Phase 06 Experiment 04: Adaptive Next-Step Reasoning
+
+Phase 06.04 introduced a new adaptive reasoning path alongside the existing static `LLMReasoner` baseline.
+
+New production components include:
+
+- `AdaptiveReasoningContext`
+- `ObservationContext`
+- `NextStepReasoner`
+- `OpenAIAdaptiveLLMClient`
+- semantic blocked-action keys
+- deterministic unsafe-retry validation
+- `AdaptiveDecisionEngine`
+- bounded safety-triggered replanning
+
+The adaptive loop reasons about exactly one next semantic decision from current TaskState and current observation rather than generating an immutable multi-step plan.
+
+A live OpenAI experiment revealed that prompt-level instructions alone were insufficient to prevent a duplicate non-idempotent action. After a Submit side effect was marked UNKNOWN with `idempotent=False`, the real model proposed Submit again.
+
+This produced an important implementation requirement: model proposals cannot be trusted as execution authorization.
+
+The system now records persistent semantic action identities such as:
+
+`click_target:submit`
+
+When an unresolved non-idempotent side effect blocks that semantic action, `NextStepReasoner` deterministically rejects a repeated proposal using a stable safety result.
+
+`AdaptiveDecisionEngine` supports at most one safety-triggered re-reasoning attempt. Structured rejection feedback is added to the second context, but the same deterministic guard remains authoritative. A repeated unsafe proposal on the second attempt remains BLOCKED and no third model call occurs.
+
+Formal Experiment 04 passed:
+- initial next-step action
+- TaskState-conditioned adaptation
+- duplicate-submit avoidance
+- reconciliation state update
+- completion-gate reasoning
+- same-goal preservation
+
+The final live OpenAI reasoning-only validation also passed. The initial decision selected Submit, the UNKNOWN-side-effect decision selected Check status, and the final confirmed state produced COMPLETE. No browser action was executed.
+
+Validation:
+- focused adaptive/task-state tests: 63 passed
+- full suite: 1822 passed
+- pip check: no broken requirements
+- git diff --check: clean
