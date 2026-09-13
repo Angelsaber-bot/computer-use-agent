@@ -4895,3 +4895,23 @@ The experiment passed all acceptance conditions.
 - `git diff --check`: clean
 
 Phase 06.05 remains deterministic and headless. Real browser restart/resume validation is deferred to Experiment 06.06.
+
+## Phase 06.07.01 — Continuous Durable Execution
+
+Experiment 06.07.01 removes the intentional WAITING_USER process boundary from the live python.org worker. The invariant is now explicit: a checkpoint persists durable state, but it does not pause execution.
+
+The live worker now runs one continuous durable executor for both fresh starts and restored tasks. It ensures the semantic task structure, creates or reacquires the Agent-owned Chrome workspace from the persisted marker artifact, takes fresh Accessibility observations, reconciles the query condition, checkpoints while staying RUNNING, reconciles submission/results state, confirms the submission side effect from fresh Results evidence, and completes only after the semantic completion gate allows it.
+
+Reconciliation is derived from `TaskState`, the persisted browser artifact, side-effect records, and current browser observation. The worker does not use Start versus Resume as the source of truth and does not persist a redundant stage flag.
+
+The submission side effect uses `SUBMIT_SIDE_EFFECT_ID` and a stable action key for the GO click. The worker registers the intended side effect before execution, records the execution attempt before the click, and confirms it only from fresh Results evidence. Recovery still prefers observing current external state over replaying the action.
+
+The deterministic headless experiment covers:
+
+- uninterrupted execution through query checkpoint, GO submission, Results evidence, and completion;
+- restart after the query checkpoint, with fresh query re-verification and no duplicate typing;
+- restart after GO click before Results evidence checkpoint, with fresh Results reconciliation and no duplicate GO click.
+
+This experiment does not claim live Chrome acceptance. Manual visible app validation is still required for the real browser path.
+
+Development-only crash injection was added for manual restart acceptance testing. Setting `COMPUTER_AGENT_CRASH_AFTER=query_checkpoint` terminates the Python process after the verified query checkpoint is persisted and before GO submission begins. Setting `COMPUTER_AGENT_CRASH_AFTER=submit_execution` terminates after the GO action returns and before fresh Results evidence is added to durable `TaskState`. Unsupported non-empty values fail configuration early. This is acceptance-test instrumentation and is not normal Agent behavior.

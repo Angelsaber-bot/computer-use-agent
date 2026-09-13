@@ -352,3 +352,13 @@ The deterministic Experiment 06.05 acceptance scenario saves a task after a Subm
 Experiment 06.05 does not yet claim live website restart recovery. The restart and reconciliation scenario is deterministic and headless. Live browser validation is the next experiment.
 
 Final Phase 06.05 validation completed with 1849 passing tests, no broken Python requirements, and a clean `git diff --check`.
+
+#### Experiment 06.07.01: Continuous Durable Execution
+
+Experiment 06.07.01 removes the artificial process boundary from the live python.org worker. A durable checkpoint now persists recoverable state without changing the task to `WAITING_USER` or requiring `Resume Last Task` during a normal uninterrupted run.
+
+The production worker now follows a narrow reconciliation loop: ensure or reacquire the task-owned Chrome workspace, freshly observe browser state, reconcile whether the query condition is already satisfied or needs verified text input, checkpoint while remaining `RUNNING`, reconcile whether Results are already visible or GO still needs execution, confirm the submission side effect from fresh Results evidence, and complete only after the semantic completion gate opens.
+
+Recovery is derived from persisted `TaskState`, artifacts, side-effect records, and current browser observation rather than Start-vs-Resume branching. In the crash window where GO was clicked before Results evidence was checkpointed, restart recovery reacquires the exact browser workspace, observes Results, does not click GO again, creates fresh Results evidence, confirms the submission side effect, verifies the result subgoal, and completes.
+
+The deterministic headless Experiment 06.07.01 demonstrates uninterrupted execution, restart after the query checkpoint without retyping, and restart after GO before Results checkpoint without clicking again. It does not claim live Chrome acceptance; that remains a manual validation step.

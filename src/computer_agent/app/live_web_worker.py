@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from enum import StrEnum
+import os
 from pathlib import Path
+import sys
 import time
+from typing import NoReturn
 
 from computer_agent.agent import (
     AgentLoop,
@@ -51,6 +55,8 @@ from computer_agent.task import (
     ClaimRecord,
     EvidenceKind,
     EvidenceRecord,
+    SideEffectRecord,
+    SideEffectState,
     SubgoalRecord,
     TaskState,
     TaskStateStatus,
@@ -96,6 +102,13 @@ QUERY_SUBGOAL_ID = "live-web-enter-query"
 RESULT_CLAIM_ID = "live-web-results-visible"
 RESULT_SUBGOAL_ID = "live-web-submit-query"
 
+SUBMIT_SIDE_EFFECT_ID = (
+    "live-web-submit-query-side-effect"
+)
+SUBMIT_ACTION_KEY = (
+    "click_target:python_org_search_go"
+)
+
 BROWSER_WINDOW_ARTIFACT_ID = (
     "live-web-browser-window"
 )
@@ -104,12 +117,24 @@ BROWSER_WINDOW_MARKER_PREFIX = (
     "about:blank#computer-agent-task="
 )
 
+CRASH_ENV_VAR = (
+    "COMPUTER_AGENT_CRASH_AFTER"
+)
+CRASH_EXIT_CODE = 86
+
 
 TaskStatePublisher = Callable[[], None]
 AdaptiveDecisionPublisher = Callable[
     [object],
     None,
 ]
+
+
+class LiveCrashPoint(StrEnum):
+    """Development-only live-worker process crash injection points."""
+
+    QUERY_CHECKPOINT = "query_checkpoint"
+    SUBMIT_EXECUTION = "submit_execution"
 
 
 class LiveWebEnvironment:
@@ -349,6 +374,8 @@ def create_live_web_worker(
             "'Search python.org for typing.'"
         )
 
+    _configured_crash_point()
+
     if capture_path is None:
         capture_path = (
             Path.home()
@@ -405,25 +432,7 @@ def create_live_web_worker(
             )
         )
 
-        if _should_prepare_live_task_segment(
-            state
-        ):
-            _run_prepare_segment(
-                state=state,
-                transitions=transitions,
-                environment=environment,
-                control=control,
-                publish_state=(
-                    publish_state
-                ),
-                publish_decision=(
-                    publish_decision
-                ),
-                progress=progress,
-            )
-            return
-
-        _run_resume_segment(
+        _run_live_task(
             state=state,
             transitions=transitions,
             environment=environment,
@@ -436,7 +445,56 @@ def create_live_web_worker(
     return worker
 
 
-def _run_prepare_segment(
+def _configured_crash_point() -> LiveCrashPoint | None:
+    raw_value = os.environ.get(
+        CRASH_ENV_VAR
+    )
+
+    if raw_value is None or not raw_value.strip():
+        return None
+
+    try:
+        return LiveCrashPoint(
+            raw_value.strip()
+        )
+    except ValueError as exc:
+        supported = ", ".join(
+            point.value
+            for point in LiveCrashPoint
+        )
+        raise RuntimeError(
+            f"Unsupported {CRASH_ENV_VAR} value "
+            f"{raw_value!r}; supported values: "
+            f"{supported}"
+        ) from exc
+
+
+def _maybe_inject_process_crash(
+    point: LiveCrashPoint,
+) -> None:
+    configured = _configured_crash_point()
+
+    if configured is not point:
+        return
+
+    print(
+        "[crash-injection] terminating after "
+        f"{point.value}",
+        file=sys.stderr,
+        flush=True,
+    )
+    sys.stdout.flush()
+    sys.stderr.flush()
+    _terminate_process_for_test()
+
+
+def _terminate_process_for_test() -> NoReturn:
+    os._exit(
+        CRASH_EXIT_CODE
+    )
+
+
+def _run_live_task(
     *,
     state: TaskState,
     transitions: TaskStateTransitions,
@@ -446,347 +504,72 @@ def _run_prepare_segment(
     publish_decision: AdaptiveDecisionPublisher,
     progress: Callable[[str], None],
 ) -> None:
+    """Converge the durable task state and live browser state."""
     control.checkpoint()
 
-    progress(
-        "Opening real python.org "
-        "in Google Chrome."
+    observation = _ensure_browser_workspace(
+        state=state,
+        transitions=transitions,
+        environment=environment,
+        publish_state=publish_state,
+        progress=progress,
     )
 
-    browser_window_marker = (
-        environment.open_python_org(
-            state.task_id
-        )
-    )
-
-    transitions.add_artifact(
-        ArtifactRecord(
-            artifact_id=(
-                BROWSER_WINDOW_ARTIFACT_ID
-            ),
-            description=(
-                "Agent-owned Google Chrome "
-                "task window."
-            ),
-            location=(
-                browser_window_marker
-            ),
-        )
-    )
-
-    publish_state()
-
-    progress(
-        "Created dedicated persistent "
-        "Chrome task window."
-    )
-
-    progress(
-        "Executing verified real-web "
-        "text input."
-    )
-
-    result = AgentLoop(
-        perception_engine=(
-            environment.perception_engine
-        ),
-        executor=(
-            environment.executor
-        ),
-        web_text_input_observer=(
-            environment.observe
-        ),
-    ).run(
-        build_prepare_plan(
-            state.goal
-        )
-    )
-
-    _require_agent_success(
-        result,
-        "real-web query entry",
-    )
-
-    observation = (
-        environment.observe()
-    )
-
-    _require_expected_app(
-        observation
-    )
-
-    search_field = (
-        _search_field_with_expected_value(
-            observation.snapshot.fused_elements,
-            expected_value=SEARCH_QUERY,
-        )
-    )
-
-    if search_field is None:
-        raise RuntimeError(
-            "The live search field did not "
-            "uniquely verify the intended query."
-        )
-
-    evidence = EvidenceRecord(
-        summary=(
-            "The current real python.org "
-            "search field contains 'typing'."
-        ),
-        source=(
-            "Live Chrome Accessibility "
-            "observation"
-        ),
-        kind=EvidenceKind.VERIFICATION,
-    )
-
-    transitions.add_evidence(
-        evidence
-    )
-
-    transitions.verify_claim(
-        QUERY_CLAIM_ID,
-        (evidence.evidence_id,),
-    )
-
-    transitions.verify_subgoal(
-        QUERY_SUBGOAL_ID
-    )
-
-    _publish_live_decision(
-        publish_decision,
+    observation = _reconcile_query_condition(
+        state=state,
+        transitions=transitions,
+        environment=environment,
+        progress=progress,
         observation=observation,
-        decision_type="WAIT",
-        operation="resume_after_restart",
-        target_text="Resume Last Task",
-        expected_effect=(
-            "Reload the persistent checkpoint, "
-            "take a fresh browser observation, "
-            "and continue toward search submission."
-        ),
-        reason=(
-            "The live query was verified and "
-            "the experiment intentionally pauses "
-            "at the persistent process boundary."
-        ),
     )
-
-    state.status = (
-        TaskStateStatus.WAITING_USER
-    )
-    state.touch()
 
     publish_state()
 
-    progress(
-        "Persistent checkpoint saved. "
-        "Close the Computer Agent app now "
-        "to test a real process restart."
+    _maybe_inject_process_crash(
+        LiveCrashPoint.QUERY_CHECKPOINT
     )
 
-    progress(
-        "Do not click GO manually. "
-        "After reopening the app, use "
-        "Resume Last Task."
-    )
-
-    while True:
-        control.checkpoint()
-        time.sleep(0.10)
-
-
-def _run_resume_segment(
-    *,
-    state: TaskState,
-    transitions: TaskStateTransitions,
-    environment: LiveWebEnvironment,
-    control: RuntimeControl,
-    publish_state: TaskStatePublisher,
-    publish_decision: AdaptiveDecisionPublisher,
-    progress: Callable[[str], None],
-) -> None:
-    control.checkpoint()
-
-    progress(
-        "Loaded the persisted task. "
-        "Activating Chrome."
-    )
-
-    browser_window_marker = (
-        _browser_window_marker_from_state(
-            state
-        )
-    )
-
-    environment.activate_task_chrome_window(
-        browser_window_marker
-    )
-
-    progress(
-        "Re-activated the persisted "
-        "Agent-owned Chrome task window."
-    )
-
-    progress(
-        "Re-observing the real browser "
-        "instead of reusing old coordinates."
-    )
-
-    observation = (
-        environment.observe()
-    )
-
-    _require_expected_app(
+    if not _results_visible(
         observation
-    )
-
-    search_field = (
-        _search_field_with_expected_value(
-            observation.snapshot.fused_elements,
-            expected_value=SEARCH_QUERY,
-        )
-    )
-
-    if search_field is None:
-        raise RuntimeError(
-            "Restart recovery could not "
-            "uniquely verify the live search value."
-        )
-
-    fresh_query_evidence = (
-        EvidenceRecord(
-            summary=(
-                "After process restart, "
-                "fresh Chrome Accessibility "
-                "still shows query 'typing'."
+    ):
+        _publish_live_decision(
+            publish_decision,
+            observation=observation,
+            decision_type="ACTION",
+            operation="click_target",
+            target_text="GO",
+            expected_effect=(
+                "Submit the verified 'typing' query "
+                "and navigate to python.org Results."
             ),
-            source=(
-                "Post-restart live Chrome "
-                "observation"
-            ),
-            kind=(
-                EvidenceKind.VERIFICATION
+            reason=(
+                "The durable checkpoint is complete; "
+                "execution can continue without waiting "
+                "for a process restart."
             ),
         )
-    )
-
-    transitions.add_evidence(
-        fresh_query_evidence
-    )
-
-    transitions.verify_claim(
-        QUERY_CLAIM_ID,
-        (
-            fresh_query_evidence
-            .evidence_id,
-        ),
-    )
-
-    transitions.verify_subgoal(
-        QUERY_SUBGOAL_ID
-    )
-
-    publish_state()
-
-    _publish_live_decision(
-        publish_decision,
-        observation=observation,
-        decision_type="ACTION",
-        operation="click_target",
-        target_text="GO",
-        expected_effect=(
-            "Submit the verified 'typing' query "
-            "and navigate to python.org results."
-        ),
-        reason=(
-            "Fresh post-restart Accessibility "
-            "evidence confirms the intended query "
-            "is still present."
-        ),
-    )
 
     control.checkpoint()
-
-    progress(
-        "Fresh query evidence verified. "
-        "Submitting through newly grounded "
-        "live UI coordinates."
-    )
-
-    result = AgentLoop(
-        perception_engine=(
-            environment.perception_engine
-        ),
-        executor=(
-            environment.executor
-        ),
-        web_text_input_observer=(
-            environment.observe
-        ),
-    ).run(
-        build_resume_plan(
-            state.goal
-        )
-    )
-
-    _require_agent_success(
-        result,
-        "real-web resumed submission",
-    )
 
     final_observation = (
-        environment.observe()
-    )
-
-    _require_expected_app(
-        final_observation
-    )
-
-    result_grounding = (
-        UIGrounder().ground(
-            RESULTS_TARGET,
-            final_observation.snapshot
-            .fused_elements,
+        _reconcile_submission_result_condition(
+            state=state,
+            transitions=transitions,
+            environment=environment,
+            control=control,
+            publish_state=publish_state,
+            publish_decision=publish_decision,
+            progress=progress,
         )
     )
 
-    if (
-        result_grounding.status
-        is not GroundingStatus.RESOLVED
-    ):
+    if not transitions.can_complete():
         raise RuntimeError(
-            "Fresh post-submit observation "
-            "did not resolve Results."
+            "The live task cannot complete: "
+            + "; ".join(
+                transitions.completion_blockers()
+            )
         )
-
-    results_evidence = EvidenceRecord(
-        summary=(
-            "The real python.org Results "
-            "marker is visible after resumed "
-            "submission."
-        ),
-        source=(
-            "Post-submit live Chrome "
-            "observation"
-        ),
-        kind=EvidenceKind.VERIFICATION,
-    )
-
-    transitions.add_evidence(
-        results_evidence
-    )
-
-    transitions.verify_claim(
-        RESULT_CLAIM_ID,
-        (
-            results_evidence
-            .evidence_id,
-        ),
-    )
-
-    transitions.verify_subgoal(
-        RESULT_SUBGOAL_ID
-    )
 
     transitions.complete_task()
 
@@ -810,8 +593,649 @@ def _run_resume_segment(
     )
 
     progress(
-        "Real browser task completed "
-        "after process restart."
+        "Real browser task completed."
+    )
+
+
+def _ensure_browser_workspace(
+    *,
+    state: TaskState,
+    transitions: TaskStateTransitions,
+    environment: LiveWebEnvironment,
+    publish_state: TaskStatePublisher,
+    progress: Callable[[str], None],
+) -> TextInputObservation:
+    if _should_prepare_live_task_segment(
+        state
+    ):
+        progress(
+            "Opening real python.org "
+            "in a dedicated Chrome task window."
+        )
+
+        browser_window_marker = (
+            environment.open_python_org(
+                state.task_id
+            )
+        )
+
+        transitions.add_artifact(
+            ArtifactRecord(
+                artifact_id=(
+                    BROWSER_WINDOW_ARTIFACT_ID
+                ),
+                description=(
+                    "Agent-owned Google Chrome "
+                    "task window."
+                ),
+                location=(
+                    browser_window_marker
+                ),
+            )
+        )
+
+        publish_state()
+
+        progress(
+            "Created dedicated persistent "
+            "Chrome task window."
+        )
+    else:
+        browser_window_marker = (
+            _browser_window_marker_from_state(
+                state
+            )
+        )
+
+        progress(
+            "Re-activating the persisted "
+            "Agent-owned Chrome task window."
+        )
+
+        environment.activate_task_chrome_window(
+            browser_window_marker
+        )
+
+    observation = environment.observe()
+    _require_expected_app(
+        observation
+    )
+    return observation
+
+
+def _reconcile_query_condition(
+    *,
+    state: TaskState,
+    transitions: TaskStateTransitions,
+    environment: LiveWebEnvironment,
+    progress: Callable[[str], None],
+    observation: TextInputObservation,
+) -> TextInputObservation:
+    _require_expected_app(
+        observation
+    )
+
+    search_field = (
+        _search_field_with_expected_value(
+            observation.snapshot.fused_elements,
+            expected_value=SEARCH_QUERY,
+        )
+    )
+
+    if search_field is not None:
+        _verify_query_from_current_observation(
+            transitions,
+            summary=(
+                "Fresh Chrome Accessibility "
+                "shows query 'typing' in the "
+                "python.org search field."
+            ),
+            source=(
+                "Live Chrome Accessibility "
+                "observation"
+            ),
+        )
+        progress(
+            "Fresh browser state verifies "
+            "the intended query."
+        )
+        return observation
+
+    if _results_visible(
+        observation
+    ):
+        if not _query_has_durable_history(
+            state
+        ):
+            raise RuntimeError(
+                "Results are visible, but the "
+                "task has no durable query history "
+                "to reconcile."
+            )
+
+        _verify_query_from_current_observation(
+            transitions,
+            summary=(
+                "Fresh Results state reconciles "
+                "the previously verified "
+                "'typing' query after restart."
+            ),
+            source=(
+                "Post-submit live Chrome "
+                "observation"
+            ),
+        )
+        progress(
+            "Fresh Results state reconciles "
+            "the previously entered query."
+        )
+        return observation
+
+    if not _search_field_available(
+        observation
+    ):
+        raise RuntimeError(
+            "The live browser state is ambiguous: "
+            "neither the verified query field nor "
+            "Results are visible."
+        )
+
+    progress(
+        "Typing the intended query into "
+        "the freshly grounded search field."
+    )
+
+    result = _execute_agent_plan(
+        environment,
+        build_prepare_plan(
+            state.goal
+        ),
+    )
+
+    _require_agent_success(
+        result,
+        "real-web query entry",
+    )
+
+    refreshed = environment.observe()
+    _require_expected_app(
+        refreshed
+    )
+
+    if (
+        _search_field_with_expected_value(
+            refreshed.snapshot.fused_elements,
+            expected_value=SEARCH_QUERY,
+        )
+        is None
+    ):
+        raise RuntimeError(
+            "The live search field did not "
+            "uniquely verify the intended query."
+        )
+
+    _verify_query_from_current_observation(
+        transitions,
+        summary=(
+            "The current real python.org "
+            "search field contains 'typing'."
+        ),
+        source=(
+            "Live Chrome Accessibility "
+            "observation"
+        ),
+    )
+
+    return refreshed
+
+
+def _reconcile_submission_result_condition(
+    *,
+    state: TaskState,
+    transitions: TaskStateTransitions,
+    environment: LiveWebEnvironment,
+    control: RuntimeControl,
+    publish_state: TaskStatePublisher,
+    publish_decision: AdaptiveDecisionPublisher,
+    progress: Callable[[str], None],
+) -> TextInputObservation:
+    observation = environment.observe()
+    _require_expected_app(
+        observation
+    )
+
+    if _results_visible(
+        observation
+    ):
+        evidence = _verify_results_from_current_observation(
+            transitions,
+            summary=(
+                "Fresh Chrome Accessibility "
+                "shows the python.org Results "
+                "marker."
+            ),
+            source=(
+                "Live Chrome Accessibility "
+                "observation"
+            ),
+        )
+        _confirm_submit_side_effect(
+            transitions,
+            evidence.evidence_id,
+        )
+        publish_state()
+        progress(
+            "Fresh browser state already "
+            "shows Results; GO was not clicked."
+        )
+        return observation
+
+    if not _pre_submit_query_state(
+        observation
+    ):
+        raise RuntimeError(
+            "The live browser state is ambiguous: "
+            "it is neither verified pre-submit "
+            "search state nor verified Results."
+        )
+
+    _ensure_submit_side_effect(
+        transitions
+    )
+    publish_state()
+
+    _mark_submit_execution_attempt(
+        transitions
+    )
+    publish_state()
+
+    _publish_live_decision(
+        publish_decision,
+        observation=observation,
+        decision_type="ACTION",
+        operation="click_target",
+        target_text="GO",
+        expected_effect=(
+            "Submit the verified 'typing' query "
+            "and navigate to python.org Results."
+        ),
+        reason=(
+            "Fresh browser observation confirms "
+            "the pre-submit state with query "
+            "'typing'."
+        ),
+    )
+
+    control.checkpoint()
+
+    progress(
+        "Submitting through newly grounded "
+        "live UI coordinates."
+    )
+
+    result = _execute_agent_plan(
+        environment,
+        build_resume_plan(
+            state.goal
+        ),
+    )
+
+    _require_agent_success(
+        result,
+        "real-web search submission",
+    )
+
+    _maybe_inject_process_crash(
+        LiveCrashPoint.SUBMIT_EXECUTION
+    )
+
+    final_observation = environment.observe()
+    _require_expected_app(
+        final_observation
+    )
+
+    if not _results_visible(
+        final_observation
+    ):
+        _mark_submit_outcome_unknown(
+            transitions
+        )
+        publish_state()
+        raise RuntimeError(
+            "Fresh post-submit observation "
+            "did not resolve Results."
+        )
+
+    results_evidence = (
+        _verify_results_from_current_observation(
+            transitions,
+            summary=(
+                "The real python.org Results "
+                "marker is visible after "
+                "submission."
+            ),
+            source=(
+                "Post-submit live Chrome "
+                "observation"
+            ),
+        )
+    )
+
+    _confirm_submit_side_effect(
+        transitions,
+        results_evidence.evidence_id,
+    )
+
+    publish_state()
+
+    return final_observation
+
+
+def _execute_agent_plan(
+    environment: LiveWebEnvironment,
+    plan: StructuredPlan,
+):
+    fake_executor = getattr(
+        environment,
+        "execute_plan",
+        None,
+    )
+
+    if callable(
+        fake_executor
+    ):
+        return fake_executor(
+            plan
+        )
+
+    return AgentLoop(
+        perception_engine=(
+            environment.perception_engine
+        ),
+        executor=(
+            environment.executor
+        ),
+        web_text_input_observer=(
+            environment.observe
+        ),
+    ).run(
+        plan
+    )
+
+
+def _verify_query_from_current_observation(
+    transitions: TaskStateTransitions,
+    *,
+    summary: str,
+    source: str,
+) -> EvidenceRecord:
+    evidence = EvidenceRecord(
+        summary=summary,
+        source=source,
+        kind=EvidenceKind.VERIFICATION,
+    )
+
+    transitions.add_evidence(
+        evidence
+    )
+
+    transitions.verify_claim(
+        QUERY_CLAIM_ID,
+        (evidence.evidence_id,),
+    )
+
+    transitions.verify_subgoal(
+        QUERY_SUBGOAL_ID
+    )
+
+    return evidence
+
+
+def _verify_results_from_current_observation(
+    transitions: TaskStateTransitions,
+    *,
+    summary: str,
+    source: str,
+) -> EvidenceRecord:
+    evidence = EvidenceRecord(
+        summary=summary,
+        source=source,
+        kind=EvidenceKind.VERIFICATION,
+    )
+
+    transitions.add_evidence(
+        evidence
+    )
+
+    transitions.verify_claim(
+        RESULT_CLAIM_ID,
+        (evidence.evidence_id,),
+    )
+
+    transitions.verify_subgoal(
+        RESULT_SUBGOAL_ID
+    )
+
+    return evidence
+
+
+def _ensure_submit_side_effect(
+    transitions: TaskStateTransitions,
+) -> SideEffectRecord:
+    state = transitions.state
+    effect = state.side_effects.get(
+        SUBMIT_SIDE_EFFECT_ID
+    )
+
+    if effect is not None:
+        return effect
+
+    return transitions.add_side_effect(
+        SideEffectRecord(
+            side_effect_id=(
+                SUBMIT_SIDE_EFFECT_ID
+            ),
+            description=(
+                "Submit the python.org search "
+                "query through the GO control."
+            ),
+            external_reference=PYTHON_URL,
+            idempotent=True,
+            action_key=SUBMIT_ACTION_KEY,
+        )
+    )
+
+
+def _mark_submit_execution_attempt(
+    transitions: TaskStateTransitions,
+) -> None:
+    effect = _ensure_submit_side_effect(
+        transitions
+    )
+
+    if (
+        effect.state
+        is SideEffectState.INTENDED
+    ):
+        transitions.mark_side_effect_executed(
+            SUBMIT_SIDE_EFFECT_ID
+        )
+
+
+def _mark_submit_outcome_unknown(
+    transitions: TaskStateTransitions,
+) -> None:
+    effect = transitions.state.side_effects.get(
+        SUBMIT_SIDE_EFFECT_ID
+    )
+
+    if (
+        effect is not None
+        and effect.state
+        is SideEffectState.EXECUTED
+    ):
+        transitions.mark_side_effect_unknown(
+            SUBMIT_SIDE_EFFECT_ID
+        )
+
+
+def _confirm_submit_side_effect(
+    transitions: TaskStateTransitions,
+    evidence_id: str,
+) -> None:
+    effect = transitions.state.side_effects.get(
+        SUBMIT_SIDE_EFFECT_ID
+    )
+
+    if effect is None:
+        transitions.add_side_effect(
+            SideEffectRecord(
+                side_effect_id=(
+                    SUBMIT_SIDE_EFFECT_ID
+                ),
+                description=(
+                    "Submit the python.org search "
+                    "query through the GO control."
+                ),
+                state=(
+                    SideEffectState.CONFIRMED
+                ),
+                external_reference=PYTHON_URL,
+                evidence_ids=(evidence_id,),
+                idempotent=True,
+                action_key=SUBMIT_ACTION_KEY,
+            )
+        )
+        return
+
+    if (
+        effect.state
+        is SideEffectState.CONFIRMED
+    ):
+        return
+
+    if (
+        effect.state
+        is SideEffectState.INTENDED
+    ):
+        transitions.mark_side_effect_executed(
+            SUBMIT_SIDE_EFFECT_ID
+        )
+
+    transitions.confirm_side_effect(
+        SUBMIT_SIDE_EFFECT_ID,
+        (evidence_id,),
+    )
+
+
+def _results_visible(
+    observation: TextInputObservation,
+) -> bool:
+    grounding = UIGrounder().ground(
+        RESULTS_TARGET,
+        observation.snapshot.fused_elements,
+    )
+
+    return (
+        grounding.status
+        is GroundingStatus.RESOLVED
+    )
+
+
+def _search_field_available(
+    observation: TextInputObservation,
+) -> bool:
+    grounding = UIGrounder().ground(
+        SEARCH_FIELD,
+        observation.snapshot.fused_elements,
+    )
+
+    return (
+        grounding.status
+        is GroundingStatus.RESOLVED
+    )
+
+
+def _pre_submit_query_state(
+    observation: TextInputObservation,
+) -> bool:
+    if _results_visible(
+        observation
+    ):
+        return False
+
+    if (
+        _search_field_with_expected_value(
+            observation.snapshot.fused_elements,
+            expected_value=SEARCH_QUERY,
+        )
+        is None
+    ):
+        return False
+
+    grounding = UIGrounder().ground(
+        GO_BUTTON,
+        observation.snapshot.fused_elements,
+    )
+
+    return (
+        grounding.status
+        is GroundingStatus.RESOLVED
+    )
+
+
+def _query_has_durable_history(
+    state: TaskState,
+) -> bool:
+    claim = state.claims.get(
+        QUERY_CLAIM_ID
+    )
+
+    return (
+        claim is not None
+        and bool(claim.evidence_ids)
+    )
+
+
+def _run_prepare_segment(
+    *,
+    state: TaskState,
+    transitions: TaskStateTransitions,
+    environment: LiveWebEnvironment,
+    control: RuntimeControl,
+    publish_state: TaskStatePublisher,
+    publish_decision: AdaptiveDecisionPublisher,
+    progress: Callable[[str], None],
+) -> None:
+    _run_live_task(
+        state=state,
+        transitions=transitions,
+        environment=environment,
+        control=control,
+        publish_state=publish_state,
+        publish_decision=publish_decision,
+        progress=progress,
+    )
+
+
+def _run_resume_segment(
+    *,
+    state: TaskState,
+    transitions: TaskStateTransitions,
+    environment: LiveWebEnvironment,
+    control: RuntimeControl,
+    publish_state: TaskStatePublisher,
+    publish_decision: AdaptiveDecisionPublisher,
+    progress: Callable[[str], None],
+) -> None:
+    _run_live_task(
+        state=state,
+        transitions=transitions,
+        environment=environment,
+        control=control,
+        publish_state=publish_state,
+        publish_decision=publish_decision,
+        progress=progress,
     )
 
 
