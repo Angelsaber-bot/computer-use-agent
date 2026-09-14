@@ -60,6 +60,7 @@ from computer_agent.task import (
     SideEffectRecord,
     SideEffectState,
     SubgoalRecord,
+    SubgoalStatus,
     TaskState,
     TaskStateStatus,
     TaskStateTransitions,
@@ -81,6 +82,16 @@ BROWSER_WINDOW_ARTIFACT_ID = (
 
 WORKFLOW_ARTIFACT_ID = "live-web-workflow"
 QUERY_ARTIFACT_ID = "live-web-query"
+FOLLOWUP_TARGET_ARTIFACT_ID = (
+    "live-web-followup-target"
+)
+
+FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID = (
+    "live-web-followup-navigation-side-effect"
+)
+FOLLOWUP_NAVIGATION_ACTION_KEY = (
+    "click_target:wikipedia_followup_link"
+)
 
 BROWSER_WINDOW_MARKER_PREFIX = (
     "about:blank#computer-agent-task="
@@ -104,6 +115,7 @@ class LiveCrashPoint(StrEnum):
 
     QUERY_CHECKPOINT = "query_checkpoint"
     SUBMIT_EXECUTION = "submit_execution"
+    FOLLOWUP_EXECUTION = "followup_execution"
 
 
 class QueryVerificationMode(StrEnum):
@@ -159,14 +171,29 @@ class DurableWebSearchSpec:
         [str],
         tuple[TargetSpec, ...],
     ] | None = None
+    followup_claim_id: str | None = None
+    followup_subgoal_id: str | None = None
+    followup_claim_text_factory: Callable[
+        [str],
+        str,
+    ] | None = None
+    followup_subgoal_text_factory: Callable[
+        [str],
+        str,
+    ] | None = None
+    followup_step_goal_factory: Callable[
+        [str],
+        str,
+    ] | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ResolvedDurableWebSearchTask:
-    """One static workflow plus per-task runtime search query."""
+    """One static workflow plus per-task runtime parameters."""
 
     spec: DurableWebSearchSpec
     query_text: str
+    followup_target_text: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -175,6 +202,13 @@ class ResolvedDurableWebSearchTask:
         ):
             raise ValueError(
                 "query_text must be a non-empty string"
+            )
+        if self.followup_target_text is not None and (
+            not isinstance(self.followup_target_text, str)
+            or not self.followup_target_text.strip()
+        ):
+            raise ValueError(
+                "followup_target_text must be a non-empty string or None"
             )
 
 
@@ -217,6 +251,33 @@ def _wikipedia_result_targets(
             element_types=("heading",),
             minimum_confidence=0.70,
         ),
+    )
+
+
+def _wikipedia_followup_claim_text(
+    target_text: str,
+) -> str:
+    return (
+        "The requested Wikipedia destination "
+        f"{target_text!r} is visible."
+    )
+
+
+def _wikipedia_followup_subgoal_text(
+    target_text: str,
+) -> str:
+    return (
+        "Open the requested Wikipedia link "
+        f"{target_text!r} and verify its destination."
+    )
+
+
+def _wikipedia_followup_step_goal(
+    target_text: str,
+) -> str:
+    return (
+        "Open the requested Wikipedia link "
+        f"{target_text!r}."
     )
 
 
@@ -341,6 +402,21 @@ WIKIPEDIA_WORKFLOW = DurableWebSearchSpec(
         _wikipedia_query_confirmation_targets
     ),
     result_target_factory=_wikipedia_result_targets,
+    followup_claim_id=(
+        "live-web-wikipedia-followup-destination-visible"
+    ),
+    followup_subgoal_id=(
+        "live-web-wikipedia-open-followup"
+    ),
+    followup_claim_text_factory=(
+        _wikipedia_followup_claim_text
+    ),
+    followup_subgoal_text_factory=(
+        _wikipedia_followup_subgoal_text
+    ),
+    followup_step_goal_factory=(
+        _wikipedia_followup_step_goal
+    ),
 )
 
 WORKFLOWS = (
@@ -568,6 +644,52 @@ def build_resume_plan(
     )
 
 
+def build_followup_plan(
+    goal: str,
+    resolved_task: ResolvedDurableWebSearchTask | None = None,
+) -> StructuredPlan:
+    """Build the bounded follow-up navigation segment."""
+    resolved_task = _coerce_resolved_task(
+        goal,
+        resolved_task,
+    )
+    if resolved_task.followup_target_text is None:
+        raise RuntimeError(
+            "Follow-up plan requires a follow-up target."
+        )
+
+    target_text = resolved_task.followup_target_text
+    spec = resolved_task.spec
+    step_goal = (
+        spec.followup_step_goal_factory(target_text)
+        if spec.followup_step_goal_factory is not None
+        else f"Open the requested link {target_text!r}."
+    )
+
+    return StructuredPlan(
+        task_goal=goal,
+        steps=(
+            PlanStep(
+                goal=step_goal,
+                operation=(
+                    PlanOperation.CLICK_TARGET
+                ),
+                action_target=(
+                    _followup_link_target(
+                        resolved_task
+                    )
+                ),
+                verification_target=(
+                    _followup_destination_target(
+                        resolved_task
+                    )
+                ),
+                max_attempts=1,
+            ),
+        ),
+    )
+
+
 def goal_is_supported(
     goal: str,
 ) -> bool:
@@ -616,14 +738,16 @@ def _coerce_resolved_task(
 
 _SEARCH_GOAL_RE = re.compile(
     r"^\s*search\s+(?P<site>wikipedia|python\.org)"
-    r"\s+for\s+(?P<query>.*?)\s*$",
+    r"\s+for\s+(?P<query>.*?)"
+    r"(?:\s+and\s+open\s+(?P<target>.*?))?"
+    r"\s*$",
     re.IGNORECASE,
 )
 
 
 def parse_live_web_search_goal(
     goal: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, str | None]:
     """Parse the deterministic live search command grammar."""
     if not isinstance(goal, str):
         raise RuntimeError(
@@ -651,22 +775,53 @@ def parse_live_web_search_goal(
 
         raise RuntimeError(
             "Malformed live web search goal. Use "
-            "'Search python.org for <query>.' or "
-            "'Search Wikipedia for <query>.'"
+            "'Search python.org for <query>.', "
+            "'Search Wikipedia for <query>.', or "
+            "'Search Wikipedia for <query> and open <target>.'"
         )
 
     site = match.group("site").lower()
     query_text = match.group("query").strip()
+    target_text = (
+        match.group("target").strip()
+        if match.group("target") is not None
+        else None
+    )
 
-    if query_text.endswith("."):
+    if target_text is None and query_text.endswith("."):
         query_text = query_text[:-1].rstrip()
+    elif target_text is not None and target_text.endswith("."):
+        target_text = target_text[:-1].rstrip()
 
     if not query_text:
         raise RuntimeError(
             "Live web search query must be non-empty."
         )
 
-    return site, query_text
+    if (
+        target_text is None
+        and re.search(
+            r"\band\s+open\s*$",
+            query_text,
+            re.IGNORECASE,
+        )
+    ):
+        raise RuntimeError(
+            "Live web follow-up target must be non-empty."
+        )
+
+    if target_text is not None and not target_text:
+        raise RuntimeError(
+            "Live web follow-up target must be non-empty."
+        )
+
+    if target_text is not None and site != "wikipedia":
+        raise RuntimeError(
+            "Follow-up navigation is supported only "
+            "for Wikipedia in this experiment."
+        )
+
+    return site, query_text, target_text
 
 
 def resolve_live_web_task(
@@ -676,7 +831,11 @@ def resolve_live_web_task(
 ) -> ResolvedDurableWebSearchTask | None:
     """Resolve a bounded user goal to a workflow and runtime query."""
     try:
-        site, query_text = parse_live_web_search_goal(
+        (
+            site,
+            query_text,
+            followup_target_text,
+        ) = parse_live_web_search_goal(
             goal
         )
     except RuntimeError:
@@ -688,12 +847,18 @@ def resolve_live_web_task(
         return ResolvedDurableWebSearchTask(
             spec=PYTHON_WORKFLOW,
             query_text=query_text,
+            followup_target_text=(
+                followup_target_text
+            ),
         )
 
     if site == "wikipedia":
         return ResolvedDurableWebSearchTask(
             spec=WIKIPEDIA_WORKFLOW,
             query_text=query_text,
+            followup_target_text=(
+                followup_target_text
+            ),
         )
 
     if not raise_on_unsupported:
@@ -791,9 +956,14 @@ def create_live_web_worker(
             resolved_task,
         )
 
+        _ensure_followup_identity(
+            transitions,
+            resolved_task,
+        )
+
         _ensure_live_task_structure(
             transitions,
-            resolved_task.spec,
+            resolved_task,
         )
 
         state.status = (
@@ -813,6 +983,10 @@ def create_live_web_worker(
                 (
                     "Do not declare completion "
                     "without fresh result evidence."
+                ),
+                (
+                    "Do not declare follow-up completion "
+                    "without fresh destination evidence."
                 ),
             )
 
@@ -912,56 +1086,92 @@ def _run_live_task(
         progress=progress,
     )
 
-    observation = _reconcile_query_condition(
-        state=state,
-        transitions=transitions,
-        environment=environment,
-        resolved_task=resolved_task,
-        progress=progress,
-        observation=observation,
-    )
+    final_observation: TextInputObservation | None = None
 
-    publish_state()
-
-    _maybe_inject_process_crash(
-        LiveCrashPoint.QUERY_CHECKPOINT
-    )
-
-    if not _results_visible(
-        observation,
-        resolved_task,
+    if _task_has_followup(
+        resolved_task
     ):
-        _publish_live_decision(
-            publish_decision,
-            observation=observation,
-            decision_type="ACTION",
-            operation="click_target",
-            target_text=spec.submit_target.text,
-            expected_effect=(
-                "Submit the verified query and navigate "
-                "to the configured search results."
-            ),
-            reason=(
-                "The durable checkpoint is complete; "
-                "execution can continue without waiting "
-                "for a process restart."
-            ),
+        final_observation = (
+            _reconcile_followup_if_destination_visible(
+                transitions=transitions,
+                resolved_task=resolved_task,
+                observation=observation,
+                publish_state=publish_state,
+                progress=progress,
+            )
         )
 
-    control.checkpoint()
-
-    final_observation = (
-        _reconcile_submission_result_condition(
+    if final_observation is None:
+        observation = _reconcile_query_condition(
             state=state,
             transitions=transitions,
             environment=environment,
             resolved_task=resolved_task,
-            control=control,
-            publish_state=publish_state,
-            publish_decision=publish_decision,
             progress=progress,
+            observation=observation,
         )
-    )
+
+        publish_state()
+
+        _maybe_inject_process_crash(
+            LiveCrashPoint.QUERY_CHECKPOINT
+        )
+
+        if not _results_visible(
+            observation,
+            resolved_task,
+        ):
+            _publish_live_decision(
+                publish_decision,
+                observation=observation,
+                decision_type="ACTION",
+                operation="click_target",
+                target_text=spec.submit_target.text,
+                expected_effect=(
+                    "Submit the verified query and navigate "
+                    "to the configured search results."
+                ),
+                reason=(
+                    "The durable checkpoint is complete; "
+                    "execution can continue without waiting "
+                    "for a process restart."
+                ),
+            )
+
+        control.checkpoint()
+
+        final_observation = (
+            _reconcile_submission_result_condition(
+                state=state,
+                transitions=transitions,
+                environment=environment,
+                resolved_task=resolved_task,
+                control=control,
+                publish_state=publish_state,
+                publish_decision=publish_decision,
+                progress=progress,
+            )
+        )
+
+        if _task_has_followup(
+            resolved_task
+        ):
+            control.checkpoint()
+            final_observation = (
+                _reconcile_followup_navigation_condition(
+                    state=state,
+                    transitions=transitions,
+                    environment=environment,
+                    resolved_task=resolved_task,
+                    control=control,
+                    publish_state=publish_state,
+                    publish_decision=publish_decision,
+                    progress=progress,
+                    observation=final_observation,
+                )
+            )
+
+    assert final_observation is not None
 
     if not transitions.can_complete():
         raise RuntimeError(
@@ -983,7 +1193,7 @@ def _run_live_task(
         target_text=None,
         expected_effect=None,
         reason=(
-            "Fresh live result evidence verified "
+            "Fresh live evidence verified "
             "all semantic completion requirements."
         ),
         completion_summary=(
@@ -996,6 +1206,169 @@ def _run_live_task(
     progress(
         "Real browser task completed."
     )
+
+
+def _reconcile_followup_navigation_condition(
+    *,
+    state: TaskState,
+    transitions: TaskStateTransitions,
+    environment: LiveWebEnvironment,
+    resolved_task: ResolvedDurableWebSearchTask,
+    control: RuntimeControl,
+    publish_state: TaskStatePublisher,
+    publish_decision: AdaptiveDecisionPublisher,
+    progress: Callable[[str], None],
+    observation: TextInputObservation,
+) -> TextInputObservation:
+    spec = resolved_task.spec
+    _require_expected_app(
+        observation,
+        spec,
+    )
+
+    already_final = (
+        _reconcile_followup_if_destination_visible(
+            transitions=transitions,
+            resolved_task=resolved_task,
+            observation=observation,
+            publish_state=publish_state,
+            progress=progress,
+        )
+    )
+    if already_final is not None:
+        return already_final
+
+    if not _results_visible(
+        observation,
+        resolved_task,
+    ):
+        observation = _observe_or_reactivate_workspace(
+            state=state,
+            environment=environment,
+            spec=spec,
+        )
+        already_final = (
+            _reconcile_followup_if_destination_visible(
+                transitions=transitions,
+                resolved_task=resolved_task,
+                observation=observation,
+                publish_state=publish_state,
+                progress=progress,
+            )
+        )
+        if already_final is not None:
+            return already_final
+
+    if not _results_visible(
+        observation,
+        resolved_task,
+    ):
+        raise RuntimeError(
+            "The live browser state is ambiguous: "
+            "it is neither verified search outcome "
+            "state nor the requested destination."
+        )
+
+    link_grounding = _ground_followup_link(
+        observation,
+        resolved_task,
+    )
+
+    _ensure_followup_side_effect(
+        transitions,
+        resolved_task,
+    )
+    publish_state()
+
+    _publish_live_decision(
+        publish_decision,
+        observation=observation,
+        decision_type="ACTION",
+        operation="click_target",
+        target_text=resolved_task.followup_target_text,
+        expected_effect=(
+            "Open the requested Wikipedia link "
+            "and verify the destination heading."
+        ),
+        reason=(
+            "Fresh search outcome state contains "
+            "a unique actionable link for the "
+            "requested follow-up target."
+        ),
+    )
+
+    _mark_followup_execution_attempt(
+        transitions,
+        resolved_task,
+    )
+    publish_state()
+
+    control.checkpoint()
+
+    progress(
+        "Opening the requested Wikipedia link "
+        "through newly grounded live UI coordinates."
+    )
+
+    del link_grounding
+    result = _execute_agent_plan(
+        environment,
+        build_followup_plan(
+            state.goal,
+            resolved_task,
+        ),
+    )
+
+    _maybe_inject_process_crash(
+        LiveCrashPoint.FOLLOWUP_EXECUTION
+    )
+
+    final_observation = environment.observe()
+    _require_expected_app(
+        final_observation,
+        spec,
+    )
+
+    destination = _followup_destination_visible(
+        final_observation,
+        resolved_task,
+    )
+    if not destination:
+        _mark_followup_outcome_unknown(
+            transitions,
+        )
+        publish_state()
+
+        _require_agent_success(
+            result,
+            "real-web follow-up navigation",
+        )
+
+        raise RuntimeError(
+            "Fresh post-follow-up observation did "
+            "not resolve the requested destination heading."
+        )
+
+    evidence = _verify_followup_from_current_observation(
+        transitions,
+        resolved_task,
+        summary=(
+            "The requested Wikipedia destination "
+            f"{resolved_task.followup_target_text!r} "
+            "is visible after follow-up navigation."
+        ),
+        source=(
+            "Post-follow-up live Chrome observation"
+        ),
+    )
+    _confirm_followup_side_effect(
+        transitions,
+        resolved_task,
+        evidence.evidence_id,
+    )
+    publish_state()
+
+    return final_observation
 
 
 def _ensure_browser_workspace(
@@ -1062,6 +1435,16 @@ def _ensure_browser_workspace(
         )
 
     observation = environment.observe()
+    if (
+        observation.application_name
+        != spec.expected_application
+    ):
+        environment.activate_task_chrome_window(
+            browser_window_marker,
+            spec.working_url_prefix,
+        )
+        observation = environment.observe()
+
     _require_expected_app(
         observation,
         spec,
@@ -1469,6 +1852,155 @@ def _verify_results_from_current_observation(
     return evidence
 
 
+def _verify_followup_from_current_observation(
+    transitions: TaskStateTransitions,
+    resolved_task: ResolvedDurableWebSearchTask,
+    *,
+    summary: str,
+    source: str,
+) -> EvidenceRecord:
+    claim_id = _followup_claim_id(
+        resolved_task
+    )
+    subgoal_id = _followup_subgoal_id(
+        resolved_task
+    )
+    evidence = EvidenceRecord(
+        summary=summary,
+        source=source,
+        kind=EvidenceKind.VERIFICATION,
+    )
+
+    transitions.add_evidence(
+        evidence
+    )
+
+    transitions.verify_claim(
+        claim_id,
+        (evidence.evidence_id,),
+    )
+
+    transitions.verify_subgoal(
+        subgoal_id
+    )
+
+    return evidence
+
+
+def _reconcile_followup_if_destination_visible(
+    *,
+    transitions: TaskStateTransitions,
+    resolved_task: ResolvedDurableWebSearchTask,
+    observation: TextInputObservation,
+    publish_state: TaskStatePublisher,
+    progress: Callable[[str], None],
+) -> TextInputObservation | None:
+    if not _task_has_followup(
+        resolved_task
+    ):
+        return None
+
+    if not _followup_destination_visible(
+        observation,
+        resolved_task,
+    ):
+        return None
+
+    _reconcile_search_history_from_final_destination(
+        transitions,
+        resolved_task,
+    )
+
+    evidence = _verify_followup_from_current_observation(
+        transitions,
+        resolved_task,
+        summary=(
+            "Fresh browser state verifies "
+            "the requested Wikipedia destination "
+            f"{resolved_task.followup_target_text!r}."
+        ),
+        source=(
+            "Live Chrome destination observation"
+        ),
+    )
+    _confirm_followup_side_effect(
+        transitions,
+        resolved_task,
+        evidence.evidence_id,
+    )
+    publish_state()
+    progress(
+        "Fresh browser state already shows "
+        "the requested Wikipedia destination; "
+        "the follow-up link was not clicked again."
+    )
+    return observation
+
+
+def _reconcile_search_history_from_final_destination(
+    transitions: TaskStateTransitions,
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> None:
+    state = transitions.state
+    spec = resolved_task.spec
+    query_claim = state.claims.get(
+        spec.query_claim_id
+    )
+    result_claim = state.claims.get(
+        spec.result_claim_id
+    )
+
+    if (
+        query_claim is None
+        or result_claim is None
+        or not query_claim.evidence_ids
+        or not result_claim.evidence_ids
+    ):
+        return
+
+    if (
+        state.subgoals[
+            spec.query_subgoal_id
+        ].status
+        is SubgoalStatus.VERIFIED
+        and state.subgoals[
+            spec.result_subgoal_id
+        ].status
+        is SubgoalStatus.VERIFIED
+    ):
+        return
+
+    evidence = transitions.add_evidence(
+        EvidenceRecord(
+            summary=(
+                "Fresh final destination state "
+                "reconciles previously durable "
+                "query and search-result history "
+                "after restart."
+            ),
+            source=(
+                "Live Chrome destination observation "
+                "plus persisted task history"
+            ),
+            kind=EvidenceKind.VERIFICATION,
+        )
+    )
+    transitions.verify_claim(
+        spec.query_claim_id,
+        (evidence.evidence_id,),
+    )
+    transitions.verify_subgoal(
+        spec.query_subgoal_id
+    )
+    transitions.verify_claim(
+        spec.result_claim_id,
+        (evidence.evidence_id,),
+    )
+    transitions.verify_subgoal(
+        spec.result_subgoal_id
+    )
+
+
 def _ensure_submit_side_effect(
     transitions: TaskStateTransitions,
     spec: DurableWebSearchSpec = PYTHON_WORKFLOW,
@@ -1581,6 +2113,154 @@ def _confirm_submit_side_effect(
     )
 
 
+def _ensure_followup_side_effect(
+    transitions: TaskStateTransitions,
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> SideEffectRecord:
+    state = transitions.state
+    effect = state.side_effects.get(
+        FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+    )
+
+    if effect is not None:
+        return effect
+
+    return transitions.add_side_effect(
+        SideEffectRecord(
+            side_effect_id=(
+                FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+            ),
+            description=(
+                _followup_side_effect_description(
+                    resolved_task
+                )
+            ),
+            external_reference=(
+                resolved_task.spec.working_url_prefix
+            ),
+            idempotent=True,
+            action_key=(
+                FOLLOWUP_NAVIGATION_ACTION_KEY
+            ),
+        )
+    )
+
+
+def _mark_followup_execution_attempt(
+    transitions: TaskStateTransitions,
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> None:
+    effect = _ensure_followup_side_effect(
+        transitions,
+        resolved_task,
+    )
+
+    if (
+        effect.state
+        is SideEffectState.INTENDED
+    ):
+        transitions.mark_side_effect_executed(
+            FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+        )
+
+
+def _mark_followup_outcome_unknown(
+    transitions: TaskStateTransitions,
+) -> None:
+    effect = transitions.state.side_effects.get(
+        FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+    )
+
+    if (
+        effect is not None
+        and effect.state
+        is SideEffectState.EXECUTED
+    ):
+        transitions.mark_side_effect_unknown(
+            FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+        )
+
+
+def _confirm_followup_side_effect(
+    transitions: TaskStateTransitions,
+    resolved_task: ResolvedDurableWebSearchTask,
+    evidence_id: str,
+) -> None:
+    effect = transitions.state.side_effects.get(
+        FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+    )
+
+    if effect is None:
+        transitions.add_side_effect(
+            SideEffectRecord(
+                side_effect_id=(
+                    FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+                ),
+                description=(
+                    _followup_side_effect_description(
+                        resolved_task
+                    )
+                ),
+                state=(
+                    SideEffectState.CONFIRMED
+                ),
+                external_reference=(
+                    resolved_task.spec.working_url_prefix
+                ),
+                evidence_ids=(evidence_id,),
+                idempotent=True,
+                action_key=(
+                    FOLLOWUP_NAVIGATION_ACTION_KEY
+                ),
+            )
+        )
+        return
+
+    if (
+        effect.state
+        is SideEffectState.CONFIRMED
+    ):
+        return
+
+    if (
+        effect.state
+        is SideEffectState.INTENDED
+    ):
+        transitions.mark_side_effect_executed(
+            FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+        )
+
+    transitions.confirm_side_effect(
+        FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID,
+        (evidence_id,),
+    )
+
+
+def _ground_followup_link(
+    observation: TextInputObservation,
+    resolved_task: ResolvedDurableWebSearchTask,
+):
+    grounding = UIGrounder().ground(
+        _followup_link_target(
+            resolved_task
+        ),
+        observation.snapshot.fused_elements,
+    )
+
+    if (
+        grounding.status
+        is GroundingStatus.RESOLVED
+    ):
+        return grounding
+
+    raise RuntimeError(
+        "The requested Wikipedia follow-up link "
+        f"{resolved_task.followup_target_text!r} "
+        "did not resolve to one actionable link: "
+        f"{grounding.status.value}."
+    )
+
+
 def _results_visible(
     observation: TextInputObservation,
     target: DurableWebSearchSpec | ResolvedDurableWebSearchTask,
@@ -1617,6 +2297,137 @@ def _results_visible(
             return True
 
     return False
+
+
+def _followup_destination_visible(
+    observation: TextInputObservation,
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> bool:
+    grounding = UIGrounder().ground(
+        _followup_destination_target(
+            resolved_task
+        ),
+        observation.snapshot.fused_elements,
+    )
+
+    return (
+        grounding.status
+        is GroundingStatus.RESOLVED
+    )
+
+
+def _followup_link_target(
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> TargetSpec:
+    target_text = _followup_target_text(
+        resolved_task
+    )
+    return TargetSpec(
+        text=target_text,
+        element_types=("link",),
+        minimum_confidence=0.70,
+    )
+
+
+def _followup_destination_target(
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> TargetSpec:
+    target_text = _followup_target_text(
+        resolved_task
+    )
+    return TargetSpec(
+        text=target_text,
+        element_types=("heading",),
+        minimum_confidence=0.70,
+    )
+
+
+def _task_has_followup(
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> bool:
+    return (
+        resolved_task.followup_target_text
+        is not None
+    )
+
+
+def _followup_target_text(
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> str:
+    if resolved_task.followup_target_text is None:
+        raise RuntimeError(
+            "Resolved task has no follow-up target."
+        )
+    return resolved_task.followup_target_text
+
+
+def _followup_claim_id(
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> str:
+    claim_id = resolved_task.spec.followup_claim_id
+    if claim_id is None:
+        raise RuntimeError(
+            "Workflow has no follow-up claim configured."
+        )
+    return claim_id
+
+
+def _followup_subgoal_id(
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> str:
+    subgoal_id = resolved_task.spec.followup_subgoal_id
+    if subgoal_id is None:
+        raise RuntimeError(
+            "Workflow has no follow-up subgoal configured."
+        )
+    return subgoal_id
+
+
+def _followup_claim_text(
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> str:
+    target_text = _followup_target_text(
+        resolved_task
+    )
+    factory = (
+        resolved_task.spec.followup_claim_text_factory
+    )
+    if factory is None:
+        return (
+            "The requested destination "
+            f"{target_text!r} is visible."
+        )
+    return factory(
+        target_text
+    )
+
+
+def _followup_subgoal_text(
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> str:
+    target_text = _followup_target_text(
+        resolved_task
+    )
+    factory = (
+        resolved_task.spec.followup_subgoal_text_factory
+    )
+    if factory is None:
+        return (
+            "Open the requested link "
+            f"{target_text!r} and verify its destination."
+        )
+    return factory(
+        target_text
+    )
+
+
+def _followup_side_effect_description(
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> str:
+    return (
+        "Open Wikipedia link "
+        f"{_followup_target_text(resolved_task)!r}."
+    )
 
 
 def _query_condition_satisfied(
@@ -2035,10 +2846,22 @@ def _run_resume_segment(
 
 def _ensure_live_task_structure(
     transitions: TaskStateTransitions,
-    spec: DurableWebSearchSpec = PYTHON_WORKFLOW,
+    target: (
+        ResolvedDurableWebSearchTask
+        | DurableWebSearchSpec
+    ) = PYTHON_WORKFLOW,
 ) -> None:
     """Pre-register the complete live-task semantic structure."""
     state = transitions.state
+    if isinstance(
+        target,
+        ResolvedDurableWebSearchTask,
+    ):
+        spec = target.spec
+        resolved_task = target
+    else:
+        spec = target
+        resolved_task = None
 
     if spec.query_claim_id not in state.claims:
         transitions.add_claim(
@@ -2077,6 +2900,45 @@ def _ensure_live_task_structure(
                 ),
             )
         )
+
+    if (
+        resolved_task is not None
+        and _task_has_followup(
+            resolved_task
+        )
+    ):
+        claim_id = _followup_claim_id(
+            resolved_task
+        )
+        subgoal_id = _followup_subgoal_id(
+            resolved_task
+        )
+        if claim_id not in state.claims:
+            transitions.add_claim(
+                ClaimRecord(
+                    claim_id=claim_id,
+                    statement=(
+                        _followup_claim_text(
+                            resolved_task
+                        )
+                    ),
+                )
+            )
+
+        if subgoal_id not in state.subgoals:
+            transitions.add_subgoal(
+                SubgoalRecord(
+                    subgoal_id=subgoal_id,
+                    description=(
+                        _followup_subgoal_text(
+                            resolved_task
+                        )
+                    ),
+                    claim_ids=(
+                        claim_id,
+                    ),
+                )
+            )
 
 
 def _ensure_workflow_identity(
@@ -2162,6 +3024,56 @@ def _ensure_query_identity(
     )
 
 
+def _ensure_followup_identity(
+    transitions: TaskStateTransitions,
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> None:
+    """Persist and validate the requested follow-up target identity."""
+    state = transitions.state
+    artifact = state.artifacts.get(
+        FOLLOWUP_TARGET_ARTIFACT_ID
+    )
+
+    if not _task_has_followup(
+        resolved_task
+    ):
+        return
+
+    expected_target = _followup_target_text(
+        resolved_task
+    )
+
+    if artifact is not None:
+        if artifact.location != expected_target:
+            raise RuntimeError(
+                "Persisted live web follow-up target "
+                "identity does not match the resolved goal."
+            )
+        return
+
+    if (
+        resolved_task.spec.workspace_artifact_id
+        in state.artifacts
+    ):
+        raise RuntimeError(
+            "Persisted multi-step task has no durable "
+            "web follow-up target identity and cannot "
+            "be safely resumed."
+        )
+
+    transitions.add_artifact(
+        ArtifactRecord(
+            artifact_id=(
+                FOLLOWUP_TARGET_ARTIFACT_ID
+            ),
+            description=(
+                "Durable live web follow-up target text."
+            ),
+            location=expected_target,
+        )
+    )
+
+
 def _workflow_location(
     spec: DurableWebSearchSpec,
 ) -> str:
@@ -2178,10 +3090,19 @@ def _completion_summary(
     else:
         site = resolved_task.spec.workflow_id
 
+    if resolved_task.followup_target_text is None:
+        return (
+            f"{site} search for "
+            f"{resolved_task.query_text!r} "
+            "completed and was verified."
+        )
+
     return (
         f"{site} search for "
         f"{resolved_task.query_text!r} "
-        "completed and was verified."
+        "completed and opened "
+        f"{resolved_task.followup_target_text!r} "
+        "with destination verification."
     )
 
 
@@ -2195,11 +3116,17 @@ def _task_state_matches_workflow(
         spec.query_subgoal_id,
         spec.result_subgoal_id,
         spec.submit_side_effect_id,
+        spec.followup_claim_id,
+        spec.followup_subgoal_id,
+        FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID,
     )
     return any(
-        known_id in state.claims
+        known_id is not None
+        and (
+            known_id in state.claims
         or known_id in state.subgoals
         or known_id in state.side_effects
+        )
         for known_id in known_ids
     )
 

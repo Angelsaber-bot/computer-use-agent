@@ -5015,3 +5015,64 @@ Final live arbitrary-query acceptance passed for:
 - python.org `asyncio` uninterrupted;
 - Wikipedia `Claude Shannon` query-checkpoint crash/resume, with no duplicate typing;
 - Wikipedia `reinforcement learning` submit-execution crash/resume, with no duplicate submit and fresh result evidence confirming the existing side effect.
+
+## Phase 06.08.02 — Durable Follow-Up Navigation
+
+Experiment 06.08.02 extends the parameterized durable web worker from a two-step search workflow to a bounded optional follow-up navigation workflow for Wikipedia. The supported multi-step grammar is exactly `Search Wikipedia for <query> and open <target>.` Existing search-only goals remain supported: `Search Wikipedia for <query>.` and `Search python.org for <query>.`
+
+The parser remains deterministic and regex-based. It treats command and site matching case-insensitively, preserves meaningful query and target casing, trims surrounding whitespace, tolerates an optional final period, rejects empty queries, rejects empty follow-up targets, rejects malformed `and open` forms, and rejects `python.org` follow-up requests. No LLM grammar parsing, arbitrary website discovery, or third website was added.
+
+The runtime task now has one static workflow spec plus `query_text` and optional `followup_target_text`. Static workflow configuration remains with the Wikipedia workflow: start URL, working URL prefix, expected application, search field, submit target, result verification behavior, semantic IDs, and side-effect policy. The follow-up target is runtime intent.
+
+Durable intent identity now includes the `live-web-followup-target` artifact for multi-step tasks. On resume, the worker validates `live-web-workflow`, `live-web-query`, and `live-web-followup-target` before browser actions. A restored multi-step task missing the follow-up artifact fails closed. A tampered follow-up target fails closed. Search-only tasks do not create or require this artifact.
+
+Multi-step tasks add one follow-up claim and one follow-up subgoal after the query and result subgoals. The Task State panel therefore shows the three semantic steps for a multi-step goal:
+
+- enter the intended query;
+- submit the search and verify the search outcome;
+- open the requested link and verify its destination.
+
+The follow-up action is journaled separately as `live-web-followup-navigation-side-effect`. Its normal lifecycle is `INTENDED -> EXECUTED -> CONFIRMED`. The description includes the runtime target, for example `Open Wikipedia link 'Information theory'.` The side effect is confirmed only after fresh destination-heading evidence. If the click executes but the destination heading is not verified, the side effect remains unresolved/unknown and completion is blocked.
+
+Follow-up grounding uses a fresh observation of the current search outcome page and a `TargetSpec` requiring `element_types=("link",)`. Static text does not satisfy the click target. Missing or ambiguous links fail closed before journaling/executing the follow-up click.
+
+Destination verification uses a fresh `TargetSpec` requiring `element_types=("heading",)` for the requested target. URL changes, click bookkeeping, and AgentLoop `COMPLETED` status are not completion evidence. If AgentLoop reports failure but the fresh destination heading is visible, the worker accepts external reality, confirms the follow-up side effect, verifies the final subgoal, and completes.
+
+Resume reconciliation now uses the most advanced externally provable state first. If a multi-step task resumes after `followup_execution`, the browser may already be on the final destination page, where the original search field, search result state, or source link may no longer be visible. The worker first checks for the requested destination heading. If it is present and the task has durable prior query/result history, the worker reconciles the earlier subgoals from persisted history plus fresh final-state evidence, confirms the executed follow-up side effect, and completes without duplicate search or duplicate link click.
+
+Crash injection now supports `COMPUTER_AGENT_CRASH_AFTER=followup_execution`. The crash point occurs after the follow-up side effect has been marked executed and the click has physically run, but before the destination observation and side-effect confirmation.
+
+The deterministic experiment added `experiments/phase06_interactive_agent/experiment_10_durable_followup_navigation.py` and exercises:
+
+- Claude Shannon to `Information theory` uninterrupted;
+- Alan Turing to `Turing machine` query-checkpoint restart;
+- Claude Shannon submit-execution restart;
+- Claude Shannon follow-up-execution restart;
+- requested follow-up link missing fails closed;
+- persisted follow-up identity mismatch fails closed;
+- existing search-only python.org arbitrary-query flow still passes.
+
+Direct automated experiment output:
+
+```text
+Phase 06 Experiment 08.02: Durable Follow-Up Navigation
+Claude Shannon to Information theory uninterrupted: passed
+Alan Turing to Turing machine query restart: passed
+Claude Shannon submit restart: passed
+Claude Shannon follow-up restart: passed
+Requested link missing fails closed: passed
+Persisted follow-up identity mismatch fails closed: passed
+Search-only arbitrary query regression: passed
+Experiment acceptance: passed
+```
+
+The live durable acceptance harness now accepts `--path followup-crash`, which maps to `COMPUTER_AGENT_CRASH_AFTER=followup_execution`, while continuing to accept arbitrary deterministic `--goal` strings.
+
+Live validation passed for:
+
+- `Search Wikipedia for Claude Shannon and open Information theory.` uninterrupted, ending with heading `Information theory`, all three subgoals verified, submit side effect confirmed, follow-up side effect confirmed, and task status `completed`;
+- `Search Wikipedia for Alan Turing and open Turing machine.` uninterrupted, ending with heading `Turing machine`, all three subgoals verified, both side effects confirmed, and task status `completed`;
+- `Search Wikipedia for Claude Shannon and open Information theory.` with `followup_execution` crash/restart, where the first child exited `86` after the follow-up click, resume reacquired the marker-owned Chrome window already on the final destination, did not click the link again, reconciled prior search history, confirmed the follow-up side effect, verified the final subgoal, and completed;
+- `Search python.org for asyncio.` search-only regression, with only the query and result subgoals and the existing python.org submit side effect.
+
+Live validation also exposed one workspace acquisition issue: after creating a new Chrome task window, the first observation may still report another frontmost app. The worker now re-activates the marker-owned Chrome window and observes again before requiring the expected application. This is a generic workspace acquisition fix, not a workflow-specific special case.

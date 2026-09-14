@@ -66,7 +66,12 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--path",
-        choices=("normal", "query-crash", "submit-crash"),
+        choices=(
+            "normal",
+            "query-crash",
+            "submit-crash",
+            "followup-crash",
+        ),
         default="normal",
     )
     parser.add_argument(
@@ -108,11 +113,12 @@ def _run_path(args: argparse.Namespace) -> int:
             )
         )
 
-    crash_point = (
-        LiveCrashPoint.QUERY_CHECKPOINT
-        if args.path == "query-crash"
-        else LiveCrashPoint.SUBMIT_EXECUTION
-    )
+    crash_points = {
+        "query-crash": LiveCrashPoint.QUERY_CHECKPOINT,
+        "submit-crash": LiveCrashPoint.SUBMIT_EXECUTION,
+        "followup-crash": LiveCrashPoint.FOLLOWUP_EXECUTION,
+    }
+    crash_point = crash_points[args.path]
     env = {
         **os.environ,
         CRASH_ENV_VAR: crash_point.value,

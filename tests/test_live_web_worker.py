@@ -18,6 +18,8 @@ from computer_agent.app.live_web_worker import (
     BROWSER_WINDOW_MARKER_PREFIX,
     CRASH_ENV_VAR,
     DurableWebSearchSpec,
+    FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID,
+    FOLLOWUP_TARGET_ARTIFACT_ID,
     GO_BUTTON,
     LiveCrashPoint,
     PYTHON_WORKFLOW,
@@ -35,6 +37,7 @@ from computer_agent.app.live_web_worker import (
     QUERY_CLAIM_ID,
     QUERY_SUBGOAL_ID,
     _browser_window_marker_from_state,
+    _ensure_followup_identity,
     _ensure_query_identity,
     _ensure_workflow_identity,
     _maybe_inject_process_crash,
@@ -44,6 +47,7 @@ from computer_agent.app.live_web_worker import (
     _results_visible,
     _should_prepare_live_task_segment,
     build_prepare_plan,
+    build_followup_plan,
     build_resume_plan,
     create_live_web_worker,
     goal_is_supported,
@@ -86,6 +90,12 @@ WIKIPEDIA_GOAL = (
     "Search Wikipedia for computer use agent."
 )
 WIKIPEDIA_QUERY = "computer use agent"
+WIKIPEDIA_FOLLOWUP_GOAL = (
+    "Search Wikipedia for Claude Shannon "
+    "and open Information theory."
+)
+WIKIPEDIA_FOLLOWUP_QUERY = "Claude Shannon"
+WIKIPEDIA_FOLLOWUP_TARGET = "Information theory"
 
 
 def _resolved_task(
@@ -193,6 +203,9 @@ class FakeLiveWebEnvironment:
         mode: str = "empty",
         spec: DurableWebSearchSpec = PYTHON_WORKFLOW,
         query_text: str | None = None,
+        followup_target_text: str | None = None,
+        click_external_modes: tuple[str, ...] = (),
+        click_loop_statuses: tuple[AgentLoopStatus, ...] = (),
     ) -> None:
         del capture_path
         self.mode = mode
@@ -206,10 +219,21 @@ class FakeLiveWebEnvironment:
                 else SEARCH_QUERY
             )
         )
+        self.followup_target_text = (
+            followup_target_text
+        )
+        self.click_external_modes = list(
+            click_external_modes
+        )
+        self.click_loop_statuses = list(
+            click_loop_statuses
+        )
         self.open_count = 0
         self.activate_count = 0
         self.type_count = 0
         self.click_count = 0
+        self.submit_click_count = 0
+        self.followup_click_count = 0
         self.markers: list[str] = []
         self.perception_engine = object()
         self.executor = object()
@@ -263,12 +287,43 @@ class FakeLiveWebEnvironment:
         ):
             self.type_count += 1
             self.mode = "query"
+            loop_status = AgentLoopStatus.COMPLETED
+            completed_steps = 1
         elif (
             step.operation
             is PlanOperation.CLICK_TARGET
         ):
+            target_text = getattr(
+                step.action_target,
+                "text",
+                None,
+            )
             self.click_count += 1
-            self.mode = "results"
+            if (
+                target_text
+                == self.followup_target_text
+            ):
+                self.followup_click_count += 1
+                default_mode = "destination"
+            else:
+                self.submit_click_count += 1
+                default_mode = "results"
+            self.mode = (
+                self.click_external_modes.pop(0)
+                if self.click_external_modes
+                else default_mode
+            )
+            loop_status = (
+                self.click_loop_statuses.pop(0)
+                if self.click_loop_statuses
+                else AgentLoopStatus.COMPLETED
+            )
+            completed_steps = (
+                1
+                if loop_status
+                is AgentLoopStatus.COMPLETED
+                else 0
+            )
         else:
             raise AssertionError(
                 f"unexpected plan step: {step!r}"
@@ -277,14 +332,19 @@ class FakeLiveWebEnvironment:
         agent_state = AgentState(
             user_task=plan.task_goal
         )
-        agent_state.start()
-        agent_state.succeed()
+        if loop_status is AgentLoopStatus.COMPLETED:
+            agent_state.start()
+            agent_state.succeed()
+        else:
+            agent_state.fail(
+                "fake click bookkeeping failure"
+            )
 
         return AgentLoopResult(
-            status=AgentLoopStatus.COMPLETED,
+            status=loop_status,
             plan=plan,
             state=agent_state,
-            completed_plan_steps=1,
+            completed_plan_steps=completed_steps,
             reason="fake success",
         )
 
@@ -348,6 +408,39 @@ class FakeLiveWebEnvironment:
             )
 
         if self.mode == "results":
+            elements = [
+                _element(
+                    text=self.spec.search_field.text,
+                    value=self.query_text,
+                ),
+                _button(
+                    self.spec.submit_target.text
+                    or "",
+                    bounding_box=submit_box,
+                ),
+                _element(
+                    text=self.spec.result_target.text,
+                    value=None,
+                    element_type="heading",
+                ),
+            ]
+            if self.followup_target_text is not None:
+                elements.append(
+                    _element(
+                        text=self.followup_target_text,
+                        value=None,
+                        element_type="link",
+                        bounding_box=BoundingBox(
+                            x=30,
+                            y=100,
+                            width=220,
+                            height=20,
+                        ),
+                    )
+                )
+            return tuple(elements)
+
+        if self.mode == "missing_link":
             return (
                 _element(
                     text=self.spec.search_field.text,
@@ -362,6 +455,78 @@ class FakeLiveWebEnvironment:
                     text=self.spec.result_target.text,
                     value=None,
                     element_type="heading",
+                ),
+            )
+
+        if self.mode == "ambiguous_link":
+            assert self.followup_target_text is not None
+            return (
+                _element(
+                    text=self.spec.search_field.text,
+                    value=self.query_text,
+                ),
+                _button(
+                    self.spec.submit_target.text
+                    or "",
+                    bounding_box=submit_box,
+                ),
+                _element(
+                    text=self.spec.result_target.text,
+                    value=None,
+                    element_type="heading",
+                ),
+                _element(
+                    text=self.followup_target_text,
+                    value=None,
+                    element_type="link",
+                    bounding_box=BoundingBox(
+                        x=30,
+                        y=100,
+                        width=220,
+                        height=20,
+                    ),
+                ),
+                _element(
+                    text=self.followup_target_text,
+                    value=None,
+                    element_type="link",
+                    bounding_box=BoundingBox(
+                        x=30,
+                        y=140,
+                        width=220,
+                        height=20,
+                    ),
+                ),
+            )
+
+        if self.mode == "destination":
+            assert self.followup_target_text is not None
+            return (
+                _element(
+                    text=self.followup_target_text,
+                    value=None,
+                    element_type="heading",
+                    bounding_box=BoundingBox(
+                        x=10,
+                        y=60,
+                        width=280,
+                        height=32,
+                    ),
+                ),
+            )
+
+        if self.mode == "wrong_destination":
+            return (
+                _element(
+                    text="Wrong destination",
+                    value=None,
+                    element_type="heading",
+                    bounding_box=BoundingBox(
+                        x=10,
+                        y=60,
+                        width=280,
+                        height=32,
+                    ),
                 ),
             )
 
@@ -671,42 +836,61 @@ def test_live_web_goal_support() -> None:
 
 
 @pytest.mark.parametrize(
-    ("goal", "site", "query"),
+    ("goal", "site", "query", "followup"),
     (
         (
             "Search Wikipedia for Claude Shannon.",
             "wikipedia",
             "Claude Shannon",
+            None,
         ),
         (
             "Search Wikipedia for Alan Turing.",
             "wikipedia",
             "Alan Turing",
+            None,
         ),
         (
             "Search Wikipedia for reinforcement learning",
             "wikipedia",
             "reinforcement learning",
+            None,
         ),
         (
             "Search python.org for asyncio.",
             "python.org",
             "asyncio",
+            None,
         ),
         (
             "Search python.org for dataclasses.",
             "python.org",
             "dataclasses",
+            None,
         ),
         (
             "Search python.org for virtual environments.",
             "python.org",
             "virtual environments",
+            None,
         ),
         (
             "search wikipedia for alan turing",
             "wikipedia",
             "alan turing",
+            None,
+        ),
+        (
+            "Search Wikipedia for Claude Shannon and open Information theory.",
+            "wikipedia",
+            "Claude Shannon",
+            "Information theory",
+        ),
+        (
+            "search wikipedia for alan turing and open turing machine",
+            "wikipedia",
+            "alan turing",
+            "turing machine",
         ),
     ),
 )
@@ -714,10 +898,11 @@ def test_live_web_goal_parser(
     goal: str,
     site: str,
     query: str,
+    followup: str | None,
 ) -> None:
     assert parse_live_web_search_goal(
         goal
-    ) == (site, query)
+    ) == (site, query, followup)
 
 
 @pytest.mark.parametrize(
@@ -726,6 +911,8 @@ def test_live_web_goal_parser(
         "Search Wikipedia for .",
         "Search Wikipedia Claude Shannon.",
         "Search for Claude Shannon.",
+        "Search Wikipedia for Claude Shannon and open .",
+        "Search Wikipedia for Claude Shannon and open.",
     ),
 )
 def test_live_web_goal_parser_rejects_malformed_or_empty(
@@ -742,6 +929,16 @@ def test_live_web_goal_parser_rejects_unsupported_site() -> None:
     ):
         parse_live_web_search_goal(
             "Search Google for OpenAI."
+        )
+
+
+def test_live_web_goal_parser_rejects_python_followup() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="Follow-up navigation",
+    ):
+        parse_live_web_search_goal(
+            "Search python.org for asyncio and open documentation."
         )
 
 
@@ -777,6 +974,23 @@ def test_wikipedia_task_resolves_correctly() -> None:
     assert spec.search_field.text == "Search Wikipedia"
     assert spec.submit_target.text == "Search"
     assert spec.result_target.text == "Search results"
+
+
+def test_wikipedia_followup_task_resolves_runtime_target() -> None:
+    resolved_task = resolve_live_web_task(
+        WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    assert resolved_task is not None
+
+    assert resolved_task.spec is WIKIPEDIA_WORKFLOW
+    assert (
+        resolved_task.query_text
+        == WIKIPEDIA_FOLLOWUP_QUERY
+    )
+    assert (
+        resolved_task.followup_target_text
+        == WIKIPEDIA_FOLLOWUP_TARGET
+    )
 
 
 def test_resolve_live_web_workflow_returns_static_spec() -> None:
@@ -887,6 +1101,37 @@ def test_resume_plan_contains_only_submit_click() -> None:
     assert (
         step.verification_target
         == RESULTS_TARGET
+    )
+
+
+def test_followup_plan_clicks_runtime_link_and_verifies_heading() -> None:
+    resolved_task = resolve_live_web_task(
+        WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    assert resolved_task is not None
+
+    plan = build_followup_plan(
+        WIKIPEDIA_FOLLOWUP_GOAL,
+        resolved_task,
+    )
+
+    assert len(plan.steps) == 1
+    step = plan.steps[0]
+    assert (
+        step.operation
+        is PlanOperation.CLICK_TARGET
+    )
+    assert step.action_target.text == (
+        WIKIPEDIA_FOLLOWUP_TARGET
+    )
+    assert step.action_target.element_types == (
+        "link",
+    )
+    assert step.verification_target.text == (
+        WIKIPEDIA_FOLLOWUP_TARGET
+    )
+    assert step.verification_target.element_types == (
+        "heading",
     )
 
 
@@ -1121,6 +1366,62 @@ def test_wikipedia_query_checkpoint_crash_happens_before_submit(
     )
 
 
+def test_followup_execution_crash_happens_after_link_before_heading(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(
+        CRASH_ENV_VAR,
+        LiveCrashPoint.FOLLOWUP_EXECUTION.value,
+    )
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_FOLLOWUP_QUERY,
+        followup_target_text=(
+            WIKIPEDIA_FOLLOWUP_TARGET
+        ),
+    )
+
+    (
+        crash_points,
+        _published_statuses,
+        _decisions,
+        _progress_messages,
+        _control,
+    ) = _run_worker_until_injected_crash(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert crash_points == ["terminated"]
+    assert environment.type_count == 1
+    assert environment.submit_click_count == 1
+    assert environment.followup_click_count == 1
+    assert (
+        state.claims[
+            WIKIPEDIA_WORKFLOW.result_claim_id
+        ].status
+        is ClaimStatus.VERIFIED
+    )
+    assert (
+        state.claims[
+            WIKIPEDIA_WORKFLOW.followup_claim_id
+        ].status
+        is ClaimStatus.UNVERIFIED
+    )
+    assert (
+        state.side_effects[
+            FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+        ].state
+        is SideEffectState.EXECUTED
+    )
+
+
 def test_live_task_structure_is_preregistered_with_pending_result() -> None:
     state = TaskState(
         goal=GOAL
@@ -1182,6 +1483,40 @@ def test_generic_structure_creation_uses_spec_ids() -> None:
     } == set(state.subgoals)
 
 
+def test_followup_structure_is_created_only_for_multistep_task() -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+    resolved_task = resolve_live_web_task(
+        state.goal
+    )
+    assert resolved_task is not None
+
+    _ensure_live_task_structure(
+        transitions,
+        resolved_task,
+    )
+
+    assert tuple(state.subgoals) == (
+        WIKIPEDIA_WORKFLOW.query_subgoal_id,
+        WIKIPEDIA_WORKFLOW.result_subgoal_id,
+        WIKIPEDIA_WORKFLOW.followup_subgoal_id,
+    )
+    assert (
+        WIKIPEDIA_WORKFLOW.followup_claim_id
+        in state.claims
+    )
+    assert (
+        WIKIPEDIA_FOLLOWUP_TARGET
+        in state.subgoals[
+            WIKIPEDIA_WORKFLOW.followup_subgoal_id
+        ].description
+    )
+
+
 def test_workflow_identity_persists() -> None:
     state = TaskState(
         goal=WIKIPEDIA_GOAL
@@ -1224,6 +1559,116 @@ def test_query_identity_persists_exact_runtime_query() -> None:
         QUERY_ARTIFACT_ID
     ]
     assert artifact.location == "Claude Shannon"
+
+
+def test_followup_identity_persists_exact_runtime_target() -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+    resolved_task = resolve_live_web_task(
+        state.goal
+    )
+    assert resolved_task is not None
+
+    _ensure_followup_identity(
+        transitions,
+        resolved_task,
+    )
+
+    artifact = state.artifacts[
+        FOLLOWUP_TARGET_ARTIFACT_ID
+    ]
+    assert artifact.location == (
+        WIKIPEDIA_FOLLOWUP_TARGET
+    )
+
+
+def test_mismatched_persisted_followup_fails_closed() -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    state.artifacts[
+        FOLLOWUP_TARGET_ARTIFACT_ID
+    ] = ArtifactRecord(
+        artifact_id=FOLLOWUP_TARGET_ARTIFACT_ID,
+        description="Durable live web follow-up target text.",
+        location="Turing machine",
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+    resolved_task = resolve_live_web_task(
+        state.goal
+    )
+    assert resolved_task is not None
+
+    with pytest.raises(
+        RuntimeError,
+        match="follow-up target identity",
+    ):
+        _ensure_followup_identity(
+            transitions,
+            resolved_task,
+        )
+
+
+def test_missing_followup_identity_on_resume_fails_closed() -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL,
+        task_id="missing-followup-identity",
+    )
+    state.artifacts[
+        BROWSER_WINDOW_ARTIFACT_ID
+    ] = ArtifactRecord(
+        artifact_id=BROWSER_WINDOW_ARTIFACT_ID,
+        description="Agent-owned Chrome window.",
+        location=(
+            BROWSER_WINDOW_MARKER_PREFIX
+            + state.task_id
+        ),
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+    resolved_task = resolve_live_web_task(
+        state.goal
+    )
+    assert resolved_task is not None
+
+    with pytest.raises(
+        RuntimeError,
+        match="no durable web follow-up target identity",
+    ):
+        _ensure_followup_identity(
+            transitions,
+            resolved_task,
+        )
+
+
+def test_search_only_task_does_not_require_followup_identity() -> None:
+    state = TaskState(
+        goal="Search Wikipedia for Claude Shannon."
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+    resolved_task = resolve_live_web_task(
+        state.goal
+    )
+    assert resolved_task is not None
+
+    _ensure_followup_identity(
+        transitions,
+        resolved_task,
+    )
+
+    assert (
+        FOLLOWUP_TARGET_ARTIFACT_ID
+        not in state.artifacts
+    )
 
 
 def test_mismatched_persisted_query_fails_closed() -> None:
@@ -1570,6 +2015,76 @@ def test_wikipedia_worker_runs_through_shared_loop(
     )
 
 
+def test_wikipedia_followup_worker_runs_through_shared_loop(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_FOLLOWUP_QUERY,
+        followup_target_text=(
+            WIKIPEDIA_FOLLOWUP_TARGET
+        ),
+    )
+
+    (
+        _published_statuses,
+        decisions,
+        _progress_messages,
+        _control,
+    ) = _run_worker_with_fake_environment(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert environment.type_count == 1
+    assert environment.submit_click_count == 1
+    assert environment.followup_click_count == 1
+    assert (
+        state.artifacts[
+            FOLLOWUP_TARGET_ARTIFACT_ID
+        ].location
+        == WIKIPEDIA_FOLLOWUP_TARGET
+    )
+    assert (
+        state.claims[
+            WIKIPEDIA_WORKFLOW.followup_claim_id
+        ].status
+        is ClaimStatus.VERIFIED
+    )
+    assert (
+        state.subgoals[
+            WIKIPEDIA_WORKFLOW.followup_subgoal_id
+        ].status
+        is SubgoalStatus.VERIFIED
+    )
+    assert (
+        state.side_effects[
+            FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+        ].state
+        is SideEffectState.CONFIRMED
+    )
+    assert (
+        state.status
+        is TaskStateStatus.COMPLETED
+    )
+    assert any(
+        decision.final_decision_type == "ACTION"
+        and decision.target_text
+        == WIKIPEDIA_FOLLOWUP_TARGET
+        for decision in decisions
+    )
+    assert (
+        decisions[-1].final_decision_type
+        == "COMPLETE"
+    )
+
+
 @pytest.mark.parametrize(
     ("goal", "spec", "query_text"),
     (
@@ -1776,6 +2291,194 @@ def test_submission_success_still_fails_when_result_absent(
     assert (
         state.status
         is TaskStateStatus.RUNNING
+    )
+
+
+def test_followup_link_absent_fails_closed(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_FOLLOWUP_QUERY,
+        followup_target_text=(
+            WIKIPEDIA_FOLLOWUP_TARGET
+        ),
+        click_external_modes=("missing_link",),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="did not resolve to one actionable link",
+    ):
+        _run_worker_with_fake_environment(
+            monkeypatch,
+            state,
+            environment,
+        )
+
+    assert environment.followup_click_count == 0
+    assert (
+        FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+        not in state.side_effects
+    )
+
+
+def test_followup_link_ambiguous_fails_closed(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_FOLLOWUP_QUERY,
+        followup_target_text=(
+            WIKIPEDIA_FOLLOWUP_TARGET
+        ),
+        click_external_modes=("ambiguous_link",),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="ambiguous",
+    ):
+        _run_worker_with_fake_environment(
+            monkeypatch,
+            state,
+            environment,
+        )
+
+    assert environment.followup_click_count == 0
+
+
+def test_followup_success_bookkeeping_still_fails_when_heading_absent(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_FOLLOWUP_QUERY,
+        followup_target_text=(
+            WIKIPEDIA_FOLLOWUP_TARGET
+        ),
+        click_external_modes=(
+            "results",
+            "wrong_destination",
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="did not resolve the requested destination heading",
+    ):
+        _run_worker_with_fake_environment(
+            monkeypatch,
+            state,
+            environment,
+        )
+
+    assert environment.followup_click_count == 1
+    assert (
+        state.side_effects[
+            FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+        ].state
+        is SideEffectState.UNKNOWN
+    )
+    assert (
+        state.status
+        is TaskStateStatus.RUNNING
+    )
+
+
+def test_followup_loop_failure_accepts_fresh_destination(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_FOLLOWUP_QUERY,
+        followup_target_text=(
+            WIKIPEDIA_FOLLOWUP_TARGET
+        ),
+        click_loop_statuses=(
+            AgentLoopStatus.COMPLETED,
+            AgentLoopStatus.BLOCKED,
+        ),
+    )
+
+    _run_worker_with_fake_environment(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert environment.followup_click_count == 1
+    assert (
+        state.side_effects[
+            FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+        ].state
+        is SideEffectState.CONFIRMED
+    )
+    assert (
+        state.status
+        is TaskStateStatus.COMPLETED
+    )
+
+
+def test_followup_loop_failure_still_fails_when_heading_absent(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_FOLLOWUP_QUERY,
+        followup_target_text=(
+            WIKIPEDIA_FOLLOWUP_TARGET
+        ),
+        click_external_modes=(
+            "results",
+            "wrong_destination",
+        ),
+        click_loop_statuses=(
+            AgentLoopStatus.COMPLETED,
+            AgentLoopStatus.BLOCKED,
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="real-web follow-up navigation failed",
+    ):
+        _run_worker_with_fake_environment(
+            monkeypatch,
+            state,
+            environment,
+        )
+
+    assert (
+        state.side_effects[
+            FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+        ].state
+        is SideEffectState.UNKNOWN
     )
 
 
@@ -2238,6 +2941,138 @@ def test_wikipedia_restart_after_submit_avoids_duplicate_submit(
             WIKIPEDIA_WORKFLOW.submit_side_effect_id
         ].state
         is SideEffectState.CONFIRMED
+    )
+    assert (
+        state.status
+        is TaskStateStatus.COMPLETED
+    )
+
+
+def test_wikipedia_followup_restart_at_destination_avoids_duplicate_click(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL,
+        task_id="wiki-after-followup",
+        status=TaskStateStatus.PAUSED,
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+    resolved_task = resolve_live_web_task(
+        state.goal
+    )
+    assert resolved_task is not None
+    _ensure_workflow_identity(
+        transitions,
+        WIKIPEDIA_WORKFLOW,
+    )
+    _ensure_query_identity(
+        transitions,
+        resolved_task,
+    )
+    _ensure_followup_identity(
+        transitions,
+        resolved_task,
+    )
+    _ensure_live_task_structure(
+        transitions,
+        resolved_task,
+    )
+    query_evidence = transitions.add_evidence(
+        EvidenceRecord(
+            summary="Search field contains Claude Shannon.",
+            source="test",
+            kind=EvidenceKind.VERIFICATION,
+        )
+    )
+    transitions.verify_claim(
+        WIKIPEDIA_WORKFLOW.query_claim_id,
+        (query_evidence.evidence_id,),
+    )
+    transitions.verify_subgoal(
+        WIKIPEDIA_WORKFLOW.query_subgoal_id
+    )
+    result_evidence = transitions.add_evidence(
+        EvidenceRecord(
+            summary="Claude Shannon result visible.",
+            source="test",
+            kind=EvidenceKind.VERIFICATION,
+        )
+    )
+    transitions.verify_claim(
+        WIKIPEDIA_WORKFLOW.result_claim_id,
+        (result_evidence.evidence_id,),
+    )
+    transitions.verify_subgoal(
+        WIKIPEDIA_WORKFLOW.result_subgoal_id
+    )
+    transitions.add_side_effect(
+        SideEffectRecord(
+            side_effect_id=(
+                FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+            ),
+            description=(
+                "Open Wikipedia link "
+                "'Information theory'."
+            ),
+            state=SideEffectState.EXECUTED,
+            idempotent=True,
+            action_key=(
+                "click_target:wikipedia_followup_link"
+            ),
+        )
+    )
+    transitions.add_artifact(
+        ArtifactRecord(
+            artifact_id=(
+                WIKIPEDIA_WORKFLOW.workspace_artifact_id
+            ),
+            description=(
+                WIKIPEDIA_WORKFLOW.workspace_description
+            ),
+            location=(
+                BROWSER_WINDOW_MARKER_PREFIX
+                + state.task_id
+            ),
+        )
+    )
+    prepare_state_for_resume(
+        state
+    )
+
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="destination",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_FOLLOWUP_QUERY,
+        followup_target_text=(
+            WIKIPEDIA_FOLLOWUP_TARGET
+        ),
+    )
+
+    _run_worker_with_fake_environment(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert environment.open_count == 0
+    assert environment.activate_count == 1
+    assert environment.type_count == 0
+    assert environment.submit_click_count == 0
+    assert environment.followup_click_count == 0
+    assert (
+        state.side_effects[
+            FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+        ].state
+        is SideEffectState.CONFIRMED
+    )
+    assert (
+        state.subgoals[
+            WIKIPEDIA_WORKFLOW.followup_subgoal_id
+        ].status
+        is SubgoalStatus.VERIFIED
     )
     assert (
         state.status

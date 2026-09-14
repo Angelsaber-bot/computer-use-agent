@@ -15,10 +15,12 @@ from computer_agent.agent import (
 )
 from computer_agent.app.live_web_worker import (
     BROWSER_WINDOW_MARKER_PREFIX,
+    FOLLOWUP_TARGET_ARTIFACT_ID,
     QUERY_ARTIFACT_ID,
     QueryVerificationMode,
     create_live_web_worker,
     resolve_live_web_task,
+    _ensure_followup_identity,
     _ensure_live_task_structure,
     _ensure_query_identity,
     _ensure_workflow_identity,
@@ -49,7 +51,9 @@ class FakeRunResult:
     activated: int
     typed: int
     clicked: int
+    followup_clicked: int
     query_identity: str | None
+    followup_identity: str | None
 
 
 class FakeControl:
@@ -64,16 +68,19 @@ class FakeSearchEnvironment:
         capture_path,
         spec,
         query_text: str,
+        followup_target_text: str | None,
         mode: str,
     ) -> None:
         del capture_path
         self.spec = spec
         self.query_text = query_text
+        self.followup_target_text = followup_target_text
         self.mode = mode
         self.open_count = 0
         self.activate_count = 0
         self.type_count = 0
         self.click_count = 0
+        self.followup_click_count = 0
 
     def open_task_site(self, start_url: str, task_marker: str) -> str:
         if start_url != self.spec.start_url:
@@ -108,8 +115,18 @@ class FakeSearchEnvironment:
             self.type_count += 1
             self.mode = "query"
         elif step.operation is PlanOperation.CLICK_TARGET:
-            self.click_count += 1
-            self.mode = "results"
+            target_text = getattr(
+                step.action_target,
+                "text",
+                None,
+            )
+            if target_text == self._followup_target_text:
+                self.followup_click_count += 1
+                self.click_count += 1
+                self.mode = "destination"
+            else:
+                self.click_count += 1
+                self.mode = "results"
         else:
             raise RuntimeError(f"unexpected step: {step!r}")
 
@@ -156,6 +173,41 @@ class FakeSearchEnvironment:
                 submit,
             )
         if self.mode == "results":
+            elements = [
+                _field(
+                    self.spec.search_field.text or "",
+                    self.query_text,
+                ),
+                submit,
+                _element(
+                    self.spec.result_target.text or "",
+                    None,
+                    "heading",
+                    BoundingBox(10, 60, 240, 28),
+                ),
+            ]
+            if self._followup_target_text is not None:
+                elements.append(
+                    _element(
+                        self._followup_target_text,
+                        None,
+                        "link",
+                        BoundingBox(20, 100, 220, 20),
+                    )
+                )
+            return tuple(elements)
+        if self.mode == "destination":
+            if self._followup_target_text is None:
+                raise RuntimeError("missing follow-up target")
+            return (
+                _element(
+                    self._followup_target_text,
+                    None,
+                    "heading",
+                    BoundingBox(10, 60, 260, 32),
+                ),
+            )
+        if self.mode == "missing_link":
             return (
                 _field(
                     self.spec.search_field.text or "",
@@ -171,6 +223,10 @@ class FakeSearchEnvironment:
             )
         raise RuntimeError(f"unknown mode: {self.mode}")
 
+    @property
+    def _followup_target_text(self) -> str | None:
+        return self.followup_target_text
+
 
 def run_fake_worker_state(
     state: TaskState,
@@ -182,6 +238,9 @@ def run_fake_worker_state(
         capture_path=None,
         spec=resolved.spec,
         query_text=resolved.query_text,
+        followup_target_text=(
+            resolved.followup_target_text
+        ),
         mode=mode,
     )
     worker = create_live_web_worker(
@@ -196,13 +255,24 @@ def run_fake_worker_state(
         lambda message: None,
     )
     query = state.artifacts.get(QUERY_ARTIFACT_ID)
+    followup = state.artifacts.get(
+        FOLLOWUP_TARGET_ARTIFACT_ID
+    )
     return FakeRunResult(
         completed=state.status is TaskStateStatus.COMPLETED,
         opened=environment.open_count,
         activated=environment.activate_count,
         typed=environment.type_count,
         clicked=environment.click_count,
+        followup_clicked=(
+            environment.followup_click_count
+        ),
         query_identity=None if query is None else query.location,
+        followup_identity=(
+            None
+            if followup is None
+            else followup.location
+        ),
     )
 
 
@@ -217,7 +287,8 @@ def state_with_workspace(goal: str) -> TaskState:
     transitions = TaskStateTransitions(state)
     _ensure_workflow_identity(transitions, resolved.spec)
     _ensure_query_identity(transitions, resolved)
-    _ensure_live_task_structure(transitions, resolved.spec)
+    _ensure_followup_identity(transitions, resolved)
+    _ensure_live_task_structure(transitions, resolved)
     transitions.add_artifact(
         ArtifactRecord(
             artifact_id=resolved.spec.workspace_artifact_id,

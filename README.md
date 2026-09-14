@@ -394,3 +394,30 @@ The deterministic headless Experiment 06.08.01 covers Wikipedia `Claude Shannon`
 Live validation found two real browser details and the worker now handles both: python.org can expose typed field values through Accessibility with character spacing such as `a s y n ci o`, and Wikipedia can navigate an exact-title query directly to an article page instead of a `Search results` page. The python.org verifier keeps exact matching first and accepts only character-spaced compact equivalents. The Wikipedia workflow can verify either the static `Search results` heading or a dynamic article heading matching the runtime query.
 
 Live arbitrary-query acceptance passed for Wikipedia `Claude Shannon`, Wikipedia `reinforcement learning`, python.org `asyncio`, Wikipedia `Claude Shannon` query-checkpoint crash/resume, and Wikipedia `reinforcement learning` submit-execution crash/resume.
+
+#### Experiment 06.08.02: Durable Follow-Up Navigation
+
+Experiment 06.08.02 extends the same durable web workflow architecture from search-only tasks to one bounded multi-step Wikipedia task form: `Search Wikipedia for <query> and open <target>.` Existing search-only goals for Wikipedia and python.org remain supported, and no third website, arbitrary website discovery, or LLM parsing was introduced.
+
+The resolved runtime task now carries the static workflow spec, `query_text`, and optional `followup_target_text`. The deterministic parser preserves meaningful query/target casing, trims surrounding whitespace, tolerates one final period, rejects empty query or target text, and fails closed for `python.org` follow-up requests.
+
+The follow-up target is persisted independently as `live-web-followup-target`. On resume, workflow identity, query identity, and follow-up target identity must all match before any browser action. Search-only tasks do not create or require this artifact.
+
+Multi-step Wikipedia tasks add a third claim/subgoal only when a follow-up target is present: open the requested Wikipedia link and verify its destination. Search-only tasks keep only the query and result subgoals. The follow-up click has its own side-effect journal, `live-web-followup-navigation-side-effect`, with the lifecycle `INTENDED -> EXECUTED -> CONFIRMED`; confirmation requires fresh destination evidence.
+
+Follow-up grounding uses the current visible page and requires a unique actionable `link` matching the requested target. Destination verification uses a fresh `heading` matching the requested target. Successful click bookkeeping, URL changes, or AgentLoop completion alone are not completion evidence.
+
+Resume reconciliation now prefers the most advanced externally provable state. If a restarted multi-step task is already on the requested final destination page, the worker verifies the destination heading, reconciles prior durable search history, confirms the executed follow-up side effect, and completes without re-searching or clicking the link again.
+
+Development crash injection adds `COMPUTER_AGENT_CRASH_AFTER=followup_execution`, which exits after the follow-up click has executed and before destination evidence is persisted.
+
+The deterministic headless Experiment 06.08.02 covers Claude Shannon to `Information theory` uninterrupted, Alan Turing to `Turing machine` query-checkpoint restart, Claude Shannon submit restart, Claude Shannon follow-up restart, requested-link-missing failure, persisted follow-up identity mismatch failure, and a search-only python.org regression.
+
+Live validation passed for:
+
+- `Search Wikipedia for Claude Shannon and open Information theory.`
+- `Search Wikipedia for Alan Turing and open Turing machine.`
+- `COMPUTER_AGENT_CRASH_AFTER=followup_execution` with Claude Shannon to `Information theory`, including child exit `86`, resume on the final destination, no duplicate follow-up click, confirmed follow-up side effect, and completed task.
+- `Search python.org for asyncio.` search-only regression.
+
+During live validation, one real workspace-acquisition detail surfaced: after opening a new task window, Chrome may not immediately become frontmost. The worker now re-activates the marker-owned Chrome window if the first post-open observation reports a different frontmost app, then observes again before any UI action.
