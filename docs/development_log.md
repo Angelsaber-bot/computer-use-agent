@@ -5142,3 +5142,55 @@ Live validation passed for:
 - `Search python.org for asyncio.` search-only regression, with the two-step durable plan and the existing python.org submit side effect.
 
 During live validation, PyAutoGUI initially refused the focus click because the physical pointer was parked in a fail-safe screen corner. Moving the pointer away from the corner restored normal tool execution. This was an environment condition during validation, not a production durable-plan change.
+
+## Phase 06.08.04 — LLM-Generated Durable Planning
+
+Experiment 06.08.04 adds an LLM planning path above the existing durable runtime. The flow is now:
+
+User goal -> LLM durable proposal -> deterministic acceptance -> compiled persisted `DurableTaskPlan` -> generic reconciler -> per-action `StructuredPlan` -> `AgentLoop` -> tools -> fresh postcondition verification.
+
+The LLM does not execute tools directly. It does not generate coordinates, action keys, claim IDs, subgoal IDs, side-effect IDs, evidence, confidence values, or completion decisions. It proposes only bounded semantic intent through a strict JSON `DurablePlanProposal`, for example workflow ID plus `enter_text`, `submit_search`, and optional `open_link` steps.
+
+The deterministic runtime remains authoritative. A proposal is accepted only when every field matches the existing bounded capabilities and the user goal parsed by the deterministic grammar. Unsupported workflows, unsupported step kinds, empty text, oversized plans, duplicate or reordered submit steps, submit-before-entry ordering, python.org follow-up navigation, missing required search steps, extra unsupported steps, query mismatches, follow-up target mismatches, and workflow mismatches all fail closed before browser workspace creation.
+
+The accepted proposal is compiled with the existing durable plan compiler, so the persisted canonical `live-web-durable-plan` artifact remains the same internal `DurableTaskPlan` shape used by 06.08.03. The LLM does not fabricate internal durable step records.
+
+Planner selection is configurable through `COMPUTER_AGENT_DURABLE_PLANNER=deterministic` or `COMPUTER_AGENT_DURABLE_PLANNER=llm`. The default remains deterministic. Tests inject a fake LLM planner directly and never hit the network.
+
+New planner provenance is persisted as `live-web-durable-planner-provenance` with planner type and optional model identifier. No chain-of-thought or private model reasoning is persisted. Older checkpoints with a durable plan but no provenance remain resumable.
+
+Restart behavior is intentionally no-replan. If a persisted durable plan artifact exists, worker creation loads and validates that canonical plan against the goal-derived deterministic plan and does not call the planner again. Resume then proceeds through the generic durable reconciler. Tampered persisted plans still fail closed before browser action.
+
+The initial LLM planner remains bounded to the already-proven websites and operations:
+
+- Wikipedia: enter search text, submit Search, optionally open a named visible link, and verify the destination heading;
+- python.org: enter search text, submit GO, and verify Results.
+
+This phase does not claim arbitrary computer autonomy, arbitrary website discovery, arbitrary application interaction, or LLM-directed execution.
+
+The deterministic experiment added `experiments/phase06_interactive_agent/experiment_12_llm_durable_planning.py` and exercises:
+
+- LLM proposal to Wikipedia two-step durable plan;
+- LLM proposal to Wikipedia three-step durable plan;
+- LLM proposal to python.org durable plan;
+- mismatch rejected before browser action;
+- invalid ordering rejected;
+- persisted accepted plan resumes without planner call;
+- three-step execution through the generic reconciler;
+- crash recovery without re-planning.
+
+Direct automated experiment output:
+
+```text
+Phase 06.08.04 - LLM-Generated Durable Planning
+Wikipedia 2-step LLM durable plan: passed
+Wikipedia 3-step LLM durable plan: passed
+python.org LLM durable plan: passed
+Mismatch rejected before browser action: passed
+Invalid ordering rejected: passed
+Persisted accepted plan resumes without planner call: passed
+3-step execution uses generic reconciler: passed
+Crash recovery does not re-plan: passed
+Planner calls observed: 2
+Experiment acceptance: passed
+```

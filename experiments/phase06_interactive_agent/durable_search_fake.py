@@ -233,6 +233,8 @@ class FakeSearchEnvironment:
 def run_fake_worker_state(
     state: TaskState,
     mode: str,
+    *,
+    durable_planner=None,
 ) -> FakeRunResult:
     resolved = resolve_live_web_task(state.goal)
     assert resolved is not None
@@ -250,6 +252,7 @@ def run_fake_worker_state(
         lambda: None,
         lambda decision: None,
         environment_factory=lambda *, capture_path: environment,
+        durable_planner=durable_planner,
     )
     worker(
         RuntimeTask(goal=state.goal, task_id=state.task_id),

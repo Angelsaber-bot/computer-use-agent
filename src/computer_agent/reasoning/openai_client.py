@@ -245,7 +245,49 @@ class OpenAILLMClient:
         _validate_prompt(system_prompt, "system_prompt")
         _validate_prompt(user_prompt, "user_prompt")
 
-        response = self._client.responses.create(
+        response = self._create_response(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            text_format=deepcopy(_REASONING_PLAN_TEXT_FORMAT),
+        )
+        return _extract_output_text(response)
+
+    def generate_json(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        schema_name: str,
+        schema: dict[str, Any],
+    ) -> str:
+        """Return raw output text constrained by a strict JSON schema."""
+
+        _validate_prompt(system_prompt, "system_prompt")
+        _validate_prompt(user_prompt, "user_prompt")
+        _validate_prompt(schema_name, "schema_name")
+        if not isinstance(schema, dict) or not schema:
+            raise ValueError("schema must be a non-empty JSON schema object")
+
+        response = self._create_response(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            text_format={
+                "type": "json_schema",
+                "name": schema_name,
+                "strict": True,
+                "schema": deepcopy(schema),
+            },
+        )
+        return _extract_output_text(response)
+
+    def _create_response(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        text_format: dict[str, Any],
+    ) -> object:
+        return self._client.responses.create(
             model=self._model,
             input=[
                 {
@@ -258,11 +300,10 @@ class OpenAILLMClient:
                 },
             ],
             text={
-                "format": deepcopy(_REASONING_PLAN_TEXT_FORMAT),
+                "format": text_format,
             },
             store=False,
         )
-        return _extract_output_text(response)
 
 
 def _build_default_openai_client() -> object:

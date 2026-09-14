@@ -20,6 +20,13 @@ from computer_agent.app.live_web_worker import (
     LiveCrashPoint,
     create_live_web_worker,
 )
+from computer_agent.app.durable_planning import (
+    DeterministicDurablePlanner,
+    LLMDurablePlanner,
+)
+from computer_agent.reasoning.openai_client import (
+    OpenAILLMClient,
+)
 from computer_agent.runtime import RuntimeControl, RuntimeTask
 from computer_agent.task import (
     SideEffectState,
@@ -88,6 +95,20 @@ def _parse_args() -> argparse.Namespace:
         choices=("start", "resume"),
         default=None,
     )
+    parser.add_argument(
+        "--planner",
+        choices=("configured", "deterministic", "llm"),
+        default="configured",
+        help=(
+            "Durable planner to inject; 'configured' uses "
+            "COMPUTER_AGENT_DURABLE_PLANNER."
+        ),
+    )
+    parser.add_argument(
+        "--count-planner-calls",
+        action="store_true",
+        help="Print planner call counts for live validation.",
+    )
     return parser.parse_args()
 
 
@@ -138,6 +159,13 @@ def _run_path(args: argparse.Namespace) -> int:
             task_id,
             "--child",
             "start",
+            "--planner",
+            args.planner,
+            *(
+                ["--count-planner-calls"]
+                if args.count_planner_calls
+                else []
+            ),
         ],
         env=env,
         check=False,
@@ -163,6 +191,13 @@ def _run_path(args: argparse.Namespace) -> int:
             task_id,
             "--child",
             "resume",
+            "--planner",
+            args.planner,
+            *(
+                ["--count-planner-calls"]
+                if args.count_planner_calls
+                else []
+            ),
         ],
         check=False,
     )
@@ -205,10 +240,15 @@ def _run_child(args: argparse.Namespace) -> int:
             flush=True,
         )
 
+    planner = _planner_from_args(
+        args
+    )
+
     worker = create_live_web_worker(
         state,
         publish_state,
         decisions.append,
+        durable_planner=planner,
     )
 
     worker(
@@ -230,6 +270,15 @@ def _run_child(args: argparse.Namespace) -> int:
         _state_line(state),
         flush=True,
     )
+    if (
+        args.count_planner_calls
+        and planner is not None
+        and hasattr(planner, "calls")
+    ):
+        print(
+            f"planner_calls={planner.calls}",
+            flush=True,
+        )
 
     return (
         0
@@ -244,6 +293,65 @@ def _goal_from_args(
     if args.goal is not None and args.goal.strip():
         return args.goal.strip()
     return GOALS[args.workflow]
+
+
+def _planner_from_args(
+    args: argparse.Namespace,
+):
+    if args.planner == "configured":
+        return None
+    if args.planner == "deterministic":
+        planner = DeterministicDurablePlanner()
+    elif args.planner == "llm":
+        planner = LLMDurablePlanner(
+            client=OpenAILLMClient()
+        )
+    else:
+        raise RuntimeError(
+            f"Unsupported planner: {args.planner}"
+        )
+
+    if not args.count_planner_calls:
+        return planner
+    return _CountingPlanner(
+        planner
+    )
+
+
+class _CountingPlanner:
+    def __init__(
+        self,
+        planner,
+    ) -> None:
+        self._planner = planner
+        self.calls = 0
+        self.planner_type = getattr(
+            planner,
+            "planner_type",
+            "unknown",
+        )
+        self.model_identifier = getattr(
+            planner,
+            "model_identifier",
+            None,
+        )
+
+    def plan(
+        self,
+        goal,
+        context,
+    ):
+        self.calls += 1
+        print(
+            f"planner_call={self.calls} "
+            f"planner_type={self.planner_type} "
+            f"model={self.model_identifier}",
+            flush=True,
+        )
+        return self._planner.plan(
+            goal,
+            context,
+        )
 
 
 def _state_line(state: TaskState) -> str:

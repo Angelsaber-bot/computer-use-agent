@@ -19,6 +19,12 @@ from computer_agent.agent import (
     AgentStatus,
     TextInputObservation,
 )
+from computer_agent.app.durable_planning import (
+    DeterministicDurablePlanner,
+    DurablePlanner,
+    LLMDurablePlanner,
+    default_durable_planning_context,
+)
 from computer_agent.control.computer_controller import (
     ComputerController,
 )
@@ -46,6 +52,9 @@ from computer_agent.planning import (
 from computer_agent.reasoning import (
     AdaptiveDecisionSnapshot,
     DecisionAttemptSnapshot,
+)
+from computer_agent.reasoning.openai_client import (
+    OpenAILLMClient,
 )
 
 from computer_agent.runtime import (
@@ -89,7 +98,15 @@ FOLLOWUP_TARGET_ARTIFACT_ID = (
 DURABLE_PLAN_ARTIFACT_ID = (
     "live-web-durable-plan"
 )
+DURABLE_PLANNER_PROVENANCE_ARTIFACT_ID = (
+    "live-web-durable-planner-provenance"
+)
 DURABLE_PLAN_VERSION = 1
+DURABLE_PLANNER_PROVENANCE_VERSION = 1
+
+DURABLE_PLANNER_ENV_VAR = (
+    "COMPUTER_AGENT_DURABLE_PLANNER"
+)
 
 FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID = (
     "live-web-followup-navigation-side-effect"
@@ -121,6 +138,13 @@ class LiveCrashPoint(StrEnum):
     QUERY_CHECKPOINT = "query_checkpoint"
     SUBMIT_EXECUTION = "submit_execution"
     FOLLOWUP_EXECUTION = "followup_execution"
+
+
+class DurablePlannerMode(StrEnum):
+    """Selectable durable-planning modes for live web tasks."""
+
+    DETERMINISTIC = "deterministic"
+    LLM = "llm"
 
 
 class QueryVerificationMode(StrEnum):
@@ -302,6 +326,28 @@ class DurableTaskPlan:
             if step.step_id in seen:
                 raise ValueError(f"duplicate durable step: {step.step_id}")
             seen.add(step.step_id)
+
+
+@dataclass(frozen=True, slots=True)
+class DurablePlannerProvenance:
+    """Persisted source metadata for an accepted durable plan."""
+
+    planner_type: str
+    model_identifier: str | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.planner_type, str)
+            or not self.planner_type.strip()
+        ):
+            raise ValueError("planner_type must be a non-empty string")
+        if self.model_identifier is not None and (
+            not isinstance(self.model_identifier, str)
+            or not self.model_identifier.strip()
+        ):
+            raise ValueError(
+                "model_identifier must be a non-empty string or None"
+            )
 
 
 EXPECTED_APP = "Google Chrome"
@@ -904,6 +950,242 @@ def durable_plan_canonical_json(
     )
 
 
+def durable_planner_provenance_canonical_json(
+    provenance: DurablePlannerProvenance,
+) -> str:
+    """Return deterministic JSON durable-planner provenance."""
+    return json.dumps(
+        {
+            "version": DURABLE_PLANNER_PROVENANCE_VERSION,
+            "planner_type": provenance.planner_type,
+            "model_identifier": provenance.model_identifier,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def durable_plan_from_canonical_json(
+    value: str,
+) -> DurableTaskPlan:
+    """Load a persisted canonical durable task plan."""
+    try:
+        payload = json.loads(
+            value
+        )
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "Persisted durable task plan is not valid JSON."
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            "Persisted durable task plan must be a JSON object."
+        )
+
+    expected_keys = {
+        "plan_id",
+        "version",
+        "workflow_id",
+        "steps",
+    }
+    if set(payload) != expected_keys:
+        raise RuntimeError(
+            "Persisted durable task plan contains unsupported fields."
+        )
+    if payload["version"] != DURABLE_PLAN_VERSION:
+        raise RuntimeError(
+            "Persisted durable task plan version is unsupported."
+        )
+    plan_id = _require_persisted_string(
+        payload["plan_id"],
+        "plan_id",
+    )
+    workflow_id = _require_persisted_string(
+        payload["workflow_id"],
+        "workflow_id",
+    )
+    steps_payload = payload["steps"]
+    if not isinstance(steps_payload, list) or not steps_payload:
+        raise RuntimeError(
+            "Persisted durable task plan must contain steps."
+        )
+
+    plan = DurableTaskPlan(
+        plan_id=plan_id,
+        workflow_id=workflow_id,
+        version=DURABLE_PLAN_VERSION,
+        steps=tuple(
+            _durable_step_from_payload(step_payload)
+            for step_payload in steps_payload
+        ),
+    )
+    if durable_plan_canonical_json(plan) != value:
+        raise RuntimeError(
+            "Persisted durable task plan is not canonical."
+        )
+    return plan
+
+
+def _durable_step_from_payload(
+    payload: object,
+) -> DurableTaskStep:
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            "Persisted durable task plan contains an invalid step."
+        )
+    expected_keys = {
+        "step_id",
+        "kind",
+        "description",
+        "postcondition",
+        "claim_id",
+        "claim_text",
+        "subgoal_id",
+        "subgoal_text",
+        "action_target",
+        "verification_target",
+        "input_text",
+        "side_effect_id",
+        "side_effect_action_key",
+        "side_effect_description",
+    }
+    if set(payload) != expected_keys:
+        raise RuntimeError(
+            "Persisted durable task plan contains an invalid step."
+        )
+
+    try:
+        kind = DurableStepKind(
+            payload["kind"]
+        )
+        postcondition = DurablePostconditionKind(
+            payload["postcondition"]
+        )
+    except ValueError as exc:
+        raise RuntimeError(
+            "Persisted durable task plan contains an invalid step."
+        ) from exc
+
+    return DurableTaskStep(
+        step_id=_require_persisted_string(
+            payload["step_id"],
+            "step_id",
+        ),
+        kind=kind,
+        description=_require_persisted_string(
+            payload["description"],
+            "description",
+        ),
+        postcondition=postcondition,
+        claim_id=_require_persisted_string(
+            payload["claim_id"],
+            "claim_id",
+        ),
+        claim_text=_require_persisted_string(
+            payload["claim_text"],
+            "claim_text",
+        ),
+        subgoal_id=_require_persisted_string(
+            payload["subgoal_id"],
+            "subgoal_id",
+        ),
+        subgoal_text=_require_persisted_string(
+            payload["subgoal_text"],
+            "subgoal_text",
+        ),
+        action_target=_target_spec_from_payload(
+            payload["action_target"]
+        ),
+        verification_target=_target_spec_from_payload(
+            payload["verification_target"]
+        ),
+        input_text=_optional_persisted_string(
+            payload["input_text"],
+            "input_text",
+        ),
+        side_effect_id=_optional_persisted_string(
+            payload["side_effect_id"],
+            "side_effect_id",
+        ),
+        side_effect_action_key=_optional_persisted_string(
+            payload["side_effect_action_key"],
+            "side_effect_action_key",
+        ),
+        side_effect_description=_optional_persisted_string(
+            payload["side_effect_description"],
+            "side_effect_description",
+        ),
+    )
+
+
+def _target_spec_from_payload(
+    payload: object,
+) -> TargetSpec | None:
+    if payload is None:
+        return None
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            "Persisted durable task plan contains an invalid target."
+        )
+    expected_keys = {
+        "text",
+        "identifier",
+        "element_types",
+        "minimum_confidence",
+        "reference_point",
+    }
+    if set(payload) != expected_keys:
+        raise RuntimeError(
+            "Persisted durable task plan contains an invalid target."
+        )
+
+    element_types = payload["element_types"]
+    if not isinstance(element_types, list) or not all(
+        isinstance(item, str)
+        for item in element_types
+    ):
+        raise RuntimeError(
+            "Persisted durable task plan contains an invalid target."
+        )
+    reference_point = payload["reference_point"]
+    if reference_point is not None:
+        if (
+            not isinstance(reference_point, list)
+            or len(reference_point) != 2
+            or not all(
+                isinstance(item, (int, float))
+                for item in reference_point
+            )
+        ):
+            raise RuntimeError(
+                "Persisted durable task plan contains an invalid target."
+            )
+        reference_point_value = (
+            float(reference_point[0]),
+            float(reference_point[1]),
+        )
+    else:
+        reference_point_value = None
+
+    return TargetSpec(
+        text=_optional_persisted_string(
+            payload["text"],
+            "target.text",
+        ),
+        identifier=_optional_persisted_string(
+            payload["identifier"],
+            "target.identifier",
+        ),
+        element_types=tuple(element_types),
+        minimum_confidence=_require_persisted_float(
+            payload["minimum_confidence"],
+            "target.minimum_confidence",
+        ),
+        reference_point=reference_point_value,
+    )
+
+
 def _durable_plan_payload(
     plan: DurableTaskPlan,
 ) -> dict[str, object]:
@@ -963,6 +1245,44 @@ def _target_spec_payload(
             else None
         ),
     }
+
+
+def _require_persisted_string(
+    value: object,
+    field_name: str,
+) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(
+            f"Persisted durable task plan field {field_name} "
+            "must be a non-empty string."
+        )
+    return value
+
+
+def _optional_persisted_string(
+    value: object,
+    field_name: str,
+) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise RuntimeError(
+            f"Persisted durable task plan field {field_name} "
+            "must be a string or null."
+        )
+    return value
+
+
+def _require_persisted_float(
+    value: object,
+    field_name: str,
+) -> float:
+    if not isinstance(value, (int, float)):
+        raise RuntimeError(
+            f"Persisted durable task plan field {field_name} "
+            "must be numeric."
+        )
+    return float(value)
 
 
 def goal_is_supported(
@@ -1161,6 +1481,128 @@ def resolve_live_web_workflow(
     return resolved_task.spec
 
 
+def _configured_durable_planner_mode() -> DurablePlannerMode:
+    raw_value = os.environ.get(
+        DURABLE_PLANNER_ENV_VAR,
+        DurablePlannerMode.DETERMINISTIC.value,
+    )
+    try:
+        return DurablePlannerMode(
+            raw_value.strip().lower()
+        )
+    except ValueError as exc:
+        supported = ", ".join(
+            mode.value
+            for mode in DurablePlannerMode
+        )
+        raise RuntimeError(
+            f"Unsupported {DURABLE_PLANNER_ENV_VAR} value "
+            f"{raw_value!r}; supported values: {supported}"
+        ) from exc
+
+
+def _create_durable_planner(
+    mode: DurablePlannerMode,
+) -> DurablePlanner:
+    if mode is DurablePlannerMode.DETERMINISTIC:
+        return DeterministicDurablePlanner()
+    if mode is DurablePlannerMode.LLM:
+        return LLMDurablePlanner(
+            client=OpenAILLMClient()
+        )
+    raise RuntimeError(
+        f"Unsupported durable planner mode: {mode}"
+    )
+
+
+def _planner_provenance_for(
+    planner: DurablePlanner,
+    mode: DurablePlannerMode,
+) -> DurablePlannerProvenance:
+    planner_type = getattr(
+        planner,
+        "planner_type",
+        mode.value,
+    )
+    if not isinstance(planner_type, str) or not planner_type.strip():
+        planner_type = mode.value
+    model_identifier = getattr(
+        planner,
+        "model_identifier",
+        None,
+    )
+    if not isinstance(model_identifier, str) or not model_identifier.strip():
+        model_identifier = None
+    return DurablePlannerProvenance(
+        planner_type=planner_type,
+        model_identifier=model_identifier,
+    )
+
+
+def _select_durable_plan(
+    *,
+    goal: str,
+    state: TaskState,
+    resolved_task: ResolvedDurableWebSearchTask,
+    durable_planner: DurablePlanner | None,
+) -> tuple[DurableTaskPlan, DurablePlannerProvenance | None]:
+    expected_plan = compile_durable_task_plan(
+        resolved_task
+    )
+    artifact = state.artifacts.get(
+        DURABLE_PLAN_ARTIFACT_ID
+    )
+    if artifact is not None:
+        persisted_plan = durable_plan_from_canonical_json(
+            artifact.location
+        )
+        if durable_plan_canonical_json(
+            persisted_plan
+        ) != durable_plan_canonical_json(
+            expected_plan
+        ):
+            raise RuntimeError(
+                "Persisted durable task plan does not "
+                "match the resolved goal."
+            )
+        return persisted_plan, _read_durable_planner_provenance(
+            state,
+            allow_missing=True,
+        )
+
+    mode = _configured_durable_planner_mode()
+    planner = (
+        durable_planner
+        if durable_planner is not None
+        else _create_durable_planner(mode)
+    )
+    provenance = _planner_provenance_for(
+        planner,
+        mode,
+    )
+    context = default_durable_planning_context()
+    try:
+        durable_plan = planner.plan(
+            goal,
+            context,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Durable planning failed before browser action."
+        ) from exc
+
+    if durable_plan_canonical_json(
+        durable_plan
+    ) != durable_plan_canonical_json(
+        expected_plan
+    ):
+        raise RuntimeError(
+            "Accepted durable plan does not match "
+            "the resolved goal."
+        )
+    return durable_plan, provenance
+
+
 def create_live_web_worker(
     state: TaskState,
     publish_state: TaskStatePublisher,
@@ -1168,6 +1610,7 @@ def create_live_web_worker(
     *,
     capture_path: str | Path | None = None,
     environment_factory=LiveWebEnvironment,
+    durable_planner: DurablePlanner | None = None,
 ) -> RuntimeWorker:
     """Create the first persistent real-browser workspace worker."""
     if not isinstance(
@@ -1195,8 +1638,11 @@ def create_live_web_worker(
     resolved_task = resolve_live_web_task(
         state.goal
     )
-    durable_plan = compile_durable_task_plan(
-        resolved_task
+    durable_plan, planner_provenance = _select_durable_plan(
+        goal=state.goal,
+        state=state,
+        resolved_task=resolved_task,
+        durable_planner=durable_planner,
     )
 
     _configured_crash_point()
@@ -1237,6 +1683,11 @@ def create_live_web_worker(
         _ensure_followup_identity(
             transitions,
             resolved_task,
+        )
+
+        _ensure_durable_planner_provenance(
+            transitions,
+            planner_provenance,
         )
 
         _ensure_durable_plan_identity(
@@ -4024,6 +4475,122 @@ def _ensure_followup_identity(
     )
 
 
+def _ensure_durable_planner_provenance(
+    transitions: TaskStateTransitions,
+    provenance: DurablePlannerProvenance | None,
+) -> None:
+    """Persist and validate the accepted durable planner provenance."""
+    state = transitions.state
+    artifact = state.artifacts.get(
+        DURABLE_PLANNER_PROVENANCE_ARTIFACT_ID
+    )
+    if artifact is not None:
+        _read_durable_planner_provenance(
+            state,
+            allow_missing=False,
+        )
+        return
+
+    if provenance is None:
+        return
+
+    if DURABLE_PLAN_ARTIFACT_ID in state.artifacts:
+        return
+
+    transitions.add_artifact(
+        ArtifactRecord(
+            artifact_id=(
+                DURABLE_PLANNER_PROVENANCE_ARTIFACT_ID
+            ),
+            description=(
+                "Durable planner provenance for "
+                "the accepted task plan."
+            ),
+            location=durable_planner_provenance_canonical_json(
+                provenance
+            ),
+        )
+    )
+
+
+def _read_durable_planner_provenance(
+    state: TaskState,
+    *,
+    allow_missing: bool,
+) -> DurablePlannerProvenance | None:
+    artifact = state.artifacts.get(
+        DURABLE_PLANNER_PROVENANCE_ARTIFACT_ID
+    )
+    if artifact is None:
+        if allow_missing:
+            return None
+        raise RuntimeError(
+            "Persisted task has no durable planner provenance."
+        )
+
+    try:
+        payload = json.loads(
+            artifact.location
+        )
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "Persisted durable planner provenance "
+            "is not valid JSON."
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            "Persisted durable planner provenance "
+            "must be a JSON object."
+        )
+    expected_keys = {
+        "version",
+        "planner_type",
+        "model_identifier",
+    }
+    if set(payload) != expected_keys:
+        raise RuntimeError(
+            "Persisted durable planner provenance "
+            "contains unsupported fields."
+        )
+    if payload["version"] != DURABLE_PLANNER_PROVENANCE_VERSION:
+        raise RuntimeError(
+            "Persisted durable planner provenance "
+            "version is unsupported."
+        )
+    planner_type = payload["planner_type"]
+    if not isinstance(planner_type, str) or not planner_type.strip():
+        raise RuntimeError(
+            "Persisted durable planner provenance "
+            "has invalid planner type."
+        )
+    model_identifier = payload["model_identifier"]
+    if model_identifier is not None and (
+        not isinstance(model_identifier, str)
+        or not model_identifier.strip()
+    ):
+        raise RuntimeError(
+            "Persisted durable planner provenance "
+            "has invalid model identifier."
+        )
+
+    provenance = DurablePlannerProvenance(
+        planner_type=planner_type,
+        model_identifier=model_identifier,
+    )
+    if (
+        durable_planner_provenance_canonical_json(
+            provenance
+        )
+        != artifact.location
+    ):
+        raise RuntimeError(
+            "Persisted durable planner provenance "
+            "is not canonical."
+        )
+    return provenance
+
+
 def _ensure_durable_plan_identity(
     transitions: TaskStateTransitions,
     resolved_task: ResolvedDurableWebSearchTask,
@@ -4072,33 +4639,9 @@ def _ensure_durable_plan_identity(
 def _validate_durable_plan_json(
     value: str,
 ) -> None:
-    try:
-        payload = json.loads(
-            value
-        )
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            "Persisted durable task plan is not valid JSON."
-        ) from exc
-
-    if not isinstance(payload, dict):
-        raise RuntimeError(
-            "Persisted durable task plan must be a JSON object."
-        )
-    if payload.get("version") != DURABLE_PLAN_VERSION:
-        raise RuntimeError(
-            "Persisted durable task plan version is unsupported."
-        )
-    steps = payload.get("steps")
-    if not isinstance(steps, list) or not steps:
-        raise RuntimeError(
-            "Persisted durable task plan must contain steps."
-        )
-    for step in steps:
-        if not isinstance(step, dict) or not step.get("step_id"):
-            raise RuntimeError(
-                "Persisted durable task plan contains an invalid step."
-            )
+    durable_plan_from_canonical_json(
+        value
+    )
 
 
 def _workflow_location(
