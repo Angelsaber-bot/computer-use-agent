@@ -24,7 +24,9 @@ from computer_agent.app.live_web_worker import (
     ResolvedDurableWebSearchTask,
     SUBMIT_ACTION_KEY,
     SUBMIT_SIDE_EFFECT_ID,
+    compile_durable_task_plan,
     create_live_web_worker,
+    _ensure_durable_plan_identity,
     _ensure_query_identity,
     _ensure_live_task_structure,
 )
@@ -518,15 +520,25 @@ def _state_with_workspace(
         state
     )
 
+    resolved_task = ResolvedDurableWebSearchTask(
+        spec=PYTHON_WORKFLOW,
+        query_text=SEARCH_QUERY,
+    )
+    durable_plan = compile_durable_task_plan(
+        resolved_task
+    )
     _ensure_query_identity(
         transitions,
-        ResolvedDurableWebSearchTask(
-            spec=PYTHON_WORKFLOW,
-            query_text=SEARCH_QUERY,
-        ),
+        resolved_task,
+    )
+    _ensure_durable_plan_identity(
+        transitions,
+        resolved_task,
+        durable_plan,
     )
     _ensure_live_task_structure(
-        transitions
+        transitions,
+        durable_plan,
     )
     transitions.add_artifact(
         ArtifactRecord(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+import json
 import os
 from pathlib import Path
 import re
@@ -85,6 +86,10 @@ QUERY_ARTIFACT_ID = "live-web-query"
 FOLLOWUP_TARGET_ARTIFACT_ID = (
     "live-web-followup-target"
 )
+DURABLE_PLAN_ARTIFACT_ID = (
+    "live-web-durable-plan"
+)
+DURABLE_PLAN_VERSION = 1
 
 FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID = (
     "live-web-followup-navigation-side-effect"
@@ -125,11 +130,35 @@ class QueryVerificationMode(StrEnum):
     VISIBLE_SEARCH_UI = "visible_search_ui"
 
 
+class DurableStepKind(StrEnum):
+    """Semantic durable step operation kinds."""
+
+    ENTER_TEXT = "enter_text"
+    ACTIVATE_CONTROL = "activate_control"
+    OPEN_LINK = "open_link"
+
+
+class DurablePostconditionKind(StrEnum):
+    """Semantic postconditions for durable plan steps."""
+
+    QUERY_MATCHES = "query_matches"
+    SEARCH_OUTCOME_VISIBLE = "search_outcome_visible"
+    DESTINATION_HEADING_VISIBLE = "destination_heading_visible"
+
+
 @dataclass(frozen=True, slots=True)
 class QueryVerificationResult:
     """Fresh evidence that the configured query condition is satisfied."""
 
     element: UIElement
+    summary: str
+    source: str
+
+
+@dataclass(frozen=True, slots=True)
+class StepPostconditionResult:
+    """Fresh evidence summary for one durable step postcondition."""
+
     summary: str
     source: str
 
@@ -210,6 +239,69 @@ class ResolvedDurableWebSearchTask:
             raise ValueError(
                 "followup_target_text must be a non-empty string or None"
             )
+
+
+@dataclass(frozen=True, slots=True)
+class DurableTaskStep:
+    """One persisted semantic step in a durable task plan."""
+
+    step_id: str
+    kind: DurableStepKind
+    description: str
+    postcondition: DurablePostconditionKind
+    claim_id: str
+    claim_text: str
+    subgoal_id: str
+    subgoal_text: str
+    action_target: TargetSpec | None = None
+    verification_target: TargetSpec | None = None
+    input_text: str | None = None
+    side_effect_id: str | None = None
+    side_effect_action_key: str | None = None
+    side_effect_description: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.step_id, str) or not self.step_id.strip():
+            raise ValueError("step_id must be a non-empty string")
+        if not isinstance(self.kind, DurableStepKind):
+            raise ValueError("kind must be a DurableStepKind")
+        if not isinstance(
+            self.postcondition,
+            DurablePostconditionKind,
+        ):
+            raise ValueError(
+                "postcondition must be a DurablePostconditionKind"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class DurableTaskPlan:
+    """Ordered persisted semantic plan for one live-web task."""
+
+    plan_id: str
+    workflow_id: str
+    version: int
+    steps: tuple[DurableTaskStep, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.plan_id, str) or not self.plan_id.strip():
+            raise ValueError("plan_id must be a non-empty string")
+        if (
+            not isinstance(self.workflow_id, str)
+            or not self.workflow_id.strip()
+        ):
+            raise ValueError("workflow_id must be a non-empty string")
+        if self.version != DURABLE_PLAN_VERSION:
+            raise ValueError("unsupported durable plan version")
+        if not self.steps:
+            raise ValueError("durable plan must contain steps")
+        seen: set[str] = set()
+        for step in self.steps:
+            if not isinstance(step, DurableTaskStep):
+                raise ValueError("steps must contain DurableTaskStep")
+            if step.step_id in seen:
+                raise ValueError(f"duplicate durable step: {step.step_id}")
+            seen.add(step.step_id)
 
 
 EXPECTED_APP = "Google Chrome"
@@ -690,6 +782,189 @@ def build_followup_plan(
     )
 
 
+def compile_durable_task_plan(
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> DurableTaskPlan:
+    """Compile a resolved bounded goal into a persisted durable plan."""
+    spec = resolved_task.spec
+    steps: list[DurableTaskStep] = [
+        DurableTaskStep(
+            step_id="enter-query",
+            kind=DurableStepKind.ENTER_TEXT,
+            description=spec.prepare_step_goal,
+            action_target=spec.search_field,
+            input_text=resolved_task.query_text,
+            verification_target=None,
+            postcondition=(
+                DurablePostconditionKind.QUERY_MATCHES
+            ),
+            claim_id=spec.query_claim_id,
+            claim_text=spec.query_claim_text,
+            subgoal_id=spec.query_subgoal_id,
+            subgoal_text=spec.query_subgoal_text,
+        ),
+        DurableTaskStep(
+            step_id="submit-search",
+            kind=DurableStepKind.ACTIVATE_CONTROL,
+            description=spec.submit_step_goal,
+            action_target=spec.submit_target,
+            input_text=None,
+            verification_target=spec.result_target,
+            postcondition=(
+                DurablePostconditionKind.SEARCH_OUTCOME_VISIBLE
+            ),
+            claim_id=spec.result_claim_id,
+            claim_text=spec.result_claim_text,
+            subgoal_id=spec.result_subgoal_id,
+            subgoal_text=spec.result_subgoal_text,
+            side_effect_id=spec.submit_side_effect_id,
+            side_effect_action_key=spec.submit_action_key,
+            side_effect_description=spec.submit_description,
+        ),
+    ]
+
+    if resolved_task.followup_target_text is not None:
+        steps.append(
+            DurableTaskStep(
+                step_id="open-followup-link",
+                kind=DurableStepKind.OPEN_LINK,
+                description=(
+                    _followup_subgoal_text(
+                        resolved_task
+                    )
+                ),
+                action_target=(
+                    _followup_link_target(
+                        resolved_task
+                    )
+                ),
+                input_text=None,
+                verification_target=(
+                    _followup_destination_target(
+                        resolved_task
+                    )
+                ),
+                postcondition=(
+                    DurablePostconditionKind
+                    .DESTINATION_HEADING_VISIBLE
+                ),
+                claim_id=(
+                    _followup_claim_id(
+                        resolved_task
+                    )
+                ),
+                claim_text=(
+                    _followup_claim_text(
+                        resolved_task
+                    )
+                ),
+                subgoal_id=(
+                    _followup_subgoal_id(
+                        resolved_task
+                    )
+                ),
+                subgoal_text=(
+                    _followup_subgoal_text(
+                        resolved_task
+                    )
+                ),
+                side_effect_id=(
+                    FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+                ),
+                side_effect_action_key=(
+                    FOLLOWUP_NAVIGATION_ACTION_KEY
+                ),
+                side_effect_description=(
+                    _followup_side_effect_description(
+                        resolved_task
+                    )
+                ),
+            )
+        )
+
+    return DurableTaskPlan(
+        plan_id=(
+            f"live-web:{spec.workflow_id}:"
+            f"v{DURABLE_PLAN_VERSION}"
+        ),
+        workflow_id=spec.workflow_id,
+        version=DURABLE_PLAN_VERSION,
+        steps=tuple(steps),
+    )
+
+
+def durable_plan_canonical_json(
+    plan: DurableTaskPlan,
+) -> str:
+    """Return a deterministic JSON durable plan representation."""
+    return json.dumps(
+        _durable_plan_payload(plan),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _durable_plan_payload(
+    plan: DurableTaskPlan,
+) -> dict[str, object]:
+    return {
+        "plan_id": plan.plan_id,
+        "version": plan.version,
+        "workflow_id": plan.workflow_id,
+        "steps": [
+            _durable_step_payload(step)
+            for step in plan.steps
+        ],
+    }
+
+
+def _durable_step_payload(
+    step: DurableTaskStep,
+) -> dict[str, object]:
+    return {
+        "step_id": step.step_id,
+        "kind": step.kind.value,
+        "description": step.description,
+        "postcondition": step.postcondition.value,
+        "claim_id": step.claim_id,
+        "claim_text": step.claim_text,
+        "subgoal_id": step.subgoal_id,
+        "subgoal_text": step.subgoal_text,
+        "action_target": _target_spec_payload(
+            step.action_target
+        ),
+        "verification_target": _target_spec_payload(
+            step.verification_target
+        ),
+        "input_text": step.input_text,
+        "side_effect_id": step.side_effect_id,
+        "side_effect_action_key": (
+            step.side_effect_action_key
+        ),
+        "side_effect_description": (
+            step.side_effect_description
+        ),
+    }
+
+
+def _target_spec_payload(
+    target: TargetSpec | None,
+) -> dict[str, object] | None:
+    if target is None:
+        return None
+    return {
+        "text": target.text,
+        "identifier": target.identifier,
+        "element_types": list(target.element_types),
+        "minimum_confidence": target.minimum_confidence,
+        "reference_point": (
+            list(target.reference_point)
+            if target.reference_point is not None
+            else None
+        ),
+    }
+
+
 def goal_is_supported(
     goal: str,
 ) -> bool:
@@ -920,6 +1195,9 @@ def create_live_web_worker(
     resolved_task = resolve_live_web_task(
         state.goal
     )
+    durable_plan = compile_durable_task_plan(
+        resolved_task
+    )
 
     _configured_crash_point()
 
@@ -961,9 +1239,15 @@ def create_live_web_worker(
             resolved_task,
         )
 
-        _ensure_live_task_structure(
+        _ensure_durable_plan_identity(
             transitions,
             resolved_task,
+            durable_plan,
+        )
+
+        _ensure_live_task_structure(
+            transitions,
+            durable_plan,
         )
 
         state.status = (
@@ -1004,6 +1288,7 @@ def create_live_web_worker(
             transitions=transitions,
             environment=environment,
             resolved_task=resolved_task,
+            durable_plan=durable_plan,
             control=control,
             publish_state=publish_state,
             publish_decision=publish_decision,
@@ -1068,6 +1353,7 @@ def _run_live_task(
     transitions: TaskStateTransitions,
     environment: LiveWebEnvironment,
     resolved_task: ResolvedDurableWebSearchTask,
+    durable_plan: DurableTaskPlan,
     control: RuntimeControl,
     publish_state: TaskStatePublisher,
     publish_decision: AdaptiveDecisionPublisher,
@@ -1086,92 +1372,18 @@ def _run_live_task(
         progress=progress,
     )
 
-    final_observation: TextInputObservation | None = None
-
-    if _task_has_followup(
-        resolved_task
-    ):
-        final_observation = (
-            _reconcile_followup_if_destination_visible(
-                transitions=transitions,
-                resolved_task=resolved_task,
-                observation=observation,
-                publish_state=publish_state,
-                progress=progress,
-            )
-        )
-
-    if final_observation is None:
-        observation = _reconcile_query_condition(
-            state=state,
-            transitions=transitions,
-            environment=environment,
-            resolved_task=resolved_task,
-            progress=progress,
-            observation=observation,
-        )
-
-        publish_state()
-
-        _maybe_inject_process_crash(
-            LiveCrashPoint.QUERY_CHECKPOINT
-        )
-
-        if not _results_visible(
-            observation,
-            resolved_task,
-        ):
-            _publish_live_decision(
-                publish_decision,
-                observation=observation,
-                decision_type="ACTION",
-                operation="click_target",
-                target_text=spec.submit_target.text,
-                expected_effect=(
-                    "Submit the verified query and navigate "
-                    "to the configured search results."
-                ),
-                reason=(
-                    "The durable checkpoint is complete; "
-                    "execution can continue without waiting "
-                    "for a process restart."
-                ),
-            )
-
-        control.checkpoint()
-
-        final_observation = (
-            _reconcile_submission_result_condition(
-                state=state,
-                transitions=transitions,
-                environment=environment,
-                resolved_task=resolved_task,
-                control=control,
-                publish_state=publish_state,
-                publish_decision=publish_decision,
-                progress=progress,
-            )
-        )
-
-        if _task_has_followup(
-            resolved_task
-        ):
-            control.checkpoint()
-            final_observation = (
-                _reconcile_followup_navigation_condition(
-                    state=state,
-                    transitions=transitions,
-                    environment=environment,
-                    resolved_task=resolved_task,
-                    control=control,
-                    publish_state=publish_state,
-                    publish_decision=publish_decision,
-                    progress=progress,
-                    observation=final_observation,
-                )
-            )
-
-    assert final_observation is not None
+    final_observation = _reconcile_durable_plan(
+        state=state,
+        transitions=transitions,
+        environment=environment,
+        resolved_task=resolved_task,
+        durable_plan=durable_plan,
+        control=control,
+        publish_state=publish_state,
+        publish_decision=publish_decision,
+        progress=progress,
+        observation=observation,
+    )
 
     if not transitions.can_complete():
         raise RuntimeError(
@@ -1205,6 +1417,713 @@ def _run_live_task(
 
     progress(
         "Real browser task completed."
+    )
+
+
+def _reconcile_durable_plan(
+    *,
+    state: TaskState,
+    transitions: TaskStateTransitions,
+    environment: LiveWebEnvironment,
+    resolved_task: ResolvedDurableWebSearchTask,
+    durable_plan: DurableTaskPlan,
+    control: RuntimeControl,
+    publish_state: TaskStatePublisher,
+    publish_decision: AdaptiveDecisionPublisher,
+    progress: Callable[[str], None],
+    observation: TextInputObservation,
+) -> TextInputObservation:
+    """Reconcile one ordered durable plan from fresh browser state."""
+    observation, next_index = (
+        _reconcile_most_advanced_satisfied_step(
+            transitions=transitions,
+            resolved_task=resolved_task,
+            durable_plan=durable_plan,
+            observation=observation,
+            publish_state=publish_state,
+            progress=progress,
+        )
+    )
+
+    for index in range(
+        next_index,
+        len(durable_plan.steps),
+    ):
+        step = durable_plan.steps[index]
+        observation = _reconcile_durable_step(
+            state=state,
+            transitions=transitions,
+            environment=environment,
+            resolved_task=resolved_task,
+            durable_plan=durable_plan,
+            step=step,
+            step_index=index,
+            control=control,
+            publish_state=publish_state,
+            publish_decision=publish_decision,
+            progress=progress,
+            observation=observation,
+        )
+
+    return observation
+
+
+def _reconcile_most_advanced_satisfied_step(
+    *,
+    transitions: TaskStateTransitions,
+    resolved_task: ResolvedDurableWebSearchTask,
+    durable_plan: DurableTaskPlan,
+    observation: TextInputObservation,
+    publish_state: TaskStatePublisher,
+    progress: Callable[[str], None],
+) -> tuple[TextInputObservation, int]:
+    for index in range(
+        len(durable_plan.steps) - 1,
+        -1,
+        -1,
+    ):
+        step = durable_plan.steps[index]
+        postcondition = _step_postcondition_satisfied(
+            step,
+            observation,
+            resolved_task,
+        )
+        if postcondition is None:
+            continue
+
+        if not _prior_steps_have_durable_history(
+            transitions.state,
+            durable_plan,
+            index,
+        ):
+            continue
+
+        _reconcile_prior_steps_from_history(
+            transitions,
+            durable_plan,
+            index,
+            observation_summary=(
+                "Fresh advanced browser state reconciles "
+                "previous durable plan history after restart."
+            ),
+        )
+        evidence = _verify_step_from_postcondition(
+            transitions,
+            step,
+            postcondition,
+        )
+        _confirm_step_side_effect(
+            transitions,
+            resolved_task,
+            step,
+            evidence.evidence_id,
+        )
+        publish_state()
+        progress(
+            "Fresh browser state verifies durable "
+            f"plan step {step.step_id!r}."
+        )
+        return observation, index + 1
+
+    return observation, 0
+
+
+def _reconcile_durable_step(
+    *,
+    state: TaskState,
+    transitions: TaskStateTransitions,
+    environment: LiveWebEnvironment,
+    resolved_task: ResolvedDurableWebSearchTask,
+    durable_plan: DurableTaskPlan,
+    step: DurableTaskStep,
+    step_index: int,
+    control: RuntimeControl,
+    publish_state: TaskStatePublisher,
+    publish_decision: AdaptiveDecisionPublisher,
+    progress: Callable[[str], None],
+    observation: TextInputObservation,
+) -> TextInputObservation:
+    postcondition = _step_postcondition_satisfied(
+        step,
+        observation,
+        resolved_task,
+    )
+    if postcondition is not None:
+        evidence = _verify_step_from_postcondition(
+            transitions,
+            step,
+            postcondition,
+        )
+        _confirm_step_side_effect(
+            transitions,
+            resolved_task,
+            step,
+            evidence.evidence_id,
+        )
+        publish_state()
+        progress(
+            "Fresh browser state verifies durable "
+            f"plan step {step.step_id!r}."
+        )
+        return observation
+
+    _require_prior_steps_verified(
+        transitions.state,
+        durable_plan,
+        step_index,
+    )
+
+    _ensure_step_precondition(
+        observation,
+        resolved_task,
+        step,
+    )
+
+    side_effect = _ensure_step_side_effect(
+        transitions,
+        resolved_task,
+        step,
+    )
+    if side_effect is not None:
+        publish_state()
+
+    _publish_step_decision(
+        publish_decision,
+        observation=observation,
+        resolved_task=resolved_task,
+        step=step,
+    )
+
+    _mark_step_execution_attempt(
+        transitions,
+        resolved_task,
+        step,
+    )
+    if side_effect is not None:
+        publish_state()
+
+    control.checkpoint()
+
+    progress(
+        _step_execution_progress(
+            step
+        )
+    )
+
+    result = _execute_agent_plan(
+        environment,
+        _structured_plan_for_durable_step(
+            state.goal,
+            resolved_task,
+            step,
+        ),
+    )
+
+    _maybe_inject_step_crash(
+        step
+    )
+
+    refreshed = environment.observe()
+    _require_expected_app(
+        refreshed,
+        resolved_task.spec,
+    )
+
+    postcondition = _step_postcondition_satisfied(
+        step,
+        refreshed,
+        resolved_task,
+    )
+    if postcondition is None:
+        _mark_step_outcome_unknown(
+            transitions,
+            resolved_task,
+            step,
+        )
+        publish_state()
+        _require_agent_success(
+            result,
+            _step_failure_label(step),
+        )
+        raise RuntimeError(
+            _missing_postcondition_message(
+                step
+            )
+        )
+
+    evidence = _verify_step_from_postcondition(
+        transitions,
+        step,
+        postcondition,
+    )
+    _confirm_step_side_effect(
+        transitions,
+        resolved_task,
+        step,
+        evidence.evidence_id,
+    )
+    publish_state()
+
+    _maybe_inject_checkpoint_crash(
+        step
+    )
+
+    return refreshed
+
+
+def _step_postcondition_satisfied(
+    step: DurableTaskStep,
+    observation: TextInputObservation,
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> StepPostconditionResult | None:
+    if (
+        step.postcondition
+        is DurablePostconditionKind.QUERY_MATCHES
+    ):
+        result = _query_condition_satisfied(
+            observation,
+            resolved_task,
+        )
+        if result is None:
+            return None
+        return StepPostconditionResult(
+            summary=result.summary,
+            source=result.source,
+        )
+
+    if (
+        step.postcondition
+        is DurablePostconditionKind.SEARCH_OUTCOME_VISIBLE
+    ):
+        if not _results_visible(
+            observation,
+            resolved_task,
+        ):
+            return None
+        return StepPostconditionResult(
+            summary=(
+                "Fresh Chrome Accessibility shows "
+                "the configured search outcome."
+            ),
+            source=(
+                "Live Chrome Accessibility observation"
+            ),
+        )
+
+    if (
+        step.postcondition
+        is DurablePostconditionKind.DESTINATION_HEADING_VISIBLE
+    ):
+        if not _followup_destination_visible(
+            observation,
+            resolved_task,
+        ):
+            return None
+        return StepPostconditionResult(
+            summary=(
+                "Fresh browser state verifies "
+                "the requested Wikipedia destination "
+                f"{resolved_task.followup_target_text!r}."
+            ),
+            source=(
+                "Live Chrome destination observation"
+            ),
+        )
+
+    return None
+
+
+def _verify_step_from_postcondition(
+    transitions: TaskStateTransitions,
+    step: DurableTaskStep,
+    postcondition: StepPostconditionResult,
+) -> EvidenceRecord:
+    evidence = EvidenceRecord(
+        summary=postcondition.summary,
+        source=postcondition.source,
+        kind=EvidenceKind.VERIFICATION,
+    )
+    transitions.add_evidence(
+        evidence
+    )
+    transitions.verify_claim(
+        step.claim_id,
+        (evidence.evidence_id,),
+    )
+    transitions.verify_subgoal(
+        step.subgoal_id
+    )
+    return evidence
+
+
+def _prior_steps_have_durable_history(
+    state: TaskState,
+    durable_plan: DurableTaskPlan,
+    step_index: int,
+) -> bool:
+    for prior_step in durable_plan.steps[:step_index]:
+        claim = state.claims.get(
+            prior_step.claim_id
+        )
+        if claim is None or not claim.evidence_ids:
+            return False
+    return True
+
+
+def _reconcile_prior_steps_from_history(
+    transitions: TaskStateTransitions,
+    durable_plan: DurableTaskPlan,
+    step_index: int,
+    *,
+    observation_summary: str,
+) -> None:
+    for prior_step in durable_plan.steps[:step_index]:
+        subgoal = transitions.state.subgoals.get(
+            prior_step.subgoal_id
+        )
+        if (
+            subgoal is not None
+            and subgoal.status
+            is SubgoalStatus.VERIFIED
+        ):
+            continue
+
+        evidence = transitions.add_evidence(
+            EvidenceRecord(
+                summary=(
+                    observation_summary
+                    + f" Step {prior_step.step_id!r} "
+                    "had persisted durable history."
+                ),
+                source=(
+                    "Live Chrome observation plus "
+                    "persisted durable plan history"
+                ),
+                kind=EvidenceKind.VERIFICATION,
+            )
+        )
+        transitions.verify_claim(
+            prior_step.claim_id,
+            (evidence.evidence_id,),
+        )
+        transitions.verify_subgoal(
+            prior_step.subgoal_id
+        )
+
+
+def _require_prior_steps_verified(
+    state: TaskState,
+    durable_plan: DurableTaskPlan,
+    step_index: int,
+) -> None:
+    for prior_step in durable_plan.steps[:step_index]:
+        subgoal = state.subgoals.get(
+            prior_step.subgoal_id
+        )
+        if (
+            subgoal is None
+            or subgoal.status
+            is not SubgoalStatus.VERIFIED
+        ):
+            raise RuntimeError(
+                "Cannot execute durable step "
+                f"{durable_plan.steps[step_index].step_id!r}; "
+                "prior step is not verified: "
+                f"{prior_step.step_id!r}."
+            )
+
+
+def _ensure_step_precondition(
+    observation: TextInputObservation,
+    resolved_task: ResolvedDurableWebSearchTask,
+    step: DurableTaskStep,
+) -> None:
+    spec = resolved_task.spec
+    if step.kind is DurableStepKind.ENTER_TEXT:
+        if not _search_field_available(
+            observation,
+            spec,
+        ):
+            raise RuntimeError(
+                "The live browser state is ambiguous: "
+                "the durable query-entry target is not available."
+            )
+        return
+
+    if step.kind is DurableStepKind.ACTIVATE_CONTROL:
+        if not _pre_submit_query_state(
+            observation,
+            resolved_task,
+        ):
+            raise RuntimeError(
+                "The live browser state is ambiguous: "
+                "it is not verified pre-submit search state."
+            )
+        return
+
+    if step.kind is DurableStepKind.OPEN_LINK:
+        if not _results_visible(
+            observation,
+            resolved_task,
+        ):
+            raise RuntimeError(
+                "The live browser state is ambiguous: "
+                "it is not verified search outcome state."
+            )
+        _ground_followup_link(
+            observation,
+            resolved_task,
+        )
+        return
+
+
+def _structured_plan_for_durable_step(
+    goal: str,
+    resolved_task: ResolvedDurableWebSearchTask,
+    step: DurableTaskStep,
+) -> StructuredPlan:
+    if step.kind is DurableStepKind.ENTER_TEXT:
+        return build_prepare_plan(
+            goal,
+            resolved_task,
+        )
+    if step.kind is DurableStepKind.ACTIVATE_CONTROL:
+        return build_resume_plan(
+            goal,
+            resolved_task,
+        )
+    if step.kind is DurableStepKind.OPEN_LINK:
+        return build_followup_plan(
+            goal,
+            resolved_task,
+        )
+    raise RuntimeError(
+        f"Unsupported durable step kind: {step.kind}"
+    )
+
+
+def _ensure_step_side_effect(
+    transitions: TaskStateTransitions,
+    resolved_task: ResolvedDurableWebSearchTask,
+    step: DurableTaskStep,
+) -> SideEffectRecord | None:
+    if step.side_effect_id is None:
+        return None
+    if step.side_effect_id == resolved_task.spec.submit_side_effect_id:
+        return _ensure_submit_side_effect(
+            transitions,
+            resolved_task.spec,
+        )
+    if step.side_effect_id == FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID:
+        return _ensure_followup_side_effect(
+            transitions,
+            resolved_task,
+        )
+    raise RuntimeError(
+        "Unsupported durable step side effect: "
+        f"{step.side_effect_id}"
+    )
+
+
+def _mark_step_execution_attempt(
+    transitions: TaskStateTransitions,
+    resolved_task: ResolvedDurableWebSearchTask,
+    step: DurableTaskStep,
+) -> None:
+    if step.side_effect_id is None:
+        return
+    if step.side_effect_id == resolved_task.spec.submit_side_effect_id:
+        _mark_submit_execution_attempt(
+            transitions,
+            resolved_task.spec,
+        )
+        return
+    if step.side_effect_id == FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID:
+        _mark_followup_execution_attempt(
+            transitions,
+            resolved_task,
+        )
+        return
+    raise RuntimeError(
+        "Unsupported durable step side effect: "
+        f"{step.side_effect_id}"
+    )
+
+
+def _mark_step_outcome_unknown(
+    transitions: TaskStateTransitions,
+    resolved_task: ResolvedDurableWebSearchTask,
+    step: DurableTaskStep,
+) -> None:
+    if step.side_effect_id is None:
+        return
+    if step.side_effect_id == resolved_task.spec.submit_side_effect_id:
+        _mark_submit_outcome_unknown(
+            transitions,
+            resolved_task.spec,
+        )
+        return
+    if step.side_effect_id == FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID:
+        _mark_followup_outcome_unknown(
+            transitions,
+        )
+        return
+    raise RuntimeError(
+        "Unsupported durable step side effect: "
+        f"{step.side_effect_id}"
+    )
+
+
+def _confirm_step_side_effect(
+    transitions: TaskStateTransitions,
+    resolved_task: ResolvedDurableWebSearchTask,
+    step: DurableTaskStep,
+    evidence_id: str,
+) -> None:
+    if step.side_effect_id is None:
+        return
+    if step.side_effect_id == resolved_task.spec.submit_side_effect_id:
+        _confirm_submit_side_effect(
+            transitions,
+            resolved_task.spec,
+            evidence_id,
+        )
+        return
+    if step.side_effect_id == FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID:
+        _confirm_followup_side_effect(
+            transitions,
+            resolved_task,
+            evidence_id,
+        )
+        return
+    raise RuntimeError(
+        "Unsupported durable step side effect: "
+        f"{step.side_effect_id}"
+    )
+
+
+def _publish_step_decision(
+    publish_decision: AdaptiveDecisionPublisher,
+    *,
+    observation: TextInputObservation,
+    resolved_task: ResolvedDurableWebSearchTask,
+    step: DurableTaskStep,
+) -> None:
+    if step.kind is DurableStepKind.ENTER_TEXT:
+        return
+
+    target_text = (
+        step.action_target.text
+        if step.action_target is not None
+        else None
+    )
+    expected_effect = (
+        "Satisfy durable step postcondition "
+        f"{step.postcondition.value!r}."
+    )
+    if step.kind is DurableStepKind.ACTIVATE_CONTROL:
+        expected_effect = (
+            "Submit the verified query and navigate "
+            "to the configured search outcome."
+        )
+    elif step.kind is DurableStepKind.OPEN_LINK:
+        expected_effect = (
+            "Open the requested Wikipedia link "
+            "and verify the destination heading."
+        )
+
+    _publish_live_decision(
+        publish_decision,
+        observation=observation,
+        decision_type="ACTION",
+        operation="click_target",
+        target_text=target_text,
+        expected_effect=expected_effect,
+        reason=(
+            "Fresh browser observation confirms "
+            "the next unfinished durable plan step "
+            f"{step.step_id!r} is actionable."
+        ),
+    )
+    del resolved_task
+
+
+def _maybe_inject_step_crash(
+    step: DurableTaskStep,
+) -> None:
+    if step.kind is DurableStepKind.ACTIVATE_CONTROL:
+        _maybe_inject_process_crash(
+            LiveCrashPoint.SUBMIT_EXECUTION
+        )
+    elif step.kind is DurableStepKind.OPEN_LINK:
+        _maybe_inject_process_crash(
+            LiveCrashPoint.FOLLOWUP_EXECUTION
+        )
+
+
+def _maybe_inject_checkpoint_crash(
+    step: DurableTaskStep,
+) -> None:
+    if step.kind is DurableStepKind.ENTER_TEXT:
+        _maybe_inject_process_crash(
+            LiveCrashPoint.QUERY_CHECKPOINT
+        )
+
+
+def _step_execution_progress(
+    step: DurableTaskStep,
+) -> str:
+    if step.kind is DurableStepKind.ENTER_TEXT:
+        return (
+            "Typing the intended query into "
+            "the freshly grounded search field."
+        )
+    if step.kind is DurableStepKind.ACTIVATE_CONTROL:
+        return (
+            "Submitting through newly grounded "
+            "live UI coordinates."
+        )
+    if step.kind is DurableStepKind.OPEN_LINK:
+        return (
+            "Opening the requested Wikipedia link "
+            "through newly grounded live UI coordinates."
+        )
+    return f"Executing durable step {step.step_id!r}."
+
+
+def _step_failure_label(
+    step: DurableTaskStep,
+) -> str:
+    if step.kind is DurableStepKind.ENTER_TEXT:
+        return "real-web query entry"
+    if step.kind is DurableStepKind.ACTIVATE_CONTROL:
+        return "real-web search submission"
+    if step.kind is DurableStepKind.OPEN_LINK:
+        return "real-web follow-up navigation"
+    return f"durable step {step.step_id}"
+
+
+def _missing_postcondition_message(
+    step: DurableTaskStep,
+) -> str:
+    if step.kind is DurableStepKind.ENTER_TEXT:
+        return (
+            "The live search field did not uniquely "
+            "verify the intended query."
+        )
+    if step.kind is DurableStepKind.ACTIVATE_CONTROL:
+        return (
+            "Fresh post-submit observation did not "
+            "resolve the configured search outcome."
+        )
+    if step.kind is DurableStepKind.OPEN_LINK:
+        return (
+            "Fresh post-follow-up observation did "
+            "not resolve the requested destination heading."
+        )
+    return (
+        "Fresh post-action observation did not "
+        f"resolve durable step {step.step_id!r}."
     )
 
 
@@ -2809,11 +3728,15 @@ def _run_prepare_segment(
     publish_decision: AdaptiveDecisionPublisher,
     progress: Callable[[str], None],
 ) -> None:
+    durable_plan = compile_durable_task_plan(
+        resolved_task
+    )
     _run_live_task(
         state=state,
         transitions=transitions,
         environment=environment,
         resolved_task=resolved_task,
+        durable_plan=durable_plan,
         control=control,
         publish_state=publish_state,
         publish_decision=publish_decision,
@@ -2832,11 +3755,15 @@ def _run_resume_segment(
     publish_decision: AdaptiveDecisionPublisher,
     progress: Callable[[str], None],
 ) -> None:
+    durable_plan = compile_durable_task_plan(
+        resolved_task
+    )
     _run_live_task(
         state=state,
         transitions=transitions,
         environment=environment,
         resolved_task=resolved_task,
+        durable_plan=durable_plan,
         control=control,
         publish_state=publish_state,
         publish_decision=publish_decision,
@@ -2847,12 +3774,35 @@ def _run_resume_segment(
 def _ensure_live_task_structure(
     transitions: TaskStateTransitions,
     target: (
-        ResolvedDurableWebSearchTask
+        DurableTaskPlan
+        | ResolvedDurableWebSearchTask
         | DurableWebSearchSpec
     ) = PYTHON_WORKFLOW,
 ) -> None:
     """Pre-register the complete live-task semantic structure."""
     state = transitions.state
+    if isinstance(
+        target,
+        DurableTaskPlan,
+    ):
+        for step in target.steps:
+            if step.claim_id not in state.claims:
+                transitions.add_claim(
+                    ClaimRecord(
+                        claim_id=step.claim_id,
+                        statement=step.claim_text,
+                    )
+                )
+            if step.subgoal_id not in state.subgoals:
+                transitions.add_subgoal(
+                    SubgoalRecord(
+                        subgoal_id=step.subgoal_id,
+                        description=step.subgoal_text,
+                        claim_ids=(step.claim_id,),
+                    )
+                )
+        return
+
     if isinstance(
         target,
         ResolvedDurableWebSearchTask,
@@ -3072,6 +4022,83 @@ def _ensure_followup_identity(
             location=expected_target,
         )
     )
+
+
+def _ensure_durable_plan_identity(
+    transitions: TaskStateTransitions,
+    resolved_task: ResolvedDurableWebSearchTask,
+    durable_plan: DurableTaskPlan,
+) -> None:
+    """Persist and validate the exact ordered durable task plan."""
+    state = transitions.state
+    expected_location = durable_plan_canonical_json(
+        durable_plan
+    )
+    artifact = state.artifacts.get(
+        DURABLE_PLAN_ARTIFACT_ID
+    )
+
+    if artifact is not None:
+        _validate_durable_plan_json(
+            artifact.location
+        )
+        if artifact.location != expected_location:
+            raise RuntimeError(
+                "Persisted durable task plan does not "
+                "match the resolved goal."
+            )
+        return
+
+    if (
+        resolved_task.spec.workspace_artifact_id
+        in state.artifacts
+    ):
+        raise RuntimeError(
+            "Persisted task has no durable task plan "
+            "identity and cannot be safely resumed."
+        )
+
+    transitions.add_artifact(
+        ArtifactRecord(
+            artifact_id=DURABLE_PLAN_ARTIFACT_ID,
+            description=(
+                "Canonical persisted durable task plan."
+            ),
+            location=expected_location,
+        )
+    )
+
+
+def _validate_durable_plan_json(
+    value: str,
+) -> None:
+    try:
+        payload = json.loads(
+            value
+        )
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "Persisted durable task plan is not valid JSON."
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            "Persisted durable task plan must be a JSON object."
+        )
+    if payload.get("version") != DURABLE_PLAN_VERSION:
+        raise RuntimeError(
+            "Persisted durable task plan version is unsupported."
+        )
+    steps = payload.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise RuntimeError(
+            "Persisted durable task plan must contain steps."
+        )
+    for step in steps:
+        if not isinstance(step, dict) or not step.get("step_id"):
+            raise RuntimeError(
+                "Persisted durable task plan contains an invalid step."
+            )
 
 
 def _workflow_location(

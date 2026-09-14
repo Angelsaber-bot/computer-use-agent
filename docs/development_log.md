@@ -5076,3 +5076,69 @@ Live validation passed for:
 - `Search python.org for asyncio.` search-only regression, with only the query and result subgoals and the existing python.org submit side effect.
 
 Live validation also exposed one workspace acquisition issue: after creating a new Chrome task window, the first observation may still report another frontmost app. The worker now re-activates the marker-owned Chrome window and observes again before requiring the expected application. This is a generic workspace acquisition fix, not a workflow-specific special case.
+
+## Phase 06.08.03 — Persisted Dynamic Durable Plan
+
+Experiment 06.08.03 extracts the durable task shape into an ordered persisted semantic plan. The production worker no longer has a top-level hardcoded `query -> submit -> optional follow-up` sequence. Instead, a `DurableTaskPlan` contains ordered `DurableTaskStep` records, and the runtime reconciles the ordered plan generically.
+
+This durable plan is intentionally separate from `StructuredPlan`. `DurableTaskPlan` is the restart-safe semantic plan persisted in `TaskState`; `StructuredPlan` remains the short execution plan sent to `AgentLoop` for one required action such as text entry or a click.
+
+The plan compiler is still deterministic and bounded. It compiles:
+
+- `Search Wikipedia for <query>.` into `enter-query` and `submit-search`;
+- `Search python.org for <query>.` into `enter-query` and `submit-search`;
+- `Search Wikipedia for <query> and open <target>.` into `enter-query`, `submit-search`, and `open-followup-link`.
+
+No LLM generates this durable plan yet. No arbitrary website discovery, arbitrary operation vocabulary, or additional website capability was added.
+
+The durable step model covers only the already-proven operations: `ENTER_TEXT`, `ACTIVATE_CONTROL`, and `OPEN_LINK`. Each step records its postcondition identity, claim/subgoal IDs and text, action target intent, optional input text, optional verification target, and optional side-effect association.
+
+The durable plan is persisted as canonical JSON in the `live-web-durable-plan` artifact. The representation includes a version, plan ID, workflow ID, ordered step IDs, runtime text in step fields, postcondition identity, claim/subgoal IDs, action targets, verification targets, and side-effect metadata. The worker validates the persisted JSON and requires exact equality with the goal-derived compiled plan before any browser action. Reordered steps, missing steps, changed query text, changed follow-up target, or unsupported plan versions fail closed.
+
+The generic reconciler evaluates postconditions from most advanced to least advanced on fresh browser state. For a three-step plan, it checks Step 3, then Step 2, then Step 1. If an advanced postcondition is satisfied, earlier steps are reconciled only when their persisted durable claim history exists. This preserves the 06.08.02 final-destination crash recovery behavior without hardcoding a special final-page branch.
+
+Execution success remains distinct from durable success. After a step action runs, the worker observes fresh state and verifies the step postcondition before verifying the claim/subgoal and confirming any side effect. If AgentLoop reports failure but the fresh external postcondition is satisfied, the durable step reconciles successfully. If the postcondition is absent, the side effect remains unresolved/unknown where applicable and the task does not complete.
+
+Side effects are now associated with action-bearing durable steps. `submit-search` owns the existing submit side effect, and `open-followup-link` owns `live-web-followup-navigation-side-effect`. The lifecycle remains `INTENDED -> EXECUTED -> CONFIRMED`, with confirmation only from fresh postcondition evidence.
+
+Existing crash injection points remain operational and now map to durable step boundaries:
+
+- `query_checkpoint` after the `enter-query` step verifies;
+- `submit_execution` after the submit click executes and before search-outcome evidence;
+- `followup_execution` after the follow-up click executes and before destination evidence.
+
+The deterministic experiment added `experiments/phase06_interactive_agent/experiment_11_persisted_durable_plan.py` and exercises:
+
+- Wikipedia search-only plan compilation to two steps;
+- Wikipedia follow-up plan compilation to three steps;
+- python.org search-only plan compilation to two steps;
+- uninterrupted three-step execution;
+- resume from Step 1;
+- resume from Step 2;
+- resume already at Step 3 destination;
+- persisted plan tampering fails closed;
+- search-only regression.
+
+Direct automated experiment output:
+
+```text
+Phase 06 Experiment 08.03: Persisted Dynamic Durable Plan
+Wikipedia search-only plan has 2 steps: passed
+Wikipedia follow-up plan has 3 steps: passed
+python.org search-only plan has 2 steps: passed
+Uninterrupted 3-step execution: passed
+Resume from Step 1: passed
+Resume from Step 2: passed
+Resume already at Step 3 destination: passed
+Persisted plan tampering fails closed: passed
+Search-only regression: passed
+Experiment acceptance: passed
+```
+
+Live validation passed for:
+
+- `Search Wikipedia for Claude Shannon and open Information theory.` uninterrupted, with all three durable plan subgoals verified and both side effects confirmed;
+- the same goal with `followup_execution` crash/restart, where the child exited `86`, resume evaluated the most advanced postcondition first, verified `open-followup-link`, reconciled prior history, confirmed the follow-up side effect, did not duplicate the link click, and completed;
+- `Search python.org for asyncio.` search-only regression, with the two-step durable plan and the existing python.org submit side effect.
+
+During live validation, PyAutoGUI initially refused the focus click because the physical pointer was parked in a fail-safe screen corner. Moving the pointer away from the corner restored normal tool execution. This was an environment condition during validation, not a production durable-plan change.

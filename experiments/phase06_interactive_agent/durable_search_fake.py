@@ -19,7 +19,9 @@ from computer_agent.app.live_web_worker import (
     QUERY_ARTIFACT_ID,
     QueryVerificationMode,
     create_live_web_worker,
+    compile_durable_task_plan,
     resolve_live_web_task,
+    _ensure_durable_plan_identity,
     _ensure_followup_identity,
     _ensure_live_task_structure,
     _ensure_query_identity,
@@ -288,7 +290,13 @@ def state_with_workspace(goal: str) -> TaskState:
     _ensure_workflow_identity(transitions, resolved.spec)
     _ensure_query_identity(transitions, resolved)
     _ensure_followup_identity(transitions, resolved)
-    _ensure_live_task_structure(transitions, resolved)
+    durable_plan = compile_durable_task_plan(resolved)
+    _ensure_durable_plan_identity(
+        transitions,
+        resolved,
+        durable_plan,
+    )
+    _ensure_live_task_structure(transitions, durable_plan)
     transitions.add_artifact(
         ArtifactRecord(
             artifact_id=resolved.spec.workspace_artifact_id,

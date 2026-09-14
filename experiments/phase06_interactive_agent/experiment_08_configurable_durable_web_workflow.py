@@ -21,7 +21,9 @@ from computer_agent.app.live_web_worker import (
     ResolvedDurableWebSearchTask,
     WIKIPEDIA_WORKFLOW,
     WORKFLOW_ARTIFACT_ID,
+    compile_durable_task_plan,
     create_live_web_worker,
+    _ensure_durable_plan_identity,
     _ensure_live_task_structure,
     _ensure_query_identity,
     _ensure_workflow_identity,
@@ -696,16 +698,25 @@ def _state_with_workspace(
         transitions,
         spec,
     )
+    resolved_task = ResolvedDurableWebSearchTask(
+        spec=spec,
+        query_text=query_text,
+    )
+    durable_plan = compile_durable_task_plan(
+        resolved_task
+    )
     _ensure_query_identity(
         transitions,
-        ResolvedDurableWebSearchTask(
-            spec=spec,
-            query_text=query_text,
-        ),
+        resolved_task,
+    )
+    _ensure_durable_plan_identity(
+        transitions,
+        resolved_task,
+        durable_plan,
     )
     _ensure_live_task_structure(
         transitions,
-        spec,
+        durable_plan,
     )
     transitions.add_artifact(
         ArtifactRecord(

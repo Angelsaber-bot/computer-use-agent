@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,9 @@ from computer_agent.app.live_web_worker import (
     BROWSER_WINDOW_ARTIFACT_ID,
     BROWSER_WINDOW_MARKER_PREFIX,
     CRASH_ENV_VAR,
+    DURABLE_PLAN_ARTIFACT_ID,
+    DurablePostconditionKind,
+    DurableStepKind,
     DurableWebSearchSpec,
     FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID,
     FOLLOWUP_TARGET_ARTIFACT_ID,
@@ -37,6 +41,7 @@ from computer_agent.app.live_web_worker import (
     QUERY_CLAIM_ID,
     QUERY_SUBGOAL_ID,
     _browser_window_marker_from_state,
+    _ensure_durable_plan_identity,
     _ensure_followup_identity,
     _ensure_query_identity,
     _ensure_workflow_identity,
@@ -46,6 +51,8 @@ from computer_agent.app.live_web_worker import (
     _query_condition_satisfied,
     _results_visible,
     _should_prepare_live_task_segment,
+    compile_durable_task_plan,
+    durable_plan_canonical_json,
     build_prepare_plan,
     build_followup_plan,
     build_resume_plan,
@@ -105,6 +112,24 @@ def _resolved_task(
     return ResolvedDurableWebSearchTask(
         spec=spec,
         query_text=query_text,
+    )
+
+
+def _ensure_plan_identity_for_goal(
+    transitions: TaskStateTransitions,
+    goal: str,
+) -> None:
+    resolved_task = resolve_live_web_task(
+        goal
+    )
+    assert resolved_task is not None
+    durable_plan = compile_durable_task_plan(
+        resolved_task
+    )
+    _ensure_durable_plan_identity(
+        transitions,
+        resolved_task,
+        durable_plan,
     )
 
 
@@ -991,6 +1016,204 @@ def test_wikipedia_followup_task_resolves_runtime_target() -> None:
         resolved_task.followup_target_text
         == WIKIPEDIA_FOLLOWUP_TARGET
     )
+
+
+def test_wikipedia_search_only_durable_plan_shape() -> None:
+    resolved_task = resolve_live_web_task(
+        "Search Wikipedia for Claude Shannon."
+    )
+    assert resolved_task is not None
+
+    plan = compile_durable_task_plan(
+        resolved_task
+    )
+
+    assert plan.version == 1
+    assert plan.workflow_id == "wikipedia-search"
+    assert [step.step_id for step in plan.steps] == [
+        "enter-query",
+        "submit-search",
+    ]
+    assert [step.kind for step in plan.steps] == [
+        DurableStepKind.ENTER_TEXT,
+        DurableStepKind.ACTIVATE_CONTROL,
+    ]
+    assert plan.steps[0].input_text == "Claude Shannon"
+    assert plan.steps[0].claim_id == (
+        WIKIPEDIA_WORKFLOW.query_claim_id
+    )
+    assert plan.steps[0].postcondition is (
+        DurablePostconditionKind.QUERY_MATCHES
+    )
+    assert plan.steps[1].side_effect_id == (
+        WIKIPEDIA_WORKFLOW.submit_side_effect_id
+    )
+    assert plan.steps[1].side_effect_action_key == (
+        WIKIPEDIA_WORKFLOW.submit_action_key
+    )
+    assert plan.steps[1].postcondition is (
+        DurablePostconditionKind.SEARCH_OUTCOME_VISIBLE
+    )
+
+
+def test_wikipedia_followup_durable_plan_shape() -> None:
+    resolved_task = resolve_live_web_task(
+        WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    assert resolved_task is not None
+
+    plan = compile_durable_task_plan(
+        resolved_task
+    )
+
+    assert [step.step_id for step in plan.steps] == [
+        "enter-query",
+        "submit-search",
+        "open-followup-link",
+    ]
+    assert [step.kind for step in plan.steps] == [
+        DurableStepKind.ENTER_TEXT,
+        DurableStepKind.ACTIVATE_CONTROL,
+        DurableStepKind.OPEN_LINK,
+    ]
+    assert plan.steps[2].action_target is not None
+    assert plan.steps[2].action_target.text == (
+        WIKIPEDIA_FOLLOWUP_TARGET
+    )
+    assert plan.steps[2].action_target.element_types == (
+        "link",
+    )
+    assert plan.steps[2].verification_target is not None
+    assert plan.steps[2].verification_target.text == (
+        WIKIPEDIA_FOLLOWUP_TARGET
+    )
+    assert plan.steps[2].verification_target.element_types == (
+        "heading",
+    )
+    assert plan.steps[2].side_effect_id == (
+        FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+    )
+    assert plan.steps[2].postcondition is (
+        DurablePostconditionKind.DESTINATION_HEADING_VISIBLE
+    )
+
+
+def test_python_search_only_durable_plan_shape() -> None:
+    resolved_task = resolve_live_web_task(
+        "Search python.org for asyncio."
+    )
+    assert resolved_task is not None
+
+    plan = compile_durable_task_plan(
+        resolved_task
+    )
+
+    assert plan.workflow_id == "python-org-search"
+    assert [step.step_id for step in plan.steps] == [
+        "enter-query",
+        "submit-search",
+    ]
+    assert plan.steps[0].input_text == "asyncio"
+    assert plan.steps[1].action_target == GO_BUTTON
+    assert all(
+        step.step_id != "open-followup-link"
+        for step in plan.steps
+    )
+
+
+def test_durable_plan_persists_deterministically() -> None:
+    resolved_task = resolve_live_web_task(
+        WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    assert resolved_task is not None
+    plan = compile_durable_task_plan(
+        resolved_task
+    )
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+
+    _ensure_durable_plan_identity(
+        transitions,
+        resolved_task,
+        plan,
+    )
+
+    artifact = state.artifacts[
+        DURABLE_PLAN_ARTIFACT_ID
+    ]
+    assert artifact.location == durable_plan_canonical_json(
+        plan
+    )
+    payload = json.loads(
+        artifact.location
+    )
+    assert payload["steps"][2]["action_target"]["text"] == (
+        WIKIPEDIA_FOLLOWUP_TARGET
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda payload: payload["steps"].reverse(),
+        lambda payload: payload["steps"].pop(),
+        lambda payload: payload["steps"][0].__setitem__(
+            "input_text",
+            "Alan Turing",
+        ),
+        lambda payload: payload["steps"][2]["action_target"].__setitem__(
+            "text",
+            "Turing machine",
+        ),
+        lambda payload: payload.__setitem__(
+            "version",
+            999,
+        ),
+    ),
+)
+def test_durable_plan_tampering_fails_closed(mutate) -> None:
+    resolved_task = resolve_live_web_task(
+        WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    assert resolved_task is not None
+    plan = compile_durable_task_plan(
+        resolved_task
+    )
+    payload = json.loads(
+        durable_plan_canonical_json(plan)
+    )
+    mutate(payload)
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    state.artifacts[
+        DURABLE_PLAN_ARTIFACT_ID
+    ] = ArtifactRecord(
+        artifact_id=DURABLE_PLAN_ARTIFACT_ID,
+        description="Canonical persisted durable task plan.",
+        location=json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="durable task plan",
+    ):
+        _ensure_durable_plan_identity(
+            transitions,
+            resolved_task,
+            plan,
+        )
 
 
 def test_resolve_live_web_workflow_returns_static_spec() -> None:
@@ -2274,7 +2497,7 @@ def test_submission_success_still_fails_when_result_absent(
 
     with pytest.raises(
         RuntimeError,
-        match="did not resolve Results",
+        match="did not resolve the configured search outcome",
     ):
         _run_worker_with_fake_environment(
             monkeypatch,
@@ -2593,6 +2816,10 @@ def test_live_worker_resume_after_query_checkpoint_does_not_retype(
     transitions.verify_subgoal(
         QUERY_SUBGOAL_ID
     )
+    _ensure_plan_identity_for_goal(
+        transitions,
+        state.goal,
+    )
     transitions.add_artifact(
         ArtifactRecord(
             artifact_id=(
@@ -2684,6 +2911,10 @@ def test_wikipedia_restart_after_query_checkpoint_avoids_retyping(
     transitions.verify_subgoal(
         WIKIPEDIA_WORKFLOW.query_subgoal_id
     )
+    _ensure_plan_identity_for_goal(
+        transitions,
+        state.goal,
+    )
     transitions.add_artifact(
         ArtifactRecord(
             artifact_id=(
@@ -2773,6 +3004,10 @@ def test_live_worker_resume_after_go_click_reconciles_results_without_click(
             idempotent=True,
             action_key=SUBMIT_ACTION_KEY,
         )
+    )
+    _ensure_plan_identity_for_goal(
+        transitions,
+        state.goal,
     )
     transitions.add_artifact(
         ArtifactRecord(
@@ -2901,6 +3136,10 @@ def test_wikipedia_restart_after_submit_avoids_duplicate_submit(
             ),
         )
     )
+    _ensure_plan_identity_for_goal(
+        transitions,
+        state.goal,
+    )
     transitions.add_artifact(
         ArtifactRecord(
             artifact_id=(
@@ -3023,6 +3262,10 @@ def test_wikipedia_followup_restart_at_destination_avoids_duplicate_click(
             ),
         )
     )
+    _ensure_plan_identity_for_goal(
+        transitions,
+        state.goal,
+    )
     transitions.add_artifact(
         ArtifactRecord(
             artifact_id=(
@@ -3100,6 +3343,10 @@ def test_live_worker_fails_closed_on_ambiguous_external_state(
     )
     _ensure_live_task_structure(
         transitions
+    )
+    _ensure_plan_identity_for_goal(
+        transitions,
+        state.goal,
     )
     transitions.add_artifact(
         ArtifactRecord(

@@ -421,3 +421,19 @@ Live validation passed for:
 - `Search python.org for asyncio.` search-only regression.
 
 During live validation, one real workspace-acquisition detail surfaced: after opening a new task window, Chrome may not immediately become frontmost. The worker now re-activates the marker-owned Chrome window if the first post-open observation reports a different frontmost app, then observes again before any UI action.
+
+#### Experiment 06.08.03: Persisted Dynamic Durable Plan
+
+Experiment 06.08.03 replaces the top-level hardcoded `query -> submit -> optional follow-up` orchestration with a persisted ordered semantic durable plan. The durable plan is distinct from `StructuredPlan`: `DurableTaskPlan` and `DurableTaskStep` describe the restart-safe task intent and postconditions, while `StructuredPlan` remains the short per-action execution plan submitted to `AgentLoop`.
+
+A deterministic compiler still creates the durable plan from the bounded parsed goal. Search-only Wikipedia and python.org goals compile to two steps: enter query, submit search. Wikipedia follow-up goals compile to three steps: enter query, submit search, open requested link. No LLM-generated durable plans, arbitrary websites, or new operation types were added.
+
+The compiled plan is persisted as canonical JSON in `live-web-durable-plan`, including plan version, workflow ID, exact ordered step IDs, runtime query/follow-up text through step fields, claim/subgoal IDs, action-target intent, postcondition identity, and side-effect association. Reordered steps, missing steps, changed query text, changed follow-up target, or unsupported plan version fail closed before browser actions.
+
+The runtime now reconciles ordered durable steps generically. It evaluates step postconditions from most advanced to least advanced on fresh browser state, reconciles prior steps only when persisted durable history exists, executes only the first unfinished required action, verifies the fresh postcondition, confirms any associated side effect, checkpoints, and completes only when all durable plan subgoals are verified and side effects are resolved.
+
+Existing crash points remain: `query_checkpoint`, `submit_execution`, and `followup_execution`. They now map to durable step boundaries rather than a hardcoded outer-stage sequence.
+
+The deterministic Experiment 06.08.03 covers plan compilation for Wikipedia search-only, Wikipedia follow-up, and python.org search-only goals; uninterrupted 3-step execution; resume from Step 1; resume from Step 2; resume already at Step 3 destination; persisted plan tampering failure; and search-only regression.
+
+Live regression validation passed for `Search Wikipedia for Claude Shannon and open Information theory.`, the same goal with `followup_execution` crash/resume, and `Search python.org for asyncio.` A local PyAutoGUI fail-safe condition was encountered before validation because the pointer was at a screen corner; moving the pointer away restored normal tool execution and no production code change was needed for that environment issue.
