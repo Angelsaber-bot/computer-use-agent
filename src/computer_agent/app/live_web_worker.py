@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 import os
 from pathlib import Path
+import re
 import sys
 import time
 from typing import NoReturn
@@ -79,6 +80,7 @@ BROWSER_WINDOW_ARTIFACT_ID = (
 )
 
 WORKFLOW_ARTIFACT_ID = "live-web-workflow"
+QUERY_ARTIFACT_ID = "live-web-query"
 
 BROWSER_WINDOW_MARKER_PREFIX = (
     "about:blank#computer-agent-task="
@@ -125,11 +127,9 @@ class DurableWebSearchSpec:
     """Configuration for one bounded durable search workflow."""
 
     workflow_id: str
-    supported_goal: str
     start_url: str
     working_url_prefix: str
     expected_application: str
-    query_text: str
     search_field: TargetSpec
     submit_target: TargetSpec
     result_target: TargetSpec
@@ -148,24 +148,83 @@ class DurableWebSearchSpec:
     submit_description: str
     prepare_step_goal: str
     submit_step_goal: str
-    completion_summary: str
     query_verification_mode: QueryVerificationMode = (
         QueryVerificationMode.FIELD_VALUE
     )
-    query_confirmation_targets: tuple[TargetSpec, ...] = ()
+    query_confirmation_target_factory: Callable[
+        [str],
+        tuple[TargetSpec, ...],
+    ] | None = None
+    result_target_factory: Callable[
+        [str],
+        tuple[TargetSpec, ...],
+    ] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedDurableWebSearchTask:
+    """One static workflow plus per-task runtime search query."""
+
+    spec: DurableWebSearchSpec
+    query_text: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.query_text, str)
+            or not self.query_text.strip()
+        ):
+            raise ValueError(
+                "query_text must be a non-empty string"
+            )
 
 
 EXPECTED_APP = "Google Chrome"
 
 PYTHON_URL = "https://www.python.org/"
 
+
+def _wikipedia_query_confirmation_targets(
+    query_text: str,
+) -> tuple[TargetSpec, ...]:
+    containing = (
+        f"Search for pages containing {query_text}"
+    )
+    return (
+        TargetSpec(
+            text=query_text,
+            element_types=("text",),
+            minimum_confidence=0.70,
+        ),
+        TargetSpec(
+            text=containing,
+            element_types=("text",),
+            minimum_confidence=0.70,
+        ),
+        TargetSpec(
+            text=containing,
+            element_types=("link",),
+            minimum_confidence=0.70,
+        ),
+    )
+
+
+def _wikipedia_result_targets(
+    query_text: str,
+) -> tuple[TargetSpec, ...]:
+    return (
+        TargetSpec(
+            text=query_text,
+            element_types=("heading",),
+            minimum_confidence=0.70,
+        ),
+    )
+
+
 PYTHON_WORKFLOW = DurableWebSearchSpec(
     workflow_id="python-org-search",
-    supported_goal="Search python.org for typing.",
     start_url=PYTHON_URL,
     working_url_prefix=PYTHON_URL,
     expected_application=EXPECTED_APP,
-    query_text="typing",
     search_field=TargetSpec(
         text="Search This Site",
         element_types=("text_field",),
@@ -216,20 +275,15 @@ PYTHON_WORKFLOW = DurableWebSearchSpec(
     submit_step_goal=(
         "Submit the persisted python.org search query."
     ),
-    completion_summary=(
-        "python.org search for 'typing' completed and was verified."
-    ),
 )
 
 WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/Main_Page"
 
 WIKIPEDIA_WORKFLOW = DurableWebSearchSpec(
     workflow_id="wikipedia-search",
-    supported_goal="Search Wikipedia for computer use agent.",
     start_url=WIKIPEDIA_URL,
     working_url_prefix="https://en.wikipedia.org/",
     expected_application=EXPECTED_APP,
-    query_text="computer use agent",
     search_field=TargetSpec(
         text="Search Wikipedia",
         element_types=("text_field",),
@@ -280,30 +334,13 @@ WIKIPEDIA_WORKFLOW = DurableWebSearchSpec(
     submit_step_goal=(
         "Submit the persisted Wikipedia search query."
     ),
-    completion_summary=(
-        "Wikipedia search for 'computer use agent' completed "
-        "and was verified."
-    ),
     query_verification_mode=(
         QueryVerificationMode.VISIBLE_SEARCH_UI
     ),
-    query_confirmation_targets=(
-        TargetSpec(
-            text="computer use agent",
-            element_types=("text",),
-            minimum_confidence=0.70,
-        ),
-        TargetSpec(
-            text="Search for pages containing computer use agent",
-            element_types=("text",),
-            minimum_confidence=0.70,
-        ),
-        TargetSpec(
-            text="Search for pages containing computer use agent",
-            element_types=("link",),
-            minimum_confidence=0.70,
-        ),
+    query_confirmation_target_factory=(
+        _wikipedia_query_confirmation_targets
     ),
+    result_target_factory=_wikipedia_result_targets,
 )
 
 WORKFLOWS = (
@@ -311,7 +348,6 @@ WORKFLOWS = (
     WIKIPEDIA_WORKFLOW,
 )
 
-SEARCH_QUERY = PYTHON_WORKFLOW.query_text
 SEARCH_FIELD = PYTHON_WORKFLOW.search_field
 GO_BUTTON = PYTHON_WORKFLOW.submit_target
 RESULTS_TARGET = PYTHON_WORKFLOW.result_target
@@ -473,13 +509,18 @@ class LiveWebEnvironment:
 
 def build_prepare_plan(
     goal: str,
-    spec: DurableWebSearchSpec | None = None,
+    resolved_task: (
+        ResolvedDurableWebSearchTask
+        | DurableWebSearchSpec
+        | None
+    ) = None,
 ) -> StructuredPlan:
     """Build the first real-browser segment."""
-    if spec is None:
-        spec = resolve_live_web_workflow(
-            goal
-        )
+    resolved_task = _coerce_resolved_task(
+        goal,
+        resolved_task,
+    )
+    spec = resolved_task.spec
 
     return StructuredPlan(
         task_goal=goal,
@@ -487,7 +528,7 @@ def build_prepare_plan(
             WebTextInputStep(
                 goal=spec.prepare_step_goal,
                 target=spec.search_field,
-                input_text=spec.query_text,
+                input_text=resolved_task.query_text,
                 max_attempts=1,
             ),
         ),
@@ -496,13 +537,18 @@ def build_prepare_plan(
 
 def build_resume_plan(
     goal: str,
-    spec: DurableWebSearchSpec | None = None,
+    resolved_task: (
+        ResolvedDurableWebSearchTask
+        | DurableWebSearchSpec
+        | None
+    ) = None,
 ) -> StructuredPlan:
     """Build the post-restart browser segment."""
-    if spec is None:
-        spec = resolve_live_web_workflow(
-            goal
-        )
+    resolved_task = _coerce_resolved_task(
+        goal,
+        resolved_task,
+    )
+    spec = resolved_task.spec
 
     return StructuredPlan(
         task_goal=goal,
@@ -527,11 +573,136 @@ def goal_is_supported(
 ) -> bool:
     """Return whether the bounded live worker supports this task."""
     return (
-        resolve_live_web_workflow(
+        resolve_live_web_task(
             goal,
             raise_on_unsupported=False,
         )
         is not None
+    )
+
+
+def _coerce_resolved_task(
+    goal: str,
+    resolved_task: (
+        ResolvedDurableWebSearchTask
+        | DurableWebSearchSpec
+        | None
+    ),
+) -> ResolvedDurableWebSearchTask:
+    parsed = resolve_live_web_task(
+        goal
+    )
+
+    if resolved_task is None:
+        return parsed
+
+    if isinstance(
+        resolved_task,
+        ResolvedDurableWebSearchTask,
+    ):
+        if resolved_task != parsed:
+            raise RuntimeError(
+                "Resolved task does not match the goal."
+            )
+        return resolved_task
+
+    if resolved_task is parsed.spec:
+        return parsed
+
+    raise RuntimeError(
+        "Workflow spec does not match the goal."
+    )
+
+
+_SEARCH_GOAL_RE = re.compile(
+    r"^\s*search\s+(?P<site>wikipedia|python\.org)"
+    r"\s+for\s+(?P<query>.*?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def parse_live_web_search_goal(
+    goal: str,
+) -> tuple[str, str]:
+    """Parse the deterministic live search command grammar."""
+    if not isinstance(goal, str):
+        raise RuntimeError(
+            "Live web search goal must be a string."
+        )
+
+    match = _SEARCH_GOAL_RE.match(goal)
+    if match is None:
+        site_match = re.match(
+            r"^\s*search\s+(?P<site>\S+)",
+            goal,
+            re.IGNORECASE,
+        )
+        if site_match is not None:
+            site = site_match.group("site")
+            if site.lower() not in {
+                "wikipedia",
+                "python.org",
+            }:
+                raise RuntimeError(
+                    "Unsupported live web search site "
+                    f"{site!r}; supported sites are "
+                    "python.org and Wikipedia."
+                )
+
+        raise RuntimeError(
+            "Malformed live web search goal. Use "
+            "'Search python.org for <query>.' or "
+            "'Search Wikipedia for <query>.'"
+        )
+
+    site = match.group("site").lower()
+    query_text = match.group("query").strip()
+
+    if query_text.endswith("."):
+        query_text = query_text[:-1].rstrip()
+
+    if not query_text:
+        raise RuntimeError(
+            "Live web search query must be non-empty."
+        )
+
+    return site, query_text
+
+
+def resolve_live_web_task(
+    goal: str,
+    *,
+    raise_on_unsupported: bool = True,
+) -> ResolvedDurableWebSearchTask | None:
+    """Resolve a bounded user goal to a workflow and runtime query."""
+    try:
+        site, query_text = parse_live_web_search_goal(
+            goal
+        )
+    except RuntimeError:
+        if not raise_on_unsupported:
+            return None
+        raise
+
+    if site == "python.org":
+        return ResolvedDurableWebSearchTask(
+            spec=PYTHON_WORKFLOW,
+            query_text=query_text,
+        )
+
+    if site == "wikipedia":
+        return ResolvedDurableWebSearchTask(
+            spec=WIKIPEDIA_WORKFLOW,
+            query_text=query_text,
+        )
+
+    if not raise_on_unsupported:
+        return None
+
+    raise RuntimeError(
+        "Unsupported live web search site "
+        f"{site!r}; supported sites are "
+        "python.org and Wikipedia."
     )
 
 
@@ -540,38 +711,14 @@ def resolve_live_web_workflow(
     *,
     raise_on_unsupported: bool = True,
 ) -> DurableWebSearchSpec | None:
-    """Resolve a bounded user goal to a deterministic web workflow."""
-    normalized = (
-        " ".join(
-            goal.lower().split()
-        )
+    """Resolve a bounded user goal to its static web workflow."""
+    resolved_task = resolve_live_web_task(
+        goal,
+        raise_on_unsupported=raise_on_unsupported,
     )
-
-    if (
-        "search" in normalized
-        and "python.org" in normalized
-        and "typing" in normalized
-    ):
-        return PYTHON_WORKFLOW
-
-    if (
-        "search" in normalized
-        and "wikipedia" in normalized
-        and "computer use agent" in normalized
-    ):
-        return WIKIPEDIA_WORKFLOW
-
-    if not raise_on_unsupported:
+    if resolved_task is None:
         return None
-
-    supported = ", ".join(
-        spec.supported_goal
-        for spec in WORKFLOWS
-    )
-    raise RuntimeError(
-        "The current live workspace supports only "
-        f"these bounded tasks: {supported}"
-    )
+    return resolved_task.spec
 
 
 def create_live_web_worker(
@@ -605,7 +752,7 @@ def create_live_web_worker(
             "publish_decision must be callable"
         )
 
-    spec = resolve_live_web_workflow(
+    resolved_task = resolve_live_web_task(
         state.goal
     )
 
@@ -636,12 +783,17 @@ def create_live_web_worker(
 
         _ensure_workflow_identity(
             transitions,
-            spec,
+            resolved_task.spec,
+        )
+
+        _ensure_query_identity(
+            transitions,
+            resolved_task,
         )
 
         _ensure_live_task_structure(
             transitions,
-            spec,
+            resolved_task.spec,
         )
 
         state.status = (
@@ -677,7 +829,7 @@ def create_live_web_worker(
             state=state,
             transitions=transitions,
             environment=environment,
-            spec=spec,
+            resolved_task=resolved_task,
             control=control,
             publish_state=publish_state,
             publish_decision=publish_decision,
@@ -741,13 +893,14 @@ def _run_live_task(
     state: TaskState,
     transitions: TaskStateTransitions,
     environment: LiveWebEnvironment,
-    spec: DurableWebSearchSpec,
+    resolved_task: ResolvedDurableWebSearchTask,
     control: RuntimeControl,
     publish_state: TaskStatePublisher,
     publish_decision: AdaptiveDecisionPublisher,
     progress: Callable[[str], None],
 ) -> None:
     """Converge the durable task state and live browser state."""
+    spec = resolved_task.spec
     control.checkpoint()
 
     observation = _ensure_browser_workspace(
@@ -763,7 +916,7 @@ def _run_live_task(
         state=state,
         transitions=transitions,
         environment=environment,
-        spec=spec,
+        resolved_task=resolved_task,
         progress=progress,
         observation=observation,
     )
@@ -776,7 +929,7 @@ def _run_live_task(
 
     if not _results_visible(
         observation,
-        spec,
+        resolved_task,
     ):
         _publish_live_decision(
             publish_decision,
@@ -802,7 +955,7 @@ def _run_live_task(
             state=state,
             transitions=transitions,
             environment=environment,
-            spec=spec,
+            resolved_task=resolved_task,
             control=control,
             publish_state=publish_state,
             publish_decision=publish_decision,
@@ -834,7 +987,9 @@ def _run_live_task(
             "all semantic completion requirements."
         ),
         completion_summary=(
-            spec.completion_summary
+            _completion_summary(
+                resolved_task
+            )
         ),
     )
 
@@ -919,10 +1074,11 @@ def _reconcile_query_condition(
     state: TaskState,
     transitions: TaskStateTransitions,
     environment: LiveWebEnvironment,
-    spec: DurableWebSearchSpec,
+    resolved_task: ResolvedDurableWebSearchTask,
     progress: Callable[[str], None],
     observation: TextInputObservation,
 ) -> TextInputObservation:
+    spec = resolved_task.spec
     _require_expected_app(
         observation,
         spec,
@@ -931,7 +1087,7 @@ def _reconcile_query_condition(
     query_verification = (
         _query_condition_satisfied(
             observation,
-            spec,
+            resolved_task,
         )
     )
 
@@ -950,7 +1106,7 @@ def _reconcile_query_condition(
 
     if _results_visible(
         observation,
-        spec,
+        resolved_task,
     ):
         if not _query_has_durable_history(
             state,
@@ -1000,7 +1156,7 @@ def _reconcile_query_condition(
         environment,
         build_prepare_plan(
             state.goal,
-            spec,
+            resolved_task,
         ),
     )
 
@@ -1013,7 +1169,7 @@ def _reconcile_query_condition(
     query_verification = (
         _query_condition_satisfied(
             refreshed,
-            spec,
+            resolved_task,
         )
     )
 
@@ -1042,21 +1198,22 @@ def _reconcile_submission_result_condition(
     state: TaskState,
     transitions: TaskStateTransitions,
     environment: LiveWebEnvironment,
-    spec: DurableWebSearchSpec,
+    resolved_task: ResolvedDurableWebSearchTask,
     control: RuntimeControl,
     publish_state: TaskStatePublisher,
     publish_decision: AdaptiveDecisionPublisher,
     progress: Callable[[str], None],
 ) -> TextInputObservation:
-    observation = environment.observe()
-    _require_expected_app(
-        observation,
-        spec,
+    spec = resolved_task.spec
+    observation = _observe_or_reactivate_workspace(
+        state=state,
+        environment=environment,
+        spec=spec,
     )
 
     if _results_visible(
         observation,
-        spec,
+        resolved_task,
     ):
         evidence = _verify_results_from_current_observation(
             transitions,
@@ -1086,7 +1243,7 @@ def _reconcile_submission_result_condition(
 
     if not _pre_submit_query_state(
         observation,
-        spec,
+        resolved_task,
     ):
         raise RuntimeError(
             "The live browser state is ambiguous: "
@@ -1134,7 +1291,7 @@ def _reconcile_submission_result_condition(
         environment,
         build_resume_plan(
             state.goal,
-            spec,
+            resolved_task,
         ),
     )
 
@@ -1150,7 +1307,7 @@ def _reconcile_submission_result_condition(
 
     if not _results_visible(
         final_observation,
-        spec,
+        resolved_task,
     ):
         _mark_submit_outcome_unknown(
             transitions,
@@ -1193,6 +1350,33 @@ def _reconcile_submission_result_condition(
     publish_state()
 
     return final_observation
+
+
+def _observe_or_reactivate_workspace(
+    *,
+    state: TaskState,
+    environment: LiveWebEnvironment,
+    spec: DurableWebSearchSpec,
+) -> TextInputObservation:
+    observation = environment.observe()
+    if (
+        observation.application_name
+        != spec.expected_application
+    ):
+        environment.activate_task_chrome_window(
+            _browser_window_marker_from_state(
+                state,
+                spec,
+            ),
+            spec.working_url_prefix,
+        )
+        observation = environment.observe()
+
+    _require_expected_app(
+        observation,
+        spec,
+    )
+    return observation
 
 
 def _execute_agent_plan(
@@ -1399,23 +1583,47 @@ def _confirm_submit_side_effect(
 
 def _results_visible(
     observation: TextInputObservation,
-    spec: DurableWebSearchSpec = PYTHON_WORKFLOW,
+    target: DurableWebSearchSpec | ResolvedDurableWebSearchTask,
 ) -> bool:
-    grounding = UIGrounder().ground(
-        spec.result_target,
-        observation.snapshot.fused_elements,
-    )
+    if isinstance(
+        target,
+        ResolvedDurableWebSearchTask,
+    ):
+        spec = target.spec
+        dynamic_targets = (
+            ()
+            if spec.result_target_factory is None
+            else spec.result_target_factory(
+                target.query_text
+            )
+        )
+    else:
+        spec = target
+        dynamic_targets = ()
 
-    return (
-        grounding.status
-        is GroundingStatus.RESOLVED
-    )
+    for result_target in (
+        spec.result_target,
+        *dynamic_targets,
+    ):
+        grounding = UIGrounder().ground(
+            result_target,
+            observation.snapshot.fused_elements,
+        )
+
+        if (
+            grounding.status
+            is GroundingStatus.RESOLVED
+        ):
+            return True
+
+    return False
 
 
 def _query_condition_satisfied(
     observation: TextInputObservation,
-    spec: DurableWebSearchSpec = PYTHON_WORKFLOW,
+    resolved_task: ResolvedDurableWebSearchTask,
 ) -> QueryVerificationResult | None:
+    spec = resolved_task.spec
     if (
         spec.query_verification_mode
         is QueryVerificationMode.FIELD_VALUE
@@ -1424,7 +1632,9 @@ def _query_condition_satisfied(
             _search_field_with_expected_value(
                 observation.snapshot.fused_elements,
                 spec=spec,
-                expected_value=spec.query_text,
+                expected_value=(
+                    resolved_task.query_text
+                ),
             )
         )
 
@@ -1435,7 +1645,7 @@ def _query_condition_satisfied(
             element=search_field,
             summary=(
                 "The current search field contains "
-                f"{spec.query_text!r}."
+                f"{resolved_task.query_text!r}."
             ),
             source=(
                 "Live Chrome Accessibility "
@@ -1449,7 +1659,7 @@ def _query_condition_satisfied(
     ):
         return _visible_search_ui_query_condition(
             observation,
-            spec,
+            resolved_task,
         )
 
     return None
@@ -1457,8 +1667,9 @@ def _query_condition_satisfied(
 
 def _visible_search_ui_query_condition(
     observation: TextInputObservation,
-    spec: DurableWebSearchSpec,
+    resolved_task: ResolvedDurableWebSearchTask,
 ) -> QueryVerificationResult | None:
+    spec = resolved_task.spec
     elements = tuple(
         observation.snapshot.fused_elements
     )
@@ -1475,7 +1686,7 @@ def _visible_search_ui_query_condition(
         return None
 
     for target in _query_confirmation_targets(
-        spec
+        resolved_task
     ):
         associated = tuple(
             element
@@ -1496,8 +1707,8 @@ def _visible_search_ui_query_condition(
             return QueryVerificationResult(
                 element=associated[0],
                 summary=(
-                    "Fresh Wikipedia search UI "
-                    f"visibly confirms {spec.query_text!r} "
+                    "Fresh visible search UI "
+                    f"confirms {resolved_task.query_text!r} "
                     "adjacent to the Search control."
                 ),
                 source=(
@@ -1513,17 +1724,26 @@ def _visible_search_ui_query_condition(
 
 
 def _query_confirmation_targets(
-    spec: DurableWebSearchSpec,
+    resolved_task: ResolvedDurableWebSearchTask,
 ) -> tuple[TargetSpec, ...]:
+    spec = resolved_task.spec
+    configured_targets: tuple[TargetSpec, ...] = ()
+    if spec.query_confirmation_target_factory is not None:
+        configured_targets = (
+            spec.query_confirmation_target_factory(
+                resolved_task.query_text
+            )
+        )
+
     targets = (
         TargetSpec(
-            text=spec.query_text,
+            text=resolved_task.query_text,
             element_types=("text",),
             minimum_confidence=(
                 spec.submit_target.minimum_confidence
             ),
         ),
-        *spec.query_confirmation_targets,
+        *configured_targets,
     )
     unique: list[TargetSpec] = []
     seen: set[tuple[str | None, tuple[str, ...]]] = set()
@@ -1724,18 +1944,19 @@ def _search_field_available(
 
 def _pre_submit_query_state(
     observation: TextInputObservation,
-    spec: DurableWebSearchSpec = PYTHON_WORKFLOW,
+    resolved_task: ResolvedDurableWebSearchTask,
 ) -> bool:
+    spec = resolved_task.spec
     if _results_visible(
         observation,
-        spec,
+        resolved_task,
     ):
         return False
 
     if (
         _query_condition_satisfied(
             observation,
-            spec,
+            resolved_task,
         )
         is None
     ):
@@ -1771,7 +1992,7 @@ def _run_prepare_segment(
     state: TaskState,
     transitions: TaskStateTransitions,
     environment: LiveWebEnvironment,
-    spec: DurableWebSearchSpec = PYTHON_WORKFLOW,
+    resolved_task: ResolvedDurableWebSearchTask,
     control: RuntimeControl,
     publish_state: TaskStatePublisher,
     publish_decision: AdaptiveDecisionPublisher,
@@ -1781,7 +2002,7 @@ def _run_prepare_segment(
         state=state,
         transitions=transitions,
         environment=environment,
-        spec=spec,
+        resolved_task=resolved_task,
         control=control,
         publish_state=publish_state,
         publish_decision=publish_decision,
@@ -1794,7 +2015,7 @@ def _run_resume_segment(
     state: TaskState,
     transitions: TaskStateTransitions,
     environment: LiveWebEnvironment,
-    spec: DurableWebSearchSpec = PYTHON_WORKFLOW,
+    resolved_task: ResolvedDurableWebSearchTask,
     control: RuntimeControl,
     publish_state: TaskStatePublisher,
     publish_decision: AdaptiveDecisionPublisher,
@@ -1804,7 +2025,7 @@ def _run_resume_segment(
         state=state,
         transitions=transitions,
         environment=environment,
-        spec=spec,
+        resolved_task=resolved_task,
         control=control,
         publish_state=publish_state,
         publish_decision=publish_decision,
@@ -1903,10 +2124,65 @@ def _ensure_workflow_identity(
     )
 
 
+def _ensure_query_identity(
+    transitions: TaskStateTransitions,
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> None:
+    """Persist and validate the exact runtime query identity."""
+    state = transitions.state
+    artifact = state.artifacts.get(
+        QUERY_ARTIFACT_ID
+    )
+
+    if artifact is not None:
+        if artifact.location != resolved_task.query_text:
+            raise RuntimeError(
+                "Persisted live web query identity "
+                "does not match the resolved goal."
+            )
+        return
+
+    if (
+        resolved_task.spec.workspace_artifact_id
+        in state.artifacts
+    ):
+        raise RuntimeError(
+            "Persisted task has no durable web query "
+            "identity and cannot be safely resumed."
+        )
+
+    transitions.add_artifact(
+        ArtifactRecord(
+            artifact_id=QUERY_ARTIFACT_ID,
+            description=(
+                "Durable live web runtime query text."
+            ),
+            location=resolved_task.query_text,
+        )
+    )
+
+
 def _workflow_location(
     spec: DurableWebSearchSpec,
 ) -> str:
     return f"workflow:{spec.workflow_id}"
+
+
+def _completion_summary(
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> str:
+    if resolved_task.spec is PYTHON_WORKFLOW:
+        site = "python.org"
+    elif resolved_task.spec is WIKIPEDIA_WORKFLOW:
+        site = "Wikipedia"
+    else:
+        site = resolved_task.spec.workflow_id
+
+    return (
+        f"{site} search for "
+        f"{resolved_task.query_text!r} "
+        "completed and was verified."
+    )
 
 
 def _task_state_matches_workflow(
@@ -2057,12 +2333,34 @@ def _element_value_matches(
         None,
     )
 
-    return (
-        normalize_ui_text(
-            str(value or "")
-        )
-        == expected
+    observed = normalize_ui_text(
+        str(value or "")
     )
+
+    return observed == expected or _character_spaced_value_matches(
+        observed,
+        expected,
+    )
+
+
+def _character_spaced_value_matches(
+    observed: str,
+    expected: str,
+) -> bool:
+    if " " not in observed:
+        return False
+
+    fragments = observed.split()
+    if len(fragments) < 2:
+        return False
+
+    short_fragments = sum(
+        1 for fragment in fragments if len(fragment) <= 2
+    )
+    if short_fragments < len(fragments) * 0.75:
+        return False
+
+    return observed.replace(" ", "") == expected.replace(" ", "")
 
 
 def _visible_observation_text(

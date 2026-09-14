@@ -18,10 +18,12 @@ from computer_agent.app.live_web_worker import (
     DurableWebSearchSpec,
     PYTHON_WORKFLOW,
     QueryVerificationMode,
+    ResolvedDurableWebSearchTask,
     WIKIPEDIA_WORKFLOW,
     WORKFLOW_ARTIFACT_ID,
     create_live_web_worker,
     _ensure_live_task_structure,
+    _ensure_query_identity,
     _ensure_workflow_identity,
 )
 from computer_agent.perception import (
@@ -57,9 +59,11 @@ TITLE = (
     "Configurable Durable Web Workflow"
 )
 PYTHON_GOAL = "Search python.org for typing."
+PYTHON_QUERY = "typing"
 WIKIPEDIA_GOAL = (
     "Search Wikipedia for computer use agent."
 )
+WIKIPEDIA_QUERY = "computer use agent"
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,10 +111,12 @@ class FakeLiveWebEnvironment:
         capture_path,
         mode: str,
         spec: DurableWebSearchSpec,
+        query_text: str,
     ) -> None:
         del capture_path
         self.mode = mode
         self.spec = spec
+        self.query_text = query_text
         self.open_count = 0
         self.activate_count = 0
         self.type_count = 0
@@ -227,8 +233,8 @@ class FakeLiveWebEnvironment:
             ):
                 return (
                     _element(
-                        text=self.spec.query_text,
-                        value=self.spec.query_text,
+                        text=self.query_text,
+                        value=self.query_text,
                         element_type="text",
                         bounding_box=BoundingBox(
                             x=120,
@@ -247,7 +253,7 @@ class FakeLiveWebEnvironment:
             return (
                 _field(
                     self.spec.search_field.text or "",
-                    self.spec.query_text,
+                    self.query_text,
                 ),
                 _button(
                     self.spec.submit_target.text or "",
@@ -259,7 +265,7 @@ class FakeLiveWebEnvironment:
             return (
                 _field(
                     self.spec.search_field.text or "",
-                    self.spec.query_text,
+                    self.query_text,
                 ),
                 _button(
                     self.spec.submit_target.text or "",
@@ -425,6 +431,9 @@ def _run_uninterrupted(
     goal: str,
     spec: DurableWebSearchSpec,
 ) -> ScenarioResult:
+    query_text = _query_for_spec(
+        spec
+    )
     return _run_scenario(
         TaskState(
             goal=goal
@@ -433,6 +442,7 @@ def _run_uninterrupted(
             capture_path=None,
             mode="empty",
             spec=spec,
+            query_text=query_text,
         ),
         spec,
     )
@@ -442,9 +452,13 @@ def _run_restart_after_query(
     goal: str,
     spec: DurableWebSearchSpec,
 ) -> ScenarioResult:
+    query_text = _query_for_spec(
+        spec
+    )
     state = _state_with_workspace(
         goal=goal,
         spec=spec,
+        query_text=query_text,
         task_id=f"{spec.workflow_id}-query",
     )
     transitions = TaskStateTransitions(
@@ -474,6 +488,7 @@ def _run_restart_after_query(
             capture_path=None,
             mode="query",
             spec=spec,
+            query_text=query_text,
         ),
         spec,
     )
@@ -483,9 +498,13 @@ def _run_restart_after_submit(
     goal: str,
     spec: DurableWebSearchSpec,
 ) -> ScenarioResult:
+    query_text = _query_for_spec(
+        spec
+    )
     state = _state_with_workspace(
         goal=goal,
         spec=spec,
+        query_text=query_text,
         task_id=f"{spec.workflow_id}-submit",
     )
     transitions = TaskStateTransitions(
@@ -524,6 +543,7 @@ def _run_restart_after_submit(
             capture_path=None,
             mode="results",
             spec=spec,
+            query_text=query_text,
         ),
         spec,
     )
@@ -544,6 +564,7 @@ def _run_workflow_mismatch() -> ScenarioResult:
         capture_path=None,
         mode="empty",
         spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_QUERY,
     )
 
     try:
@@ -659,6 +680,7 @@ def _state_with_workspace(
     *,
     goal: str,
     spec: DurableWebSearchSpec,
+    query_text: str,
     task_id: str,
 ) -> TaskState:
     state = TaskState(
@@ -673,6 +695,13 @@ def _state_with_workspace(
     _ensure_workflow_identity(
         transitions,
         spec,
+    )
+    _ensure_query_identity(
+        transitions,
+        ResolvedDurableWebSearchTask(
+            spec=spec,
+            query_text=query_text,
+        ),
     )
     _ensure_live_task_structure(
         transitions,
@@ -689,6 +718,14 @@ def _state_with_workspace(
         )
     )
     return state
+
+
+def _query_for_spec(
+    spec: DurableWebSearchSpec,
+) -> str:
+    if spec is WIKIPEDIA_WORKFLOW:
+        return WIKIPEDIA_QUERY
+    return PYTHON_QUERY
 
 
 def _completed_with_one_type_and_submit(

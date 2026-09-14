@@ -4969,3 +4969,49 @@ Live Wikipedia validation passed:
 - crash after submit execution before result evidence checkpoint followed by resume on the `/w/index.php?...Special:Search` results URL, with no duplicate Search click.
 
 A normal live python.org regression path also passed. Python crash/restart behavior remains covered by deterministic tests in this increment.
+
+## Phase 06.08.01 — Parameterized Durable Search
+
+Experiment 06.08.01 separates static workflow definition from runtime task parameters for the two existing durable web search workflows. `DurableWebSearchSpec` now keeps site-owned configuration only: start URL, working URL prefix, expected application, search field, submit target, result target, durable semantic IDs, side-effect IDs/action keys, and static verification mode. A `ResolvedDurableWebSearchTask` pairs that static spec with the per-task `query_text`.
+
+Goal parsing is deterministic and bounded. The parser accepts `Search python.org for <query>.` and `Search Wikipedia for <query>.`, treats the command/site portion case-insensitively, preserves meaningful query casing, trims surrounding whitespace, tolerates one final period, rejects empty queries, rejects unsupported sites, and rejects malformed tasks. No LLM parsing or third website was introduced.
+
+Runtime query identity is persisted as the `live-web-query` artifact in `TaskState`; the exact query string is stored in the artifact location. On every worker start, the resolved goal must agree with both the persisted `live-web-workflow` and persisted `live-web-query` artifacts before any workspace creation, activation, typing, or submit action. A workflow mismatch, query mismatch, or missing query identity on an existing workspace fails closed.
+
+The durable runtime remains shared. Plan builders now receive the resolved task, so `WebTextInputStep.input_text` comes from the runtime query. python.org field-value verification compares the fresh field value to the runtime query. Wikipedia visible-search-UI verification now builds exact-query and `Search for pages containing <query>` targets dynamically while keeping the generic verifier site-neutral. Result targets remain static.
+
+Side-effect identity remains workflow-specific rather than query-specific: python.org still uses `click_target:python_org_search_go`, and Wikipedia still uses `click_target:wikipedia_search_submit`. Dynamic queries therefore do not create duplicate side-effect identities, and submit confirmation still requires fresh result evidence.
+
+The deterministic experiment added `experiments/phase06_interactive_agent/experiment_09_parameterized_durable_search.py` plus a small fake-browser helper. It exercises:
+
+- Wikipedia `Claude Shannon` uninterrupted;
+- Wikipedia `reinforcement learning` restart after query checkpoint with no duplicate typing;
+- Wikipedia `Alan Turing` restart after submit with no duplicate submit;
+- python.org `asyncio` uninterrupted;
+- python.org `dataclasses` restart;
+- malformed/unsupported goal rejection.
+
+Direct automated experiment output:
+
+```text
+Phase 06 Experiment 08.01: Parameterized Durable Search
+Wikipedia Claude Shannon uninterrupted: passed
+Wikipedia reinforcement learning query restart: passed
+Wikipedia Alan Turing submit restart: passed
+python.org asyncio uninterrupted: passed
+python.org dataclasses restart: passed
+Malformed/unsupported goal rejected: passed
+Experiment acceptance: passed
+```
+
+The live durable acceptance harness now accepts `--goal "Search Wikipedia for Claude Shannon."` or another supported deterministic goal while preserving existing crash injection through `COMPUTER_AGENT_CRASH_AFTER=query_checkpoint` and `COMPUTER_AGENT_CRASH_AFTER=submit_execution`.
+
+Live arbitrary-query validation exposed two real browser behaviors. First, python.org can expose a typed query through Accessibility as character-spaced text (`a s y n ci o`) even when the intended query is `asyncio`; the field-value verifier now accepts this narrow compact-equivalent form after exact normalized matching fails. Second, Wikipedia exact-title queries such as `Claude Shannon` and `reinforcement learning` can navigate directly to article pages rather than a `Search results` page; the Wikipedia workflow now has a dynamic result target factory for an article heading matching the runtime query while preserving the static `Search results` heading target.
+
+Final live arbitrary-query acceptance passed for:
+
+- Wikipedia `Claude Shannon` uninterrupted;
+- Wikipedia `reinforcement learning` uninterrupted;
+- python.org `asyncio` uninterrupted;
+- Wikipedia `Claude Shannon` query-checkpoint crash/resume, with no duplicate typing;
+- Wikipedia `reinforcement learning` submit-execution crash/resume, with no duplicate submit and fresh result evidence confirming the existing side effect.

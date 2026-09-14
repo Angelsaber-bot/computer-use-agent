@@ -378,3 +378,19 @@ Workspace resume keeps exact marker-window ownership while using the workflow UR
 The deterministic headless Experiment 06.07.02 proves python.org uninterrupted execution, Wikipedia uninterrupted execution, Wikipedia restart after query checkpoint without retyping, Wikipedia restart after submit before result checkpoint without duplicate submit, and workflow identity mismatch failure. Live validation also passed for Wikipedia uninterrupted execution, Wikipedia query-checkpoint crash/resume, Wikipedia submit-execution crash/resume, and a normal python.org regression path.
 
 Semantic worker failures now mark and publish `TaskState.status = FAILED` before the runtime reports `FAILED`. Intentional `os._exit` crash injection still does not persist a semantic failure state because the process terminates abruptly by design.
+
+#### Experiment 06.08.01: Parameterized Durable Search
+
+Experiment 06.08.01 separates static durable web workflow configuration from runtime task parameters. The configured workflow still owns the start URL, working URL prefix, expected application, semantic search field, submit target, result target, durable claim/subgoal IDs, and side-effect action identity. The search query is now resolved per task.
+
+Goal resolution is deterministic and regex-based, not LLM-based. Supported goals are bounded to `Search python.org for <query>.` and `Search Wikipedia for <query>.`, with case-insensitive command/site parsing, exact query casing preservation, optional final-period trimming, and fail-closed rejection of empty, malformed, or unsupported-site goals.
+
+The resolved runtime query is persisted in `TaskState` as the `live-web-query` artifact. On resume, the worker validates both `live-web-workflow` and `live-web-query` before opening or reactivating Chrome. A workflow/query mismatch fails closed, and restart uses the persisted query identity rather than reparsing text from a user-editable web field.
+
+python.org continues to verify the query by fresh field-value observation, now against the runtime query. Wikipedia continues to verify visible search UI near the `Search` control, but confirmation targets such as `Search for pages containing <query>` are generated dynamically from the runtime query. Result verification remains static per site.
+
+The deterministic headless Experiment 06.08.01 covers Wikipedia `Claude Shannon` uninterrupted, Wikipedia `reinforcement learning` query-checkpoint restart with no retyping, Wikipedia `Alan Turing` submit restart with no duplicate submit, python.org `asyncio` uninterrupted, python.org `dataclasses` restart, and malformed/unsupported goal rejection. This increment still supports only the two configured websites and does not add LLM planning or arbitrary website discovery.
+
+Live validation found two real browser details and the worker now handles both: python.org can expose typed field values through Accessibility with character spacing such as `a s y n ci o`, and Wikipedia can navigate an exact-title query directly to an article page instead of a `Search results` page. The python.org verifier keeps exact matching first and accepts only character-spaced compact equivalents. The Wikipedia workflow can verify either the static `Search results` heading or a dynamic article heading matching the runtime query.
+
+Live arbitrary-query acceptance passed for Wikipedia `Claude Shannon`, Wikipedia `reinforcement learning`, python.org `asyncio`, Wikipedia `Claude Shannon` query-checkpoint crash/resume, and Wikipedia `reinforcement learning` submit-execution crash/resume.

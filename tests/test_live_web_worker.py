@@ -21,29 +21,34 @@ from computer_agent.app.live_web_worker import (
     GO_BUTTON,
     LiveCrashPoint,
     PYTHON_WORKFLOW,
+    QUERY_ARTIFACT_ID,
     QueryVerificationMode,
     RESULTS_TARGET,
     RESULT_CLAIM_ID,
     RESULT_SUBGOAL_ID,
     SEARCH_FIELD,
-    SEARCH_QUERY,
     SUBMIT_ACTION_KEY,
     SUBMIT_SIDE_EFFECT_ID,
+    ResolvedDurableWebSearchTask,
     WIKIPEDIA_WORKFLOW,
     WORKFLOW_ARTIFACT_ID,
     QUERY_CLAIM_ID,
     QUERY_SUBGOAL_ID,
     _browser_window_marker_from_state,
+    _ensure_query_identity,
     _ensure_workflow_identity,
     _maybe_inject_process_crash,
     _ensure_live_task_structure,
     _search_field_with_expected_value,
     _query_condition_satisfied,
+    _results_visible,
     _should_prepare_live_task_segment,
     build_prepare_plan,
     build_resume_plan,
     create_live_web_worker,
     goal_is_supported,
+    parse_live_web_search_goal,
+    resolve_live_web_task,
     resolve_live_web_workflow,
 )
 from computer_agent.perception import (
@@ -76,9 +81,21 @@ from computer_agent.runtime import (
 
 
 GOAL = "Search python.org for typing."
+SEARCH_QUERY = "typing"
 WIKIPEDIA_GOAL = (
     "Search Wikipedia for computer use agent."
 )
+WIKIPEDIA_QUERY = "computer use agent"
+
+
+def _resolved_task(
+    spec: DurableWebSearchSpec = PYTHON_WORKFLOW,
+    query_text: str = SEARCH_QUERY,
+) -> ResolvedDurableWebSearchTask:
+    return ResolvedDurableWebSearchTask(
+        spec=spec,
+        query_text=query_text,
+    )
 
 
 class InjectedCrash(RuntimeError):
@@ -175,10 +192,20 @@ class FakeLiveWebEnvironment:
         capture_path,
         mode: str = "empty",
         spec: DurableWebSearchSpec = PYTHON_WORKFLOW,
+        query_text: str | None = None,
     ) -> None:
         del capture_path
         self.mode = mode
         self.spec = spec
+        self.query_text = (
+            query_text
+            if query_text is not None
+            else (
+                WIKIPEDIA_QUERY
+                if spec is WIKIPEDIA_WORKFLOW
+                else SEARCH_QUERY
+            )
+        )
         self.open_count = 0
         self.activate_count = 0
         self.type_count = 0
@@ -291,8 +318,8 @@ class FakeLiveWebEnvironment:
             ):
                 return (
                     _element(
-                        text=self.spec.query_text,
-                        value=self.spec.query_text,
+                        text=self.query_text,
+                        value=self.query_text,
                         element_type="text",
                         bounding_box=BoundingBox(
                             x=120,
@@ -311,7 +338,7 @@ class FakeLiveWebEnvironment:
             return (
                 _element(
                     text=self.spec.search_field.text,
-                    value=self.spec.query_text,
+                    value=self.query_text,
                 ),
                 _button(
                     self.spec.submit_target.text
@@ -324,7 +351,7 @@ class FakeLiveWebEnvironment:
             return (
                 _element(
                     text=self.spec.search_field.text,
-                    value=self.spec.query_text,
+                    value=self.query_text,
                 ),
                 _button(
                     self.spec.submit_target.text
@@ -634,27 +661,110 @@ def test_live_web_goal_support() -> None:
         WIKIPEDIA_GOAL
     )
 
-    assert not goal_is_supported(
+    assert goal_is_supported(
         "Search Wikipedia for typing."
     )
 
-
-def test_python_workflow_resolves_correctly() -> None:
-    spec = resolve_live_web_workflow(
-        GOAL
+    assert not goal_is_supported(
+        "Search Google for typing."
     )
 
+
+@pytest.mark.parametrize(
+    ("goal", "site", "query"),
+    (
+        (
+            "Search Wikipedia for Claude Shannon.",
+            "wikipedia",
+            "Claude Shannon",
+        ),
+        (
+            "Search Wikipedia for Alan Turing.",
+            "wikipedia",
+            "Alan Turing",
+        ),
+        (
+            "Search Wikipedia for reinforcement learning",
+            "wikipedia",
+            "reinforcement learning",
+        ),
+        (
+            "Search python.org for asyncio.",
+            "python.org",
+            "asyncio",
+        ),
+        (
+            "Search python.org for dataclasses.",
+            "python.org",
+            "dataclasses",
+        ),
+        (
+            "Search python.org for virtual environments.",
+            "python.org",
+            "virtual environments",
+        ),
+        (
+            "search wikipedia for alan turing",
+            "wikipedia",
+            "alan turing",
+        ),
+    ),
+)
+def test_live_web_goal_parser(
+    goal: str,
+    site: str,
+    query: str,
+) -> None:
+    assert parse_live_web_search_goal(
+        goal
+    ) == (site, query)
+
+
+@pytest.mark.parametrize(
+    "goal",
+    (
+        "Search Wikipedia for .",
+        "Search Wikipedia Claude Shannon.",
+        "Search for Claude Shannon.",
+    ),
+)
+def test_live_web_goal_parser_rejects_malformed_or_empty(
+    goal: str,
+) -> None:
+    with pytest.raises(RuntimeError):
+        parse_live_web_search_goal(goal)
+
+
+def test_live_web_goal_parser_rejects_unsupported_site() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="Unsupported live web search site",
+    ):
+        parse_live_web_search_goal(
+            "Search Google for OpenAI."
+        )
+
+
+def test_python_task_resolves_correctly() -> None:
+    resolved_task = resolve_live_web_task(
+        "Search python.org for asyncio."
+    )
+    assert resolved_task is not None
+    spec = resolved_task.spec
+
     assert spec.workflow_id == "python-org-search"
-    assert spec.query_text == SEARCH_QUERY
+    assert resolved_task.query_text == "asyncio"
     assert spec.search_field == SEARCH_FIELD
     assert spec.submit_target == GO_BUTTON
     assert spec.result_target == RESULTS_TARGET
 
 
-def test_wikipedia_workflow_resolves_correctly() -> None:
-    spec = resolve_live_web_workflow(
-        WIKIPEDIA_GOAL
+def test_wikipedia_task_resolves_correctly() -> None:
+    resolved_task = resolve_live_web_task(
+        "Search Wikipedia for Claude Shannon."
     )
+    assert resolved_task is not None
+    spec = resolved_task.spec
 
     assert spec is WIKIPEDIA_WORKFLOW
     assert spec.start_url == (
@@ -663,19 +773,28 @@ def test_wikipedia_workflow_resolves_correctly() -> None:
     assert spec.working_url_prefix == (
         "https://en.wikipedia.org/"
     )
-    assert spec.query_text == "computer use agent"
+    assert resolved_task.query_text == "Claude Shannon"
     assert spec.search_field.text == "Search Wikipedia"
     assert spec.submit_target.text == "Search"
     assert spec.result_target.text == "Search results"
 
 
+def test_resolve_live_web_workflow_returns_static_spec() -> None:
+    assert (
+        resolve_live_web_workflow(
+            "Search python.org for dataclasses."
+        )
+        is PYTHON_WORKFLOW
+    )
+
+
 def test_unsupported_goal_rejected() -> None:
     with pytest.raises(
         RuntimeError,
-        match="supports only these bounded tasks",
+        match="Unsupported live web search site",
     ):
-        resolve_live_web_workflow(
-            "Search an unsupported site."
+        resolve_live_web_task(
+            "Search Google for OpenAI."
         )
 
 
@@ -692,7 +811,7 @@ def test_wikipedia_prepare_plan_uses_spec_values() -> None:
         WebTextInputStep,
     )
     assert step.target == WIKIPEDIA_WORKFLOW.search_field
-    assert step.input_text == WIKIPEDIA_WORKFLOW.query_text
+    assert step.input_text == WIKIPEDIA_QUERY
 
 
 def test_wikipedia_resume_plan_uses_spec_values() -> None:
@@ -773,12 +892,12 @@ def test_resume_plan_contains_only_submit_click() -> None:
 
 def test_live_worker_rejects_unsupported_goal_without_actions() -> None:
     state = TaskState(
-        goal="Search somewhere else."
+        goal="Search Google for OpenAI."
     )
 
     with pytest.raises(
         RuntimeError,
-        match="supports only these bounded tasks",
+        match="Unsupported live web search site",
     ):
         create_live_web_worker(
             state,
@@ -1084,6 +1203,91 @@ def test_workflow_identity_persists() -> None:
     )
 
 
+def test_query_identity_persists_exact_runtime_query() -> None:
+    state = TaskState(
+        goal="Search Wikipedia for Claude Shannon."
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+    resolved_task = resolve_live_web_task(
+        state.goal
+    )
+    assert resolved_task is not None
+
+    _ensure_query_identity(
+        transitions,
+        resolved_task,
+    )
+
+    artifact = state.artifacts[
+        QUERY_ARTIFACT_ID
+    ]
+    assert artifact.location == "Claude Shannon"
+
+
+def test_mismatched_persisted_query_fails_closed() -> None:
+    state = TaskState(
+        goal="Search Wikipedia for Claude Shannon."
+    )
+    state.artifacts[
+        QUERY_ARTIFACT_ID
+    ] = ArtifactRecord(
+        artifact_id=QUERY_ARTIFACT_ID,
+        description="Durable live web runtime query text.",
+        location="Alan Turing",
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+    resolved_task = resolve_live_web_task(
+        state.goal
+    )
+    assert resolved_task is not None
+
+    with pytest.raises(
+        RuntimeError,
+        match="query identity",
+    ):
+        _ensure_query_identity(
+            transitions,
+            resolved_task,
+        )
+
+
+def test_missing_query_identity_on_resume_fails_closed() -> None:
+    state = TaskState(
+        goal="Search python.org for asyncio.",
+        task_id="missing-query-identity",
+    )
+    state.artifacts[
+        BROWSER_WINDOW_ARTIFACT_ID
+    ] = ArtifactRecord(
+        artifact_id=BROWSER_WINDOW_ARTIFACT_ID,
+        description="Agent-owned Chrome window.",
+        location=(
+            BROWSER_WINDOW_MARKER_PREFIX
+            + state.task_id
+        ),
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+    resolved_task = resolve_live_web_task(
+        state.goal
+    )
+    assert resolved_task is not None
+
+    with pytest.raises(
+        RuntimeError,
+        match="no durable web query identity",
+    ):
+        _ensure_query_identity(
+            transitions,
+            resolved_task,
+        )
+
+
 def test_mismatched_persisted_workflow_fails_closed() -> None:
     state = TaskState(
         goal=WIKIPEDIA_GOAL
@@ -1143,12 +1347,54 @@ def test_live_worker_mismatched_persisted_workflow_fails_closed(
     assert environment.click_count == 0
 
 
+def test_live_worker_mismatched_persisted_query_fails_closed(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal="Search Wikipedia for Claude Shannon."
+    )
+    state.artifacts[
+        QUERY_ARTIFACT_ID
+    ] = ArtifactRecord(
+        artifact_id=QUERY_ARTIFACT_ID,
+        description="Durable live web runtime query text.",
+        location="Alan Turing",
+    )
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text="Claude Shannon",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="query identity",
+    ):
+        _run_worker_with_fake_environment(
+            monkeypatch,
+            state,
+            environment,
+        )
+
+    assert environment.open_count == 0
+    assert environment.type_count == 0
+    assert environment.click_count == 0
+
+
 def test_live_completion_waits_for_result_subgoal() -> None:
     state = TaskState(
         goal=GOAL
     )
     transitions = TaskStateTransitions(
         state
+    )
+    _ensure_query_identity(
+        transitions,
+        _resolved_task(
+            PYTHON_WORKFLOW,
+            SEARCH_QUERY,
+        ),
     )
     _ensure_live_task_structure(
         transitions
@@ -1316,6 +1562,96 @@ def test_wikipedia_worker_runs_through_shared_loop(
         ].location
         == "workflow:wikipedia-search"
     )
+    assert (
+        state.artifacts[
+            QUERY_ARTIFACT_ID
+        ].location
+        == WIKIPEDIA_QUERY
+    )
+
+
+@pytest.mark.parametrize(
+    ("goal", "spec", "query_text"),
+    (
+        (
+            "Search Wikipedia for Claude Shannon.",
+            WIKIPEDIA_WORKFLOW,
+            "Claude Shannon",
+        ),
+        (
+            "Search python.org for asyncio.",
+            PYTHON_WORKFLOW,
+            "asyncio",
+        ),
+    ),
+)
+def test_live_worker_uses_dynamic_runtime_query(
+    monkeypatch,
+    goal: str,
+    spec: DurableWebSearchSpec,
+    query_text: str,
+) -> None:
+    state = TaskState(
+        goal=goal
+    )
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=spec,
+        query_text=query_text,
+    )
+
+    _run_worker_with_fake_environment(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert environment.type_count == 1
+    assert environment.click_count == 1
+    assert (
+        state.artifacts[
+            QUERY_ARTIFACT_ID
+        ].location
+        == query_text
+    )
+    assert any(
+        query_text in evidence.summary
+        for evidence in state.evidence.values()
+    )
+
+
+def test_dynamic_queries_reuse_workflow_side_effect_identity(
+    monkeypatch,
+) -> None:
+    action_keys: list[str | None] = []
+
+    for query_text in ("Claude Shannon", "Alan Turing"):
+        state = TaskState(
+            goal=f"Search Wikipedia for {query_text}."
+        )
+        environment = FakeLiveWebEnvironment(
+            capture_path=None,
+            mode="empty",
+            spec=WIKIPEDIA_WORKFLOW,
+            query_text=query_text,
+        )
+
+        _run_worker_with_fake_environment(
+            monkeypatch,
+            state,
+            environment,
+        )
+        action_keys.append(
+            state.side_effects[
+                WIKIPEDIA_WORKFLOW.submit_side_effect_id
+            ].action_key
+        )
+
+    assert action_keys == [
+        WIKIPEDIA_WORKFLOW.submit_action_key,
+        WIKIPEDIA_WORKFLOW.submit_action_key,
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1530,6 +1866,13 @@ def test_live_worker_resume_after_query_checkpoint_does_not_retype(
     transitions = TaskStateTransitions(
         state
     )
+    _ensure_query_identity(
+        transitions,
+        _resolved_task(
+            PYTHON_WORKFLOW,
+            SEARCH_QUERY,
+        ),
+    )
     _ensure_live_task_structure(
         transitions
     )
@@ -1613,6 +1956,13 @@ def test_wikipedia_restart_after_query_checkpoint_avoids_retyping(
         transitions,
         WIKIPEDIA_WORKFLOW,
     )
+    _ensure_query_identity(
+        transitions,
+        _resolved_task(
+            WIKIPEDIA_WORKFLOW,
+            WIKIPEDIA_QUERY,
+        ),
+    )
     _ensure_live_task_structure(
         transitions,
         WIKIPEDIA_WORKFLOW,
@@ -1682,6 +2032,13 @@ def test_live_worker_resume_after_go_click_reconciles_results_without_click(
     )
     transitions = TaskStateTransitions(
         state
+    )
+    _ensure_query_identity(
+        transitions,
+        _resolved_task(
+            PYTHON_WORKFLOW,
+            SEARCH_QUERY,
+        ),
     )
     _ensure_live_task_structure(
         transitions
@@ -1801,6 +2158,13 @@ def test_wikipedia_restart_after_submit_avoids_duplicate_submit(
         transitions,
         WIKIPEDIA_WORKFLOW,
     )
+    _ensure_query_identity(
+        transitions,
+        _resolved_task(
+            WIKIPEDIA_WORKFLOW,
+            WIKIPEDIA_QUERY,
+        ),
+    )
     _ensure_live_task_structure(
         transitions,
         WIKIPEDIA_WORKFLOW,
@@ -1892,6 +2256,13 @@ def test_live_worker_fails_closed_on_ambiguous_external_state(
     transitions = TaskStateTransitions(
         state
     )
+    _ensure_query_identity(
+        transitions,
+        _resolved_task(
+            PYTHON_WORKFLOW,
+            SEARCH_QUERY,
+        ),
+    )
     _ensure_live_task_structure(
         transitions
     )
@@ -1941,6 +2312,13 @@ def test_live_stage_selection_uses_persisted_browser_artifact_after_recovery() -
     )
     transitions = TaskStateTransitions(
         state
+    )
+    _ensure_query_identity(
+        transitions,
+        _resolved_task(
+            PYTHON_WORKFLOW,
+            SEARCH_QUERY,
+        ),
     )
     _ensure_live_task_structure(
         transitions
@@ -2127,6 +2505,21 @@ def test_search_field_falls_back_to_unique_current_value_match() -> None:
     )
 
 
+def test_search_field_accepts_character_spaced_accessibility_value() -> None:
+    field = _element(
+        text="Search This Site",
+        value="a s y n ci o",
+    )
+
+    assert (
+        _search_field_with_expected_value(
+            (field,),
+            expected_value="asyncio",
+        )
+        is field
+    )
+
+
 def test_search_field_returns_none_when_no_value_matches() -> None:
     assert (
         _search_field_with_expected_value(
@@ -2176,6 +2569,21 @@ def test_search_field_wrong_semantic_value_does_not_pass() -> None:
     )
 
 
+def test_search_field_rejects_non_character_spaced_phrase_compaction() -> None:
+    assert (
+        _search_field_with_expected_value(
+            (
+                _element(
+                    text="Search This Site",
+                    value="virtual environments",
+                ),
+            ),
+            expected_value="virtualenvironments",
+        )
+        is None
+    )
+
+
 def test_query_condition_field_value_accepts_current_python_field() -> None:
     result = _query_condition_satisfied(
         _observation(
@@ -2187,7 +2595,10 @@ def test_query_condition_field_value_accepts_current_python_field() -> None:
                 _button("GO"),
             )
         ),
-        PYTHON_WORKFLOW,
+        _resolved_task(
+            PYTHON_WORKFLOW,
+            SEARCH_QUERY,
+        ),
     )
 
     assert result is not None
@@ -2195,6 +2606,7 @@ def test_query_condition_field_value_accepts_current_python_field() -> None:
 
 
 def test_wikipedia_query_condition_accepts_autocomplete_visible_ui() -> None:
+    query_text = "Claude Shannon"
     result = _query_condition_satisfied(
         _observation(
             (
@@ -2214,11 +2626,11 @@ def test_wikipedia_query_condition_accepts_autocomplete_visible_ui() -> None:
                 _element(
                     text=(
                         "Search for pages containing "
-                        "computer use agent"
+                        f"{query_text}"
                     ),
                     value=(
                         "Search for pages containing "
-                        "computer use agent"
+                        f"{query_text}"
                     ),
                     element_type="link",
                     bounding_box=BoundingBox(
@@ -2239,23 +2651,27 @@ def test_wikipedia_query_condition_accepts_autocomplete_visible_ui() -> None:
                 ),
             )
         ),
-        WIKIPEDIA_WORKFLOW,
+        _resolved_task(
+            WIKIPEDIA_WORKFLOW,
+            query_text,
+        ),
     )
 
     assert result is not None
     assert (
-        "visibly confirms 'computer use agent'"
+        "confirms 'Claude Shannon'"
         in result.summary
     )
 
 
 def test_wikipedia_query_condition_accepts_closed_autocomplete_query_text() -> None:
+    query_text = "reinforcement learning"
     result = _query_condition_satisfied(
         _observation(
             (
                 _element(
-                    text="computer use agent",
-                    value="computer use agent",
+                    text=query_text,
+                    value=query_text,
                     element_type="text",
                     bounding_box=BoundingBox(
                         x=120,
@@ -2275,19 +2691,23 @@ def test_wikipedia_query_condition_accepts_closed_autocomplete_query_text() -> N
                 ),
             )
         ),
-        WIKIPEDIA_WORKFLOW,
+        _resolved_task(
+            WIKIPEDIA_WORKFLOW,
+            query_text,
+        ),
     )
 
     assert result is not None
 
 
 def test_wikipedia_query_condition_rejects_body_text_far_from_search() -> None:
+    query_text = "Claude Shannon"
     result = _query_condition_satisfied(
         _observation(
             (
                 _element(
-                    text="computer use agent",
-                    value="computer use agent",
+                    text=query_text,
+                    value=query_text,
                     element_type="text",
                     bounding_box=BoundingBox(
                         x=120,
@@ -2307,19 +2727,58 @@ def test_wikipedia_query_condition_rejects_body_text_far_from_search() -> None:
                 ),
             )
         ),
-        WIKIPEDIA_WORKFLOW,
+        _resolved_task(
+            WIKIPEDIA_WORKFLOW,
+            query_text,
+        ),
+    )
+
+    assert result is None
+
+
+def test_wikipedia_query_condition_rejects_different_query_near_search() -> None:
+    result = _query_condition_satisfied(
+        _observation(
+            (
+                _element(
+                    text="Alan Turing",
+                    value="Alan Turing",
+                    element_type="text",
+                    bounding_box=BoundingBox(
+                        x=120,
+                        y=12,
+                        width=210,
+                        height=18,
+                    ),
+                ),
+                _button(
+                    "Search",
+                    bounding_box=BoundingBox(
+                        x=430,
+                        y=10,
+                        width=70,
+                        height=24,
+                    ),
+                ),
+            )
+        ),
+        _resolved_task(
+            WIKIPEDIA_WORKFLOW,
+            "Claude Shannon",
+        ),
     )
 
     assert result is None
 
 
 def test_wikipedia_query_condition_rejects_when_submit_missing() -> None:
+    query_text = "Claude Shannon"
     result = _query_condition_satisfied(
         _observation(
             (
                 _element(
-                    text="computer use agent",
-                    value="computer use agent",
+                    text=query_text,
+                    value=query_text,
                     element_type="text",
                     bounding_box=BoundingBox(
                         x=120,
@@ -2330,19 +2789,41 @@ def test_wikipedia_query_condition_rejects_when_submit_missing() -> None:
                 ),
             )
         ),
-        WIKIPEDIA_WORKFLOW,
+        _resolved_task(
+            WIKIPEDIA_WORKFLOW,
+            query_text,
+        ),
     )
 
     assert result is None
 
 
+def test_wikipedia_results_accept_dynamic_article_heading() -> None:
+    assert _results_visible(
+        _observation(
+            (
+                _element(
+                    text="Claude Shannon",
+                    value="Claude Shannon",
+                    element_type="heading",
+                ),
+            )
+        ),
+        _resolved_task(
+            WIKIPEDIA_WORKFLOW,
+            "Claude Shannon",
+        ),
+    )
+
+
 def test_wikipedia_query_condition_rejects_ambiguous_near_matches() -> None:
+    query_text = "Claude Shannon"
     result = _query_condition_satisfied(
         _observation(
             (
                 _element(
-                    text="computer use agent",
-                    value="computer use agent",
+                    text=query_text,
+                    value=query_text,
                     element_type="text",
                     bounding_box=BoundingBox(
                         x=120,
@@ -2352,8 +2833,8 @@ def test_wikipedia_query_condition_rejects_ambiguous_near_matches() -> None:
                     ),
                 ),
                 _element(
-                    text="computer use agent",
-                    value="computer use agent",
+                    text=query_text,
+                    value=query_text,
                     element_type="text",
                     bounding_box=BoundingBox(
                         x=120,
@@ -2373,7 +2854,10 @@ def test_wikipedia_query_condition_rejects_ambiguous_near_matches() -> None:
                 ),
             )
         ),
-        WIKIPEDIA_WORKFLOW,
+        _resolved_task(
+            WIKIPEDIA_WORKFLOW,
+            query_text,
+        ),
     )
 
     assert result is None

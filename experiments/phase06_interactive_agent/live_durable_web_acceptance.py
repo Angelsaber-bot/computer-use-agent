@@ -18,8 +18,6 @@ from uuid import uuid4
 from computer_agent.app.live_web_worker import (
     CRASH_ENV_VAR,
     LiveCrashPoint,
-    PYTHON_WORKFLOW,
-    WIKIPEDIA_WORKFLOW,
     create_live_web_worker,
 )
 from computer_agent.runtime import RuntimeControl, RuntimeTask
@@ -33,8 +31,8 @@ from computer_agent.task import (
 
 
 GOALS = {
-    "python": PYTHON_WORKFLOW.supported_goal,
-    "wikipedia": WIKIPEDIA_WORKFLOW.supported_goal,
+    "python": "Search python.org for typing.",
+    "wikipedia": "Search Wikipedia for computer use agent.",
 }
 
 
@@ -57,6 +55,14 @@ def _parse_args() -> argparse.Namespace:
         "--workflow",
         choices=tuple(GOALS),
         default="wikipedia",
+    )
+    parser.add_argument(
+        "--goal",
+        default=None,
+        help=(
+            "Exact deterministic goal, e.g. "
+            "'Search Wikipedia for Claude Shannon.'"
+        ),
     )
     parser.add_argument(
         "--path",
@@ -116,8 +122,8 @@ def _run_path(args: argparse.Namespace) -> int:
         [
             sys.executable,
             __file__,
-            "--workflow",
-            args.workflow,
+            "--goal",
+            _goal_from_args(args),
             "--path",
             args.path,
             "--store-dir",
@@ -141,8 +147,8 @@ def _run_path(args: argparse.Namespace) -> int:
         [
             sys.executable,
             __file__,
-            "--workflow",
-            args.workflow,
+            "--goal",
+            _goal_from_args(args),
             "--path",
             args.path,
             "--store-dir",
@@ -178,7 +184,7 @@ def _run_child(args: argparse.Namespace) -> int:
         )
     else:
         state = TaskState(
-            goal=GOALS[args.workflow],
+            goal=_goal_from_args(args),
             task_id=args.task_id,
         )
 
@@ -224,6 +230,14 @@ def _run_child(args: argparse.Namespace) -> int:
         if state.status is TaskStateStatus.COMPLETED
         else 1
     )
+
+
+def _goal_from_args(
+    args: argparse.Namespace,
+) -> str:
+    if args.goal is not None and args.goal.strip():
+        return args.goal.strip()
+    return GOALS[args.workflow]
 
 
 def _state_line(state: TaskState) -> str:

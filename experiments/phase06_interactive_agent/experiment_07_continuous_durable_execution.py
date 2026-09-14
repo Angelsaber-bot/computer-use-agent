@@ -16,14 +16,16 @@ from computer_agent.agent import (
 from computer_agent.app.live_web_worker import (
     BROWSER_WINDOW_ARTIFACT_ID,
     BROWSER_WINDOW_MARKER_PREFIX,
+    PYTHON_WORKFLOW,
     QUERY_CLAIM_ID,
     QUERY_SUBGOAL_ID,
     RESULT_CLAIM_ID,
     RESULT_SUBGOAL_ID,
-    SEARCH_QUERY,
+    ResolvedDurableWebSearchTask,
     SUBMIT_ACTION_KEY,
     SUBMIT_SIDE_EFFECT_ID,
     create_live_web_worker,
+    _ensure_query_identity,
     _ensure_live_task_structure,
 )
 from computer_agent.perception import (
@@ -59,6 +61,7 @@ TITLE = (
     "Continuous Durable Execution"
 )
 GOAL = "Search python.org for typing."
+SEARCH_QUERY = "typing"
 
 
 @dataclass(frozen=True, slots=True)
@@ -515,6 +518,13 @@ def _state_with_workspace(
         state
     )
 
+    _ensure_query_identity(
+        transitions,
+        ResolvedDurableWebSearchTask(
+            spec=PYTHON_WORKFLOW,
+            query_text=SEARCH_QUERY,
+        ),
+    )
     _ensure_live_task_structure(
         transitions
     )
