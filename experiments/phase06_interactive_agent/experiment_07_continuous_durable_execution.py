@@ -111,10 +111,12 @@ class FakeLiveWebEnvironment:
         self.type_count = 0
         self.click_count = 0
 
-    def open_python_org(
+    def open_task_site(
         self,
+        start_url: str,
         task_marker: str,
     ) -> str:
+        del start_url
         self.open_count += 1
         return (
             BROWSER_WINDOW_MARKER_PREFIX
@@ -124,7 +126,9 @@ class FakeLiveWebEnvironment:
     def activate_task_chrome_window(
         self,
         marker_url: str,
+        working_url_prefix: str = "",
     ) -> None:
+        del working_url_prefix
         if not marker_url.startswith(
             BROWSER_WINDOW_MARKER_PREFIX
         ):

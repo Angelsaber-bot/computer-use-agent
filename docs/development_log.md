@@ -4915,3 +4915,57 @@ The deterministic headless experiment covers:
 This experiment does not claim live Chrome acceptance. Manual visible app validation is still required for the real browser path.
 
 Development-only crash injection was added for manual restart acceptance testing. Setting `COMPUTER_AGENT_CRASH_AFTER=query_checkpoint` terminates the Python process after the verified query checkpoint is persisted and before GO submission begins. Setting `COMPUTER_AGENT_CRASH_AFTER=submit_execution` terminates after the GO action returns and before fresh Results evidence is added to durable `TaskState`. Unsupported non-empty values fail configuration early. This is acceptance-test instrumentation and is not normal Agent behavior.
+
+## Phase 06.07.02 — Configurable Durable Web Workflow
+
+Experiment 06.07.02 extracts the python.org-specific live worker constants into a small immutable `DurableWebSearchSpec`. The production durable reconciliation loop remains narrow: it still opens or reacquires an owned Chrome task window, observes fresh UI state, reconciles the query condition, checkpoints, reconciles submit/results state, journals and confirms the submit side effect, and completes through the evidence-grounded completion gate.
+
+The shared loop now receives the selected workflow spec and uses it for the start URL, working URL prefix, expected application, query text, semantic search field, submit target, result target, claim IDs, subgoal IDs, submit side-effect ID, and submit action key. This keeps code-owned coordinates, safety, execution, verification, and retry behavior in production code while making the bounded web workflow configurable.
+
+The existing python.org workflow remains supported as `python-org-search` for `Search python.org for typing.` Its stable claim, subgoal, side-effect, and action-key identifiers are preserved. Wikipedia is added as `wikipedia-search` for `Search Wikipedia for computer use agent.` The Wikipedia task starts at `https://en.wikipedia.org/wiki/Main_Page`, types through the semantic `Search Wikipedia` text field, submits through the `Search` button, and verifies the `Search results` heading. The query is intentionally non-exact-match so the expected outcome is a search-results page rather than direct article navigation.
+
+Live Wikipedia diagnostics found that typing physically succeeds, but after typing Chrome/macOS Accessibility exposes only Chrome's address bar as `AXTextField`; Wikipedia's page search UI appears as visible static/link/text elements such as `Search for pages containing computer use agent` and `computer use agent` near the page `Search` button. Query verification is now workflow-configurable. python.org keeps strict readable field-value verification. Wikipedia uses visible search UI verification that freshly resolves the configured submit control, finds configured query evidence, and requires bounded spatial association with that control. This supports restart after the autocomplete dropdown closes without accepting arbitrary page-body text.
+
+Workflow routing is still deterministic and explicit. `resolve_live_web_workflow(...)` recognizes only the two bounded supported goals and rejects unsupported goals clearly. No LLM routing or dynamic workflow discovery was introduced.
+
+Workflow identity is now persisted in `TaskState` as the `live-web-workflow` artifact with location `workflow:<workflow_id>`. On resume, the persisted workflow identity must match the workflow resolved from the persisted goal. A mismatch fails closed before browser workspace creation or any UI action. Older python.org-style checkpoints with matching durable structure can be labeled with the python workflow identity during recovery, but a mismatched identity is never silently reinterpreted.
+
+Submission reconciliation now treats fresh external browser state as the semantic source of truth. After a submit action returns, the worker preserves the AgentLoop result for diagnostics, optionally performs the development crash injection, observes Chrome again, and verifies the spec's result target from fresh UI state. If the target is visible, the result claim/subgoal are verified and the submit side effect is confirmed even if AgentLoop bookkeeping reported `BLOCKED` or `FAILED`. If the target is absent, the side effect remains unresolved/unknown and AgentLoop failure is still raised when it exists.
+
+Live Wikipedia diagnostics also found that the results page exposes both a `heading` and a `text` element named `Search results`. A generic `TargetSpec(text="Search results", element_types=())` was therefore correctly ambiguous. The spec was tightened, not the generic algorithm: Wikipedia now verifies `Search results` with `element_types=("heading",)`.
+
+The task window ownership model remains exact. The marker tab remains `about:blank#computer-agent-task=<task-id>`, and resume still depends on the controller finding exactly one marker-owned Chrome window with exactly one configured working tab. The worker now opens a configured site through `open_task_site(start_url, task_marker)` and reactivates with the workflow's configured working URL prefix. Wikipedia uses `https://en.wikipedia.org/`, which permits both the Main Page and the post-submit `/w/index.php?...Special:Search` results URL inside the marker-owned window while rejecting wrong-domain tabs and ambiguous same-window working tabs.
+
+Side-effect journaling is spec-driven. The shared runtime no longer hardcodes the submit side-effect ID or action key; python.org continues to use `click_target:python_org_search_go`, and Wikipedia uses `click_target:wikipedia_search_submit`. Before submit the side effect is `INTENDED`, after the click returns it is `EXECUTED`, a process crash after submit leaves it executed rather than confirmed, and only fresh result evidence moves it to `CONFIRMED`.
+
+Workspace runtime failure propagation was fixed at the semantic worker boundary. If a semantic worker raises an unrecovered task failure, `TaskState.status` is set to `FAILED`, published, and checkpointed before the runtime reports `FAILED`. Cooperative stop and intentional `os._exit` crash injection do not persist false semantic failure state.
+
+The deterministic headless experiment added `experiments/phase06_interactive_agent/experiment_08_configurable_durable_web_workflow.py` and covers:
+
+- python.org uninterrupted execution;
+- Wikipedia uninterrupted execution;
+- Wikipedia restart after query checkpoint with no duplicate typing;
+- Wikipedia restart after submit before result checkpoint with no duplicate submit;
+- workflow identity mismatch failing closed.
+
+Direct automated experiment output:
+
+```text
+Phase 06 Experiment 07.02: Configurable Durable Web Workflow
+Python uninterrupted: passed
+Wikipedia uninterrupted: passed
+Wikipedia restart after query checkpoint: passed
+Wikipedia restart after submit before result checkpoint: passed
+Workflow identity mismatch: passed
+Experiment acceptance: passed
+```
+
+Live acceptance was run through `experiments/phase06_interactive_agent/live_durable_web_acceptance.py`, a development-only harness that constructs/persists `TaskState` and invokes the production `create_live_web_worker` with real Chrome/macOS Accessibility. It does not duplicate reconciliation logic.
+
+Live Wikipedia validation passed:
+
+- uninterrupted execution;
+- crash after query checkpoint followed by resume, with no duplicate typing;
+- crash after submit execution before result evidence checkpoint followed by resume on the `/w/index.php?...Special:Search` results URL, with no duplicate Search click.
+
+A normal live python.org regression path also passed. Python crash/restart behavior remains covered by deterministic tests in this increment.

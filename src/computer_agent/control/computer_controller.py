@@ -211,6 +211,7 @@ end run
                     working_url_prefix,
                 ],
                 check=True,
+                stdout=subprocess.DEVNULL,
             )
         except subprocess.CalledProcessError as error:
             raise RuntimeError(

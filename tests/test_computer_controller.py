@@ -216,6 +216,71 @@ def test_activate_task_chrome_window_selects_working_tab(mock_run):
     )
     assert command[-2] == "about:blank#computer-agent-task=task-123"
     assert command[-1] == "https://www.python.org/"
+    assert (
+        mock_run.call_args.kwargs["stdout"]
+        is subprocess.DEVNULL
+    )
+
+
+@patch(
+    "computer_agent.control.computer_controller.subprocess.run"
+)
+@pytest.mark.parametrize(
+    "url",
+    (
+        "https://en.wikipedia.org/wiki/Main_Page",
+        (
+            "https://en.wikipedia.org/w/index.php?"
+            "search=computer+use+agent&title=Special:Search&ns0=1"
+        ),
+    ),
+)
+def test_activate_task_chrome_window_allows_wikipedia_workflow_prefix(
+    mock_run,
+    url,
+):
+    controller = ComputerController()
+
+    controller.activate_task_chrome_window(
+        "about:blank#computer-agent-task=task-123",
+        "https://en.wikipedia.org/",
+    )
+
+    command = mock_run.call_args.args[0]
+
+    assert (
+        "else if URL of candidateTab starts with workingURLPrefix"
+        in command[2]
+    )
+    assert "workingTabCount is not 1" in command[2]
+    assert command[-1] == "https://en.wikipedia.org/"
+    assert url.startswith(command[-1])
+    assert (
+        mock_run.call_args.kwargs["stdout"]
+        is subprocess.DEVNULL
+    )
+
+
+@patch(
+    "computer_agent.control.computer_controller.subprocess.run"
+)
+def test_activate_task_chrome_window_rejects_wrong_domain_by_prefix(
+    mock_run,
+):
+    controller = ComputerController()
+
+    controller.activate_task_chrome_window(
+        "about:blank#computer-agent-task=task-123",
+        "https://en.wikipedia.org/",
+    )
+
+    script = mock_run.call_args.args[0][2]
+
+    assert "starts with workingURLPrefix" in script
+    assert (
+        "https://www.wikipedia.org/"
+        != mock_run.call_args.args[0][-1]
+    )
 
 
 def test_activate_task_chrome_window_rejects_invalid_marker():

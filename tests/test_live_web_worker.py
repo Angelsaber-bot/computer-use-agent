@@ -17,8 +17,11 @@ from computer_agent.app.live_web_worker import (
     BROWSER_WINDOW_ARTIFACT_ID,
     BROWSER_WINDOW_MARKER_PREFIX,
     CRASH_ENV_VAR,
+    DurableWebSearchSpec,
     GO_BUTTON,
     LiveCrashPoint,
+    PYTHON_WORKFLOW,
+    QueryVerificationMode,
     RESULTS_TARGET,
     RESULT_CLAIM_ID,
     RESULT_SUBGOAL_ID,
@@ -26,17 +29,22 @@ from computer_agent.app.live_web_worker import (
     SEARCH_QUERY,
     SUBMIT_ACTION_KEY,
     SUBMIT_SIDE_EFFECT_ID,
+    WIKIPEDIA_WORKFLOW,
+    WORKFLOW_ARTIFACT_ID,
     QUERY_CLAIM_ID,
     QUERY_SUBGOAL_ID,
     _browser_window_marker_from_state,
+    _ensure_workflow_identity,
     _maybe_inject_process_crash,
     _ensure_live_task_structure,
     _search_field_with_expected_value,
+    _query_condition_satisfied,
     _should_prepare_live_task_segment,
     build_prepare_plan,
     build_resume_plan,
     create_live_web_worker,
     goal_is_supported,
+    resolve_live_web_workflow,
 )
 from computer_agent.perception import (
     BoundingBox,
@@ -68,6 +76,9 @@ from computer_agent.runtime import (
 
 
 GOAL = "Search python.org for typing."
+WIKIPEDIA_GOAL = (
+    "Search Wikipedia for computer use agent."
+)
 
 
 class InjectedCrash(RuntimeError):
@@ -81,6 +92,8 @@ def _element(
     element_type: str = "text_field",
     confidence: float = 0.95,
     enabled: bool | None = True,
+    bounding_box: BoundingBox | None = None,
+    source: str | None = "accessibility",
 ) -> UIElement:
     return UIElement(
         element_type=element_type,
@@ -88,23 +101,27 @@ def _element(
         value=value,
         confidence=confidence,
         enabled=enabled,
-        bounding_box=BoundingBox(
+        bounding_box=bounding_box
+        or BoundingBox(
             x=10,
             y=10,
             width=100,
             height=20,
         ),
-        source="accessibility",
+        source=source,
     )
 
 
 def _button(
     text: str,
+    *,
+    bounding_box: BoundingBox | None = None,
 ) -> UIElement:
     return _element(
         text=text,
         value=None,
         element_type="button",
+        bounding_box=bounding_box,
     )
 
 
@@ -130,6 +147,19 @@ def _snapshot(
     )
 
 
+def _observation(
+    elements: tuple[UIElement, ...],
+) -> TextInputObservation:
+    return TextInputObservation(
+        application_name="Google Chrome",
+        viewport=None,
+        snapshot=_snapshot(
+            elements
+        ),
+        semantic_elements=(),
+    )
+
+
 class FakeControl:
     def __init__(self) -> None:
         self.checkpoints = 0
@@ -144,9 +174,11 @@ class FakeLiveWebEnvironment:
         *,
         capture_path,
         mode: str = "empty",
+        spec: DurableWebSearchSpec = PYTHON_WORKFLOW,
     ) -> None:
         del capture_path
         self.mode = mode
+        self.spec = spec
         self.open_count = 0
         self.activate_count = 0
         self.type_count = 0
@@ -165,10 +197,12 @@ class FakeLiveWebEnvironment:
             semantic_elements=(),
         )
 
-    def open_python_org(
+    def open_task_site(
         self,
+        start_url: str,
         task_marker: str,
     ) -> str:
+        del start_url
         self.open_count += 1
         marker = (
             BROWSER_WINDOW_MARKER_PREFIX
@@ -182,7 +216,9 @@ class FakeLiveWebEnvironment:
     def activate_task_chrome_window(
         self,
         marker_url: str,
+        working_url_prefix: str = "",
     ) -> None:
+        del working_url_prefix
         self.activate_count += 1
         self.markers.append(
             marker_url
@@ -228,33 +264,75 @@ class FakeLiveWebEnvironment:
     def _elements(
         self,
     ) -> tuple[UIElement, ...]:
+        submit_box = BoundingBox(
+            x=430,
+            y=10,
+            width=70,
+            height=24,
+        )
+
         if self.mode == "empty":
             return (
                 _element(
-                    text="Search This Site",
+                    text=self.spec.search_field.text,
                     value="",
                 ),
-                _button("GO"),
+                _button(
+                    self.spec.submit_target.text
+                    or "",
+                    bounding_box=submit_box,
+                ),
             )
 
         if self.mode == "query":
+            if (
+                self.spec.query_verification_mode
+                is QueryVerificationMode.VISIBLE_SEARCH_UI
+            ):
+                return (
+                    _element(
+                        text=self.spec.query_text,
+                        value=self.spec.query_text,
+                        element_type="text",
+                        bounding_box=BoundingBox(
+                            x=120,
+                            y=12,
+                            width=200,
+                            height=20,
+                        ),
+                    ),
+                    _button(
+                        self.spec.submit_target.text
+                        or "",
+                        bounding_box=submit_box,
+                    ),
+                )
+
             return (
                 _element(
-                    text="Search This Site",
-                    value=SEARCH_QUERY,
+                    text=self.spec.search_field.text,
+                    value=self.spec.query_text,
                 ),
-                _button("GO"),
+                _button(
+                    self.spec.submit_target.text
+                    or "",
+                    bounding_box=submit_box,
+                ),
             )
 
         if self.mode == "results":
             return (
                 _element(
-                    text="Search This Site",
-                    value=SEARCH_QUERY,
+                    text=self.spec.search_field.text,
+                    value=self.spec.query_text,
                 ),
-                _button("GO"),
+                _button(
+                    self.spec.submit_target.text
+                    or "",
+                    bounding_box=submit_box,
+                ),
                 _element(
-                    text="Results",
+                    text=self.spec.result_target.text,
                     value=None,
                     element_type="heading",
                 ),
@@ -271,6 +349,123 @@ class FakeLiveWebEnvironment:
 
         raise AssertionError(
             f"unknown fake mode: {self.mode}"
+        )
+
+
+class FailedTextInputBookkeepingEnvironment(
+    FakeLiveWebEnvironment
+):
+    def __init__(
+        self,
+        *,
+        capture_path,
+        mode: str = "empty",
+        spec: DurableWebSearchSpec = PYTHON_WORKFLOW,
+        text_input_external_mode: str,
+    ) -> None:
+        super().__init__(
+            capture_path=capture_path,
+            mode=mode,
+            spec=spec,
+        )
+        self.text_input_external_mode = (
+            text_input_external_mode
+        )
+
+    def execute_plan(
+        self,
+        plan,
+    ) -> AgentLoopResult:
+        step = plan.steps[0]
+
+        if isinstance(
+            step,
+            WebTextInputStep,
+        ):
+            self.type_count += 1
+            self.mode = self.text_input_external_mode
+            agent_state = AgentState(
+                user_task=plan.task_goal
+            )
+            agent_state.fail(
+                "fake text input bookkeeping failure"
+            )
+            return AgentLoopResult(
+                status=AgentLoopStatus.EXHAUSTED,
+                plan=plan,
+                state=agent_state,
+                completed_plan_steps=0,
+                reason=(
+                    "fake exhausted text input "
+                    "bookkeeping"
+                ),
+            )
+
+        return super().execute_plan(
+            plan
+        )
+
+
+class SubmitBookkeepingEnvironment(
+    FakeLiveWebEnvironment
+):
+    def __init__(
+        self,
+        *,
+        capture_path,
+        mode: str = "query",
+        spec: DurableWebSearchSpec = PYTHON_WORKFLOW,
+        submit_external_mode: str,
+        submit_loop_status: AgentLoopStatus,
+    ) -> None:
+        super().__init__(
+            capture_path=capture_path,
+            mode=mode,
+            spec=spec,
+        )
+        self.submit_external_mode = submit_external_mode
+        self.submit_loop_status = submit_loop_status
+
+    def execute_plan(
+        self,
+        plan,
+    ) -> AgentLoopResult:
+        step = plan.steps[0]
+
+        if (
+            not isinstance(step, WebTextInputStep)
+            and step.operation
+            is PlanOperation.CLICK_TARGET
+        ):
+            self.click_count += 1
+            self.mode = self.submit_external_mode
+            agent_state = AgentState(
+                user_task=plan.task_goal
+            )
+
+            if (
+                self.submit_loop_status
+                is AgentLoopStatus.COMPLETED
+            ):
+                agent_state.start()
+                agent_state.succeed()
+                completed_steps = 1
+            else:
+                agent_state.fail(
+                    "fake submit bookkeeping failure"
+                )
+                completed_steps = 0
+
+            return AgentLoopResult(
+                status=self.submit_loop_status,
+                plan=plan,
+                state=agent_state,
+                completed_plan_steps=completed_steps,
+                reason="fake submit bookkeeping",
+            )
+
+        return super().execute_plan(
+            plan
         )
 
 
@@ -435,8 +630,90 @@ def test_live_web_goal_support() -> None:
         GOAL
     )
 
+    assert goal_is_supported(
+        WIKIPEDIA_GOAL
+    )
+
     assert not goal_is_supported(
         "Search Wikipedia for typing."
+    )
+
+
+def test_python_workflow_resolves_correctly() -> None:
+    spec = resolve_live_web_workflow(
+        GOAL
+    )
+
+    assert spec.workflow_id == "python-org-search"
+    assert spec.query_text == SEARCH_QUERY
+    assert spec.search_field == SEARCH_FIELD
+    assert spec.submit_target == GO_BUTTON
+    assert spec.result_target == RESULTS_TARGET
+
+
+def test_wikipedia_workflow_resolves_correctly() -> None:
+    spec = resolve_live_web_workflow(
+        WIKIPEDIA_GOAL
+    )
+
+    assert spec is WIKIPEDIA_WORKFLOW
+    assert spec.start_url == (
+        "https://en.wikipedia.org/wiki/Main_Page"
+    )
+    assert spec.working_url_prefix == (
+        "https://en.wikipedia.org/"
+    )
+    assert spec.query_text == "computer use agent"
+    assert spec.search_field.text == "Search Wikipedia"
+    assert spec.submit_target.text == "Search"
+    assert spec.result_target.text == "Search results"
+
+
+def test_unsupported_goal_rejected() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="supports only these bounded tasks",
+    ):
+        resolve_live_web_workflow(
+            "Search an unsupported site."
+        )
+
+
+def test_wikipedia_prepare_plan_uses_spec_values() -> None:
+    plan = build_prepare_plan(
+        WIKIPEDIA_GOAL,
+        WIKIPEDIA_WORKFLOW,
+    )
+
+    step = plan.steps[0]
+
+    assert isinstance(
+        step,
+        WebTextInputStep,
+    )
+    assert step.target == WIKIPEDIA_WORKFLOW.search_field
+    assert step.input_text == WIKIPEDIA_WORKFLOW.query_text
+
+
+def test_wikipedia_resume_plan_uses_spec_values() -> None:
+    plan = build_resume_plan(
+        WIKIPEDIA_GOAL,
+        WIKIPEDIA_WORKFLOW,
+    )
+
+    step = plan.steps[0]
+
+    assert isinstance(
+        step,
+        PlanStep,
+    )
+    assert (
+        step.action_target
+        == WIKIPEDIA_WORKFLOW.submit_target
+    )
+    assert (
+        step.verification_target
+        == WIKIPEDIA_WORKFLOW.result_target
     )
 
 
@@ -501,7 +778,7 @@ def test_live_worker_rejects_unsupported_goal_without_actions() -> None:
 
     with pytest.raises(
         RuntimeError,
-        match="supports only the bounded task",
+        match="supports only these bounded tasks",
     ):
         create_live_web_worker(
             state,
@@ -684,6 +961,47 @@ def test_live_submit_execution_crash_happens_after_go_before_results(
     )
 
 
+def test_wikipedia_query_checkpoint_crash_happens_before_submit(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(
+        CRASH_ENV_VAR,
+        LiveCrashPoint.QUERY_CHECKPOINT.value,
+    )
+    state = TaskState(
+        goal=WIKIPEDIA_GOAL
+    )
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+    )
+
+    (
+        crash_points,
+        _published_statuses,
+        decisions,
+        _progress_messages,
+        _control,
+    ) = _run_worker_until_injected_crash(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert crash_points == ["terminated"]
+    assert environment.open_count == 1
+    assert environment.type_count == 1
+    assert environment.click_count == 0
+    assert decisions == []
+    assert (
+        state.claims[
+            WIKIPEDIA_WORKFLOW.query_claim_id
+        ].status
+        is ClaimStatus.VERIFIED
+    )
+
+
 def test_live_task_structure_is_preregistered_with_pending_result() -> None:
     state = TaskState(
         goal=GOAL
@@ -720,6 +1038,109 @@ def test_live_task_structure_is_preregistered_with_pending_result() -> None:
         state.subgoals[RESULT_SUBGOAL_ID].status
         is SubgoalStatus.PENDING
     )
+
+
+def test_generic_structure_creation_uses_spec_ids() -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_GOAL
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+
+    _ensure_live_task_structure(
+        transitions,
+        WIKIPEDIA_WORKFLOW,
+    )
+
+    assert {
+        WIKIPEDIA_WORKFLOW.query_claim_id,
+        WIKIPEDIA_WORKFLOW.result_claim_id,
+    } == set(state.claims)
+    assert {
+        WIKIPEDIA_WORKFLOW.query_subgoal_id,
+        WIKIPEDIA_WORKFLOW.result_subgoal_id,
+    } == set(state.subgoals)
+
+
+def test_workflow_identity_persists() -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_GOAL
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+
+    _ensure_workflow_identity(
+        transitions,
+        WIKIPEDIA_WORKFLOW,
+    )
+
+    artifact = state.artifacts[
+        WORKFLOW_ARTIFACT_ID
+    ]
+    assert artifact.location == (
+        "workflow:wikipedia-search"
+    )
+
+
+def test_mismatched_persisted_workflow_fails_closed() -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_GOAL
+    )
+    state.artifacts[
+        WORKFLOW_ARTIFACT_ID
+    ] = ArtifactRecord(
+        artifact_id=WORKFLOW_ARTIFACT_ID,
+        description="Durable live web workflow identity.",
+        location="workflow:python-org-search",
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="workflow identity",
+    ):
+        _ensure_workflow_identity(
+            transitions,
+            WIKIPEDIA_WORKFLOW,
+        )
+
+
+def test_live_worker_mismatched_persisted_workflow_fails_closed(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_GOAL
+    )
+    state.artifacts[
+        WORKFLOW_ARTIFACT_ID
+    ] = ArtifactRecord(
+        artifact_id=WORKFLOW_ARTIFACT_ID,
+        description="Durable live web workflow identity.",
+        location="workflow:python-org-search",
+    )
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="workflow identity",
+    ):
+        _run_worker_with_fake_environment(
+            monkeypatch,
+            state,
+            environment,
+        )
+
+    assert environment.open_count == 0
+    assert environment.type_count == 0
+    assert environment.click_count == 0
 
 
 def test_live_completion_waits_for_result_subgoal() -> None:
@@ -846,6 +1267,258 @@ def test_live_worker_runs_continuously_without_waiting_for_resume(
     )
 
 
+def test_wikipedia_worker_runs_through_shared_loop(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_GOAL
+    )
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+    )
+
+    _run_worker_with_fake_environment(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert environment.open_count == 1
+    assert environment.type_count == 1
+    assert environment.click_count == 1
+    assert (
+        state.subgoals[
+            WIKIPEDIA_WORKFLOW.query_subgoal_id
+        ].status
+        is SubgoalStatus.VERIFIED
+    )
+    assert (
+        state.subgoals[
+            WIKIPEDIA_WORKFLOW.result_subgoal_id
+        ].status
+        is SubgoalStatus.VERIFIED
+    )
+    effect = state.side_effects[
+        WIKIPEDIA_WORKFLOW.submit_side_effect_id
+    ]
+    assert (
+        effect.state
+        is SideEffectState.CONFIRMED
+    )
+    assert effect.action_key == (
+        WIKIPEDIA_WORKFLOW.submit_action_key
+    )
+    assert (
+        state.artifacts[
+            WORKFLOW_ARTIFACT_ID
+        ].location
+        == "workflow:wikipedia-search"
+    )
+
+
+@pytest.mark.parametrize(
+    "loop_status",
+    (
+        AgentLoopStatus.BLOCKED,
+        AgentLoopStatus.EXHAUSTED,
+    ),
+)
+def test_submission_loop_failure_accepts_fresh_result_postcondition(
+    monkeypatch,
+    loop_status: AgentLoopStatus,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_GOAL
+    )
+    environment = SubmitBookkeepingEnvironment(
+        capture_path=None,
+        mode="query",
+        spec=WIKIPEDIA_WORKFLOW,
+        submit_external_mode="results",
+        submit_loop_status=loop_status,
+    )
+
+    _run_worker_with_fake_environment(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert environment.click_count == 1
+    assert (
+        state.claims[
+            WIKIPEDIA_WORKFLOW.result_claim_id
+        ].status
+        is ClaimStatus.VERIFIED
+    )
+    assert (
+        state.side_effects[
+            WIKIPEDIA_WORKFLOW.submit_side_effect_id
+        ].state
+        is SideEffectState.CONFIRMED
+    )
+    assert (
+        state.status
+        is TaskStateStatus.COMPLETED
+    )
+
+
+def test_submission_loop_failure_still_fails_when_result_absent(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_GOAL
+    )
+    environment = SubmitBookkeepingEnvironment(
+        capture_path=None,
+        mode="query",
+        spec=WIKIPEDIA_WORKFLOW,
+        submit_external_mode="ambiguous",
+        submit_loop_status=AgentLoopStatus.BLOCKED,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "real-web search submission failed: "
+            "loop=blocked, state=failed, "
+            "completed_steps=0"
+        ),
+    ):
+        _run_worker_with_fake_environment(
+            monkeypatch,
+            state,
+            environment,
+        )
+
+    assert (
+        state.claims[
+            WIKIPEDIA_WORKFLOW.result_claim_id
+        ].status
+        is ClaimStatus.UNVERIFIED
+    )
+    assert (
+        state.side_effects[
+            WIKIPEDIA_WORKFLOW.submit_side_effect_id
+        ].state
+        is SideEffectState.UNKNOWN
+    )
+
+
+def test_submission_success_still_fails_when_result_absent(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_GOAL
+    )
+    environment = SubmitBookkeepingEnvironment(
+        capture_path=None,
+        mode="query",
+        spec=WIKIPEDIA_WORKFLOW,
+        submit_external_mode="ambiguous",
+        submit_loop_status=AgentLoopStatus.COMPLETED,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="did not resolve Results",
+    ):
+        _run_worker_with_fake_environment(
+            monkeypatch,
+            state,
+            environment,
+        )
+
+    assert (
+        state.side_effects[
+            WIKIPEDIA_WORKFLOW.submit_side_effect_id
+        ].state
+        is SideEffectState.UNKNOWN
+    )
+    assert (
+        state.status
+        is TaskStateStatus.RUNNING
+    )
+
+
+def test_wikipedia_query_accepts_fresh_external_postcondition_after_loop_failure(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_GOAL
+    )
+    environment = FailedTextInputBookkeepingEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        text_input_external_mode="query",
+    )
+
+    _run_worker_with_fake_environment(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert environment.type_count == 1
+    assert environment.click_count == 1
+    assert (
+        state.claims[
+            WIKIPEDIA_WORKFLOW.query_claim_id
+        ].status
+        is ClaimStatus.VERIFIED
+    )
+    assert (
+        state.subgoals[
+            WIKIPEDIA_WORKFLOW.query_subgoal_id
+        ].status
+        is SubgoalStatus.VERIFIED
+    )
+    assert (
+        state.status
+        is TaskStateStatus.COMPLETED
+    )
+
+
+def test_query_loop_failure_still_fails_without_fresh_external_postcondition(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_GOAL
+    )
+    environment = FailedTextInputBookkeepingEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        text_input_external_mode="empty",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "real-web query entry failed: "
+            "loop=exhausted, state=failed, "
+            "completed_steps=0"
+        ),
+    ):
+        _run_worker_with_fake_environment(
+            monkeypatch,
+            state,
+            environment,
+        )
+
+    assert environment.type_count == 1
+    assert environment.click_count == 0
+    assert (
+        state.claims[
+            WIKIPEDIA_WORKFLOW.query_claim_id
+        ].status
+        is ClaimStatus.UNVERIFIED
+    )
+
+
 def test_live_worker_resume_after_query_checkpoint_does_not_retype(
     monkeypatch,
 ) -> None:
@@ -919,6 +1592,80 @@ def test_live_worker_resume_after_query_checkpoint_does_not_retype(
         .status
         is ClaimStatus.VERIFIED
     )
+    assert (
+        state.status
+        is TaskStateStatus.COMPLETED
+    )
+
+
+def test_wikipedia_restart_after_query_checkpoint_avoids_retyping(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_GOAL,
+        task_id="wiki-query-checkpoint",
+        status=TaskStateStatus.PAUSED,
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+    _ensure_workflow_identity(
+        transitions,
+        WIKIPEDIA_WORKFLOW,
+    )
+    _ensure_live_task_structure(
+        transitions,
+        WIKIPEDIA_WORKFLOW,
+    )
+    query_evidence = transitions.add_evidence(
+        EvidenceRecord(
+            summary="Search field contains computer use agent.",
+            source="test",
+            kind=EvidenceKind.VERIFICATION,
+        )
+    )
+    transitions.verify_claim(
+        WIKIPEDIA_WORKFLOW.query_claim_id,
+        (query_evidence.evidence_id,),
+    )
+    transitions.verify_subgoal(
+        WIKIPEDIA_WORKFLOW.query_subgoal_id
+    )
+    transitions.add_artifact(
+        ArtifactRecord(
+            artifact_id=(
+                WIKIPEDIA_WORKFLOW.workspace_artifact_id
+            ),
+            description=(
+                WIKIPEDIA_WORKFLOW.workspace_description
+            ),
+            location=(
+                BROWSER_WINDOW_MARKER_PREFIX
+                + state.task_id
+            ),
+        )
+    )
+
+    prepare_state_for_resume(
+        state
+    )
+
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="query",
+        spec=WIKIPEDIA_WORKFLOW,
+    )
+
+    _run_worker_with_fake_environment(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert environment.open_count == 0
+    assert environment.activate_count == 1
+    assert environment.type_count == 0
+    assert environment.click_count == 1
     assert (
         state.status
         is TaskStateStatus.COMPLETED
@@ -1036,6 +1783,101 @@ def test_live_worker_resume_after_go_click_reconciles_results_without_click(
     assert (
         decisions[-1].final_decision_type
         == "COMPLETE"
+    )
+
+
+def test_wikipedia_restart_after_submit_avoids_duplicate_submit(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_GOAL,
+        task_id="wiki-after-submit",
+        status=TaskStateStatus.PAUSED,
+    )
+    transitions = TaskStateTransitions(
+        state
+    )
+    _ensure_workflow_identity(
+        transitions,
+        WIKIPEDIA_WORKFLOW,
+    )
+    _ensure_live_task_structure(
+        transitions,
+        WIKIPEDIA_WORKFLOW,
+    )
+    query_evidence = transitions.add_evidence(
+        EvidenceRecord(
+            summary="Search field contains computer use agent.",
+            source="test",
+            kind=EvidenceKind.VERIFICATION,
+        )
+    )
+    transitions.verify_claim(
+        WIKIPEDIA_WORKFLOW.query_claim_id,
+        (query_evidence.evidence_id,),
+    )
+    transitions.verify_subgoal(
+        WIKIPEDIA_WORKFLOW.query_subgoal_id
+    )
+    transitions.add_side_effect(
+        SideEffectRecord(
+            side_effect_id=(
+                WIKIPEDIA_WORKFLOW.submit_side_effect_id
+            ),
+            description=(
+                WIKIPEDIA_WORKFLOW.submit_description
+            ),
+            state=SideEffectState.EXECUTED,
+            idempotent=True,
+            action_key=(
+                WIKIPEDIA_WORKFLOW.submit_action_key
+            ),
+        )
+    )
+    transitions.add_artifact(
+        ArtifactRecord(
+            artifact_id=(
+                WIKIPEDIA_WORKFLOW.workspace_artifact_id
+            ),
+            description=(
+                WIKIPEDIA_WORKFLOW.workspace_description
+            ),
+            location=(
+                BROWSER_WINDOW_MARKER_PREFIX
+                + state.task_id
+            ),
+        )
+    )
+
+    prepare_state_for_resume(
+        state
+    )
+
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="results",
+        spec=WIKIPEDIA_WORKFLOW,
+    )
+
+    _run_worker_with_fake_environment(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert environment.open_count == 0
+    assert environment.activate_count == 1
+    assert environment.type_count == 0
+    assert environment.click_count == 0
+    assert (
+        state.side_effects[
+            WIKIPEDIA_WORKFLOW.submit_side_effect_id
+        ].state
+        is SideEffectState.CONFIRMED
+    )
+    assert (
+        state.status
+        is TaskStateStatus.COMPLETED
     )
 
 
@@ -1332,3 +2174,206 @@ def test_search_field_wrong_semantic_value_does_not_pass() -> None:
         )
         is None
     )
+
+
+def test_query_condition_field_value_accepts_current_python_field() -> None:
+    result = _query_condition_satisfied(
+        _observation(
+            (
+                _element(
+                    text="Search This Site",
+                    value=SEARCH_QUERY,
+                ),
+                _button("GO"),
+            )
+        ),
+        PYTHON_WORKFLOW,
+    )
+
+    assert result is not None
+    assert "search field contains 'typing'" in result.summary
+
+
+def test_wikipedia_query_condition_accepts_autocomplete_visible_ui() -> None:
+    result = _query_condition_satisfied(
+        _observation(
+            (
+                _element(
+                    text="Address and search bar",
+                    value=(
+                        "en.wikipedia.org/wiki/"
+                        "Main_Page"
+                    ),
+                    bounding_box=BoundingBox(
+                        x=0,
+                        y=0,
+                        width=400,
+                        height=24,
+                    ),
+                ),
+                _element(
+                    text=(
+                        "Search for pages containing "
+                        "computer use agent"
+                    ),
+                    value=(
+                        "Search for pages containing "
+                        "computer use agent"
+                    ),
+                    element_type="link",
+                    bounding_box=BoundingBox(
+                        x=90,
+                        y=42,
+                        width=330,
+                        height=20,
+                    ),
+                ),
+                _button(
+                    "Search",
+                    bounding_box=BoundingBox(
+                        x=430,
+                        y=10,
+                        width=70,
+                        height=24,
+                    ),
+                ),
+            )
+        ),
+        WIKIPEDIA_WORKFLOW,
+    )
+
+    assert result is not None
+    assert (
+        "visibly confirms 'computer use agent'"
+        in result.summary
+    )
+
+
+def test_wikipedia_query_condition_accepts_closed_autocomplete_query_text() -> None:
+    result = _query_condition_satisfied(
+        _observation(
+            (
+                _element(
+                    text="computer use agent",
+                    value="computer use agent",
+                    element_type="text",
+                    bounding_box=BoundingBox(
+                        x=120,
+                        y=12,
+                        width=210,
+                        height=18,
+                    ),
+                ),
+                _button(
+                    "Search",
+                    bounding_box=BoundingBox(
+                        x=430,
+                        y=10,
+                        width=70,
+                        height=24,
+                    ),
+                ),
+            )
+        ),
+        WIKIPEDIA_WORKFLOW,
+    )
+
+    assert result is not None
+
+
+def test_wikipedia_query_condition_rejects_body_text_far_from_search() -> None:
+    result = _query_condition_satisfied(
+        _observation(
+            (
+                _element(
+                    text="computer use agent",
+                    value="computer use agent",
+                    element_type="text",
+                    bounding_box=BoundingBox(
+                        x=120,
+                        y=260,
+                        width=210,
+                        height=18,
+                    ),
+                ),
+                _button(
+                    "Search",
+                    bounding_box=BoundingBox(
+                        x=430,
+                        y=10,
+                        width=70,
+                        height=24,
+                    ),
+                ),
+            )
+        ),
+        WIKIPEDIA_WORKFLOW,
+    )
+
+    assert result is None
+
+
+def test_wikipedia_query_condition_rejects_when_submit_missing() -> None:
+    result = _query_condition_satisfied(
+        _observation(
+            (
+                _element(
+                    text="computer use agent",
+                    value="computer use agent",
+                    element_type="text",
+                    bounding_box=BoundingBox(
+                        x=120,
+                        y=12,
+                        width=210,
+                        height=18,
+                    ),
+                ),
+            )
+        ),
+        WIKIPEDIA_WORKFLOW,
+    )
+
+    assert result is None
+
+
+def test_wikipedia_query_condition_rejects_ambiguous_near_matches() -> None:
+    result = _query_condition_satisfied(
+        _observation(
+            (
+                _element(
+                    text="computer use agent",
+                    value="computer use agent",
+                    element_type="text",
+                    bounding_box=BoundingBox(
+                        x=120,
+                        y=12,
+                        width=210,
+                        height=18,
+                    ),
+                ),
+                _element(
+                    text="computer use agent",
+                    value="computer use agent",
+                    element_type="text",
+                    bounding_box=BoundingBox(
+                        x=120,
+                        y=44,
+                        width=210,
+                        height=18,
+                    ),
+                ),
+                _button(
+                    "Search",
+                    bounding_box=BoundingBox(
+                        x=430,
+                        y=10,
+                        width=70,
+                        height=24,
+                    ),
+                ),
+            )
+        ),
+        WIKIPEDIA_WORKFLOW,
+    )
+
+    assert result is None

@@ -9,6 +9,7 @@ from computer_agent.runtime import (
     RuntimeEvent,
     RuntimeEventBus,
     RuntimeStatus,
+    RuntimeStopRequested,
     RuntimeTask,
     RuntimeWorker,
     TaskRuntime,
@@ -18,6 +19,7 @@ from computer_agent.reasoning import (
 )
 from computer_agent.task import (
     TaskState,
+    TaskStateStatus,
     TaskStateSnapshot,
     TaskStateStore,
     prepare_state_for_resume,
@@ -266,7 +268,7 @@ class WorkspaceController:
             self._semantic_worker_factory
             is not None
         ):
-            worker = (
+            semantic_worker = (
                 self._semantic_worker_factory(
                     task_state,
                     lambda: self._publish_task_state(
@@ -274,6 +276,10 @@ class WorkspaceController:
                     ),
                     self._publish_adaptive_decision,
                 )
+            )
+            worker = self._wrap_semantic_worker(
+                semantic_worker,
+                task_state,
             )
         else:
             assert self._worker_factory is not None
@@ -305,6 +311,34 @@ class WorkspaceController:
         thread.start()
 
         return task
+
+    def _wrap_semantic_worker(
+        self,
+        worker: RuntimeWorker,
+        task_state: TaskState,
+    ) -> RuntimeWorker:
+        def wrapped(
+            task: RuntimeTask,
+            control,
+            progress,
+        ) -> None:
+            try:
+                worker(
+                    task,
+                    control,
+                    progress,
+                )
+            except RuntimeStopRequested:
+                raise
+            except Exception:
+                task_state.status = TaskStateStatus.FAILED
+                task_state.touch()
+                self._publish_task_state(
+                    task_state
+                )
+                raise
+
+        return wrapped
 
     def latest_resumable_task_id(
         self,

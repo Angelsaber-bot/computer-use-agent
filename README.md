@@ -357,8 +357,24 @@ Final Phase 06.05 validation completed with 1849 passing tests, no broken Python
 
 Experiment 06.07.01 removes the artificial process boundary from the live python.org worker. A durable checkpoint now persists recoverable state without changing the task to `WAITING_USER` or requiring `Resume Last Task` during a normal uninterrupted run.
 
-The production worker now follows a narrow reconciliation loop: ensure or reacquire the task-owned Chrome workspace, freshly observe browser state, reconcile whether the query condition is already satisfied or needs verified text input, checkpoint while remaining `RUNNING`, reconcile whether Results are already visible or GO still needs execution, confirm the submission side effect from fresh Results evidence, and complete only after the semantic completion gate opens.
+The production worker now follows a narrow reconciliation loop: ensure or reacquire the task-owned Chrome workspace, freshly observe browser state, reconcile whether the query condition is already satisfied or needs verified text input, checkpoint while remaining `RUNNING`, reconcile whether Results are already visible or GO still needs execution, confirm the submission side effect from fresh Results evidence, and complete only after the semantic completion gate opens. Query verification is workflow-configurable: python.org keeps strict readable field-value verification, while Wikipedia verifies fresh visible search UI text spatially associated with the configured Search control because live Chrome/macOS Accessibility exposes only Chrome's address bar as `AXTextField` after typing.
 
 Recovery is derived from persisted `TaskState`, artifacts, side-effect records, and current browser observation rather than Start-vs-Resume branching. In the crash window where GO was clicked before Results evidence was checkpointed, restart recovery reacquires the exact browser workspace, observes Results, does not click GO again, creates fresh Results evidence, confirms the submission side effect, verifies the result subgoal, and completes.
 
 The deterministic headless Experiment 06.07.01 demonstrates uninterrupted execution, restart after the query checkpoint without retyping, and restart after GO before Results checkpoint without clicking again. It does not claim live Chrome acceptance; that remains a manual validation step.
+
+#### Experiment 06.07.02: Configurable Durable Web Workflow
+
+Experiment 06.07.02 extracts the live durable web search constants into a small immutable workflow specification. The shared reconciliation loop now uses the selected spec for the start URL, expected app, query text, semantic search field, submit target, result target, claim/subgoal IDs, and side-effect journal IDs/action keys.
+
+The existing python.org task remains supported with its stable IDs, and Wikipedia is added as a second deterministic workflow for `Search Wikipedia for computer use agent.` Workflow routing is still explicit string matching, not LLM selection. The persisted `live-web-workflow` artifact records `workflow:<workflow_id>` and restart fails closed if that identity does not match the resolved goal.
+
+Query verification is spec-driven. python.org keeps field-value verification of the configured text field, while Wikipedia uses visible-search-UI verification because Chrome/macOS Accessibility exposes the page search evidence as visible text/link elements near the `Search` button rather than as the active `AXTextField`. Result verification is also spec-driven; live Wikipedia diagnostics showed duplicate `Search results` text and heading elements, so the Wikipedia result target is the `heading` role.
+
+Submission reconciliation now prefers a fresh external postcondition over internal AgentLoop bookkeeping: after the submit action returns, the worker observes Chrome and accepts completion if the configured result target is freshly visible, even when the loop reports `BLOCKED` or `FAILED`. If the result target is not visible, the side effect remains unresolved/unknown and the AgentLoop failure remains the diagnostic when applicable.
+
+Workspace resume keeps exact marker-window ownership while using the workflow URL prefix for the working tab. Wikipedia can resume from both `https://en.wikipedia.org/wiki/Main_Page` and the post-submit `/w/index.php?...Special:Search` results URL; wrong-domain and ambiguous working tabs fail closed.
+
+The deterministic headless Experiment 06.07.02 proves python.org uninterrupted execution, Wikipedia uninterrupted execution, Wikipedia restart after query checkpoint without retyping, Wikipedia restart after submit before result checkpoint without duplicate submit, and workflow identity mismatch failure. Live validation also passed for Wikipedia uninterrupted execution, Wikipedia query-checkpoint crash/resume, Wikipedia submit-execution crash/resume, and a normal python.org regression path.
+
+Semantic worker failures now mark and publish `TaskState.status = FAILED` before the runtime reports `FAILED`. Intentional `os._exit` crash injection still does not persist a semantic failure state because the process terminates abruptly by design.

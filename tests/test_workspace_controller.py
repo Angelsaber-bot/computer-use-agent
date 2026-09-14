@@ -264,6 +264,77 @@ def test_workspace_controller_persists_semantic_state(
     )
 
 
+def test_workspace_controller_marks_semantic_state_failed_on_worker_error(
+    tmp_path,
+) -> None:
+    from computer_agent.task import (
+        TaskStateStatus,
+        TaskStateStore,
+    )
+
+    store = TaskStateStore(
+        tmp_path
+    )
+    snapshots = []
+
+    def semantic_factory(
+        state,
+        publish_state,
+        publish_decision,
+    ):
+        def worker(
+            task,
+            control,
+            progress,
+        ) -> None:
+            state.status = TaskStateStatus.RUNNING
+            state.touch()
+            publish_state()
+            raise RuntimeError(
+                "semantic worker failed"
+            )
+
+        return worker
+
+    controller = WorkspaceController(
+        semantic_worker_factory=(
+            semantic_factory
+        ),
+        event_listener=lambda event: None,
+        task_store=store,
+        task_state_listener=snapshots.append,
+    )
+
+    task = controller.start(
+        "Fail semantic workspace task"
+    )
+
+    assert controller.wait(
+        timeout=1.0
+    )
+    assert task.status is RuntimeStatus.FAILED
+
+    state = controller.task_state
+
+    assert state is not None
+    assert (
+        state.status
+        is TaskStateStatus.FAILED
+    )
+    assert (
+        snapshots[-1].status
+        == TaskStateStatus.FAILED.value
+    )
+
+    restored = store.load(
+        task.task_id
+    )
+    assert (
+        restored.status
+        is TaskStateStatus.FAILED
+    )
+
+
 def test_workspace_controller_restores_semantic_task(
     tmp_path,
 ) -> None:
