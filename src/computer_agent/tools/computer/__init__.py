@@ -16,6 +16,7 @@ from computer_agent.tools.computer.clipboard import (
 from computer_agent.tools.computer.keyboard import (
     HotkeyTool,
     PressKeyTool,
+    ReleaseModifierKeysTool,
     TypeTextTool,
 )
 from computer_agent.tools.computer.mouse import (
@@ -41,6 +42,7 @@ def create_computer_tools(
         ClickMouseTool(controller),
         ScrollTool(controller),
         TypeTextTool(controller),
+        ReleaseModifierKeysTool(controller),
         PressKeyTool(controller),
         HotkeyTool(controller),
         CopyToClipboardTool(controller),
@@ -67,6 +69,7 @@ __all__ = [
     "PasteTextTool",
     "PressKeyTool",
     "ReadFromClipboardTool",
+    "ReleaseModifierKeysTool",
     "ScrollTool",
     "TypeTextTool",
     "create_computer_tools",

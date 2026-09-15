@@ -192,6 +192,15 @@ def _text_input_observation(
     )
 
 
+def _verified_text_input_observations(value: str):
+    return [
+        _text_input_observation(value=None, second=0),
+        _text_input_observation(value=None, second=1),
+        _text_input_observation(value="", second=2),
+        _text_input_observation(value=value, second=3),
+    ]
+
+
 def _target(text: str = TARGET_TEXT) -> TargetSpec:
     return TargetSpec(
         text=text,
@@ -2883,10 +2892,7 @@ def test_insert_text_unverified_postcondition_is_exhausted_without_retry(
 
 def test_web_text_input_verified_completes_and_records_controller_actions():
     step = _web_text_step(input_text="hello web")
-    observations = [
-        _text_input_observation(value=None, second=0),
-        _text_input_observation(value="hello web", second=1),
-    ]
+    observations = _verified_text_input_observations("hello web")
     executor = RecordingExecutor()
 
     result = _agent_loop(
@@ -2903,10 +2909,14 @@ def test_web_text_input_verified_completes_and_records_controller_actions():
     assert result.completed_plan_steps == 1
     assert result.state.status is AgentStatus.SUCCEEDED
     assert [record.action.tool_name for record in result.state.steps] == [
+        "read_from_clipboard",
+        "release_modifier_keys",
         "click_mouse",
-        "type_text",
+        "hotkey",
+        "press_key",
+        "paste_text",
     ]
-    assert result.state.steps[1].action.arguments == {"text": "hello web"}
+    assert result.state.steps[-1].action.arguments == {"text": "hello web"}
     assert executor.calls == [
         record.action for record in result.state.steps
     ]
@@ -2935,6 +2945,21 @@ def test_web_text_input_verified_completes_and_records_controller_actions():
             TextInputStatus.NEEDS_ACTION,
             AgentLoopStatus.BLOCKED,
             "needs_action",
+        ),
+        (
+            TextInputStatus.FOCUS_FAILED,
+            AgentLoopStatus.BLOCKED,
+            "focus_failed",
+        ),
+        (
+            TextInputStatus.VERIFICATION_UNAVAILABLE,
+            AgentLoopStatus.BLOCKED,
+            "verification_unavailable",
+        ),
+        (
+            TextInputStatus.RETRY_EXHAUSTED,
+            AgentLoopStatus.EXHAUSTED,
+            "retry_exhausted",
         ),
     ],
 )
@@ -3004,10 +3029,7 @@ def test_mixed_web_text_input_then_click_plan_preserves_execution_order():
         action_text="Submit",
         verification_text="Results",
     )
-    observations = [
-        _text_input_observation(value=None, second=0),
-        _text_input_observation(value="query", second=1),
-    ]
+    observations = _verified_text_input_observations("query")
     final_click_action = _action(x=50, y=60)
     executor = RecordingExecutor()
 
@@ -3031,11 +3053,15 @@ def test_mixed_web_text_input_then_click_plan_preserves_execution_order():
     assert result.status is AgentLoopStatus.COMPLETED
     assert result.completed_plan_steps == 2
     assert [record.action.tool_name for record in result.state.steps] == [
+        "read_from_clipboard",
+        "release_modifier_keys",
         "click_mouse",
-        "type_text",
+        "hotkey",
+        "press_key",
+        "paste_text",
         "click_mouse",
     ]
-    assert result.state.steps[2].action is final_click_action
+    assert result.state.steps[-1].action is final_click_action
     assert executor.calls == [
         record.action for record in result.state.steps
     ]
@@ -3043,10 +3069,7 @@ def test_mixed_web_text_input_then_click_plan_preserves_execution_order():
 
 def test_text_input_controller_actions_are_not_double_recorded():
     step = _web_text_step(input_text="once")
-    observations = [
-        _text_input_observation(value=None, second=0),
-        _text_input_observation(value="once", second=1),
-    ]
+    observations = _verified_text_input_observations("once")
 
     result = _agent_loop(
         perception_engine=SequencePerception(()),
@@ -3059,14 +3082,53 @@ def test_text_input_controller_actions_are_not_double_recorded():
     ).run(_plan(step))
 
     assert result.status is AgentLoopStatus.COMPLETED
-    assert [record.step_number for record in result.state.steps] == [1, 2]
+    assert [record.step_number for record in result.state.steps] == [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+    ]
     assert [record.action.tool_name for record in result.state.steps].count(
         "click_mouse"
     ) == 1
     assert [record.action.tool_name for record in result.state.steps].count(
-        "type_text"
+        "paste_text"
     ) == 1
-    assert len({record.action.action_id for record in result.state.steps}) == 2
+    assert len({record.action.action_id for record in result.state.steps}) == 6
+
+
+def test_web_text_input_retry_exhaustion_propagates_to_agent_loop():
+    step = _web_text_step(input_text="Alan Turing")
+    observations = [
+        _text_input_observation(value=None, second=0),
+        _text_input_observation(value=None, second=1),
+        _text_input_observation(value="", second=2),
+        _text_input_observation(value="Al安Turin", second=3),
+        _text_input_observation(value="Al安Turin", second=4),
+        _text_input_observation(value="Al安Turin", second=5),
+        _text_input_observation(value="", second=6),
+        _text_input_observation(value="Al安Turin", second=7),
+    ]
+
+    result = _agent_loop(
+        perception_engine=SequencePerception(()),
+        grounder=RecordingGrounder(()),
+        action_grounder=RecordingActionGrounder(()),
+        executor=RecordingExecutor(),
+        verifier=RecordingVerifier(()),
+        recovery=RecordingRecovery(()),
+        web_text_input_observer=lambda: observations.pop(0),
+    ).run(_plan(step))
+
+    assert result.status is AgentLoopStatus.EXHAUSTED
+    assert "retry_exhausted" in result.reason
+    assert result.state.status is AgentStatus.FAILED
+    assert [record.action.tool_name for record in result.state.steps].count(
+        "paste_text"
+    ) == 2
+    assert observations == []
 
 
 def test_full_mixed_plan_completes_with_expected_action_order():

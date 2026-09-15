@@ -8,6 +8,7 @@ from computer_agent.tools.base import (
 from computer_agent.tools.computer.keyboard import (
     HotkeyTool,
     PressKeyTool,
+    ReleaseModifierKeysTool,
     TypeTextTool,
 )
 
@@ -53,6 +54,19 @@ def test_press_key_tool():
 
     assert output == {
         "key": "enter",
+    }
+
+
+def test_release_modifier_keys_tool():
+    controller = Mock()
+    tool = ReleaseModifierKeysTool(controller)
+
+    arguments = tool.validate_arguments({})
+    output = tool.run(**arguments)
+
+    controller.release_modifier_keys.assert_called_once_with(None)
+    assert output == {
+        "keys": None,
     }
 
 
@@ -114,3 +128,33 @@ def test_hotkey_rejects_invalid_key_list(keys):
         tool.run(**arguments)
 
     controller.hotkey.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [
+        [],
+        ["command", 5],
+        ["command", "   "],
+    ],
+)
+def test_release_modifier_keys_rejects_invalid_key_list(keys):
+    controller = Mock()
+    tool = ReleaseModifierKeysTool(controller)
+
+    arguments = tool.validate_arguments(
+        {
+            "keys": keys,
+        }
+    )
+
+    with pytest.raises(
+        ToolValidationError,
+        match=(
+            "argument 'keys' must be "
+            "a non-empty list of strings or None"
+        ),
+    ):
+        tool.run(**arguments)
+
+    controller.release_modifier_keys.assert_not_called()

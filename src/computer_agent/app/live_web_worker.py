@@ -203,6 +203,49 @@ class FollowupLinkReadinessResult:
     already_at_destination: bool = False
 
 
+@dataclass(slots=True)
+class LiveWebPerformanceMetrics:
+    """Non-durable latest-run performance counters."""
+
+    observation_count: int = 0
+    ax_tree_traversal_count: int = 0
+    ocr_call_count: int = 0
+    action_count: int = 0
+    readiness_reobservation_count: int = 0
+    accessibility_seconds: float = 0.0
+    ocr_seconds: float = 0.0
+    stabilization_seconds: float = 0.0
+    observation_seconds: float = 0.0
+
+
+class _LiveWebPerceptionSnapshotObserver:
+    """Expose live-web AX-first observations as PerceptionSnapshots."""
+
+    def __init__(
+        self,
+        environment: "LiveWebEnvironment",
+    ) -> None:
+        self._environment = environment
+
+    def observe(self):
+        return self._environment.observe().snapshot
+
+
+class _LiveWebTextInputObservationObserver:
+    """Preserve OCR-on text input observations for live typing."""
+
+    def __init__(
+        self,
+        environment: "LiveWebEnvironment",
+    ) -> None:
+        self._environment = environment
+
+    def __call__(self):
+        return self._environment.observe(
+            include_ocr=True,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class DurableWebSearchSpec:
     """Configuration for one bounded durable search workflow."""
@@ -643,6 +686,7 @@ class LiveWebEnvironment:
             )
         )
         self.last_observation_timings: dict[str, float] = {}
+        self.performance_metrics = LiveWebPerformanceMetrics()
 
     def frontmost_application_name(self) -> str | None:
         """Return the current frontmost app without a full perception pass."""
@@ -653,7 +697,12 @@ class LiveWebEnvironment:
 
     def observe(
         self,
+        *,
+        include_ocr: bool = True,
     ) -> TextInputObservation:
+        if type(include_ocr) is not bool:
+            raise ValueError("include_ocr must be a boolean")
+
         observe_started = time.perf_counter()
         timings: dict[str, float] = {}
         stabilization_started = time.perf_counter()
@@ -671,45 +720,134 @@ class LiveWebEnvironment:
 
         perception_started = time.perf_counter()
         snapshot = (
-            self.perception_engine.observe()
+            self.perception_engine.observe(
+                include_ocr=include_ocr,
+            )
         )
         timings["perception_engine"] = (
             time.perf_counter() - perception_started
         )
         timings.update(snapshot.timings)
 
-        application_started = time.perf_counter()
-        application_name = (
-            self.accessibility
-            .read_frontmost_application_name()
-        )
-        timings["frontmost_application"] = (
-            time.perf_counter() - application_started
-        )
+        accessibility_snapshot = snapshot.accessibility_snapshot
+        if accessibility_snapshot is not None:
+            application_name = accessibility_snapshot.application_name
+            viewport = accessibility_snapshot.viewport
+            semantic_elements = accessibility_snapshot.semantic_elements
+            timings["frontmost_application"] = 0.0
+            timings["viewport"] = 0.0
+            timings["accessibility_semantic_elements"] = 0.0
+        else:
+            application_started = time.perf_counter()
+            application_name = (
+                self.accessibility
+                .read_frontmost_application_name()
+            )
+            timings["frontmost_application"] = (
+                time.perf_counter() - application_started
+            )
 
-        viewport_started = time.perf_counter()
-        viewport = (
-            self.accessibility
-            .read_frontmost_viewport()
-        )
-        timings["viewport"] = time.perf_counter() - viewport_started
+            viewport_started = time.perf_counter()
+            viewport = (
+                self.accessibility
+                .read_frontmost_viewport()
+            )
+            timings["viewport"] = time.perf_counter() - viewport_started
 
-        semantic_started = time.perf_counter()
-        semantic_elements = tuple(
-            self.accessibility
-            .read_frontmost_semantic_elements()
-        )
-        timings["accessibility_semantic_elements"] = (
-            time.perf_counter() - semantic_started
-        )
+            semantic_started = time.perf_counter()
+            semantic_elements = tuple(
+                self.accessibility
+                .read_frontmost_semantic_elements()
+            )
+            timings["accessibility_semantic_elements"] = (
+                time.perf_counter() - semantic_started
+            )
         timings["observe_total"] = time.perf_counter() - observe_started
         self.last_observation_timings = timings
+        self._record_observation_metrics(timings)
 
         return TextInputObservation(
             application_name=application_name,
             viewport=viewport,
             snapshot=snapshot,
             semantic_elements=semantic_elements,
+        )
+
+    def upgrade_observation_with_ocr(
+        self,
+        observation: TextInputObservation,
+    ) -> TextInputObservation:
+        """Run OCR on an existing same-capture observation if needed."""
+        if observation.snapshot.timings.get("ocr_executed") == 1.0:
+            return observation
+
+        snapshot = self.perception_engine.with_ocr(
+            observation.snapshot
+        )
+        timings = dict(self.last_observation_timings)
+        timings.update(snapshot.timings)
+        timings["observe_total"] = timings.get(
+            "observe_total",
+            0.0,
+        ) + snapshot.timings.get("ocr_upgrade_total", 0.0)
+        self.last_observation_timings = timings
+        self._record_ocr_upgrade_metrics(snapshot.timings)
+        return TextInputObservation(
+            application_name=observation.application_name,
+            viewport=observation.viewport,
+            snapshot=snapshot,
+            semantic_elements=observation.semantic_elements,
+        )
+
+    def record_action_plan(
+        self,
+        plan: StructuredPlan,
+    ) -> None:
+        self.performance_metrics.action_count += len(
+            plan.steps
+        )
+
+    def record_readiness_reobservation(self) -> None:
+        self.performance_metrics.readiness_reobservation_count += 1
+
+    def _record_observation_metrics(
+        self,
+        timings: dict[str, float],
+    ) -> None:
+        metrics = self.performance_metrics
+        metrics.observation_count += 1
+        metrics.ax_tree_traversal_count += int(
+            _timing_value(
+                timings,
+                "accessibility_tree_traversals",
+            )
+            or 0.0
+        )
+        metrics.ocr_call_count += int(
+            _timing_value(timings, "ocr_executed") or 0.0
+        )
+        metrics.accessibility_seconds += _accessibility_timing_total(
+            timings
+        )
+        metrics.ocr_seconds += _timing_value(timings, "ocr") or 0.0
+        metrics.stabilization_seconds += (
+            _timing_value(timings, "stabilization") or 0.0
+        )
+        metrics.observation_seconds += (
+            _timing_value(timings, "observe_total") or 0.0
+        )
+
+    def _record_ocr_upgrade_metrics(
+        self,
+        timings: dict[str, float],
+    ) -> None:
+        metrics = self.performance_metrics
+        metrics.ocr_call_count += int(
+            _timing_value(timings, "ocr_executed") or 0.0
+        )
+        metrics.ocr_seconds += _timing_value(timings, "ocr") or 0.0
+        metrics.observation_seconds += (
+            _timing_value(timings, "ocr_upgrade_total") or 0.0
         )
 
     def open_task_site(
@@ -2086,6 +2224,18 @@ def _reconcile_durable_step(
         resolved_task,
         state=state,
     )
+    if postcondition is None:
+        observation = _upgrade_observation_with_ocr_if_needed(
+            environment,
+            observation,
+            progress=progress,
+        )
+        postcondition = _step_postcondition_satisfied(
+            step,
+            observation,
+            resolved_task,
+            state=state,
+        )
     if postcondition is not None:
         evidence = _verify_step_from_postcondition(
             transitions,
@@ -2224,6 +2374,18 @@ def _reconcile_durable_step(
         resolved_task,
         state=state,
     )
+    if postcondition is None:
+        refreshed = _upgrade_observation_with_ocr_if_needed(
+            environment,
+            refreshed,
+            progress=progress,
+        )
+        postcondition = _step_postcondition_satisfied(
+            step,
+            refreshed,
+            resolved_task,
+            state=state,
+        )
     for _ in range(2):
         if postcondition is not None:
             break
@@ -2246,6 +2408,18 @@ def _reconcile_durable_step(
             resolved_task,
             state=state,
         )
+        if postcondition is None:
+            refreshed = _upgrade_observation_with_ocr_if_needed(
+                environment,
+                refreshed,
+                progress=progress,
+            )
+            postcondition = _step_postcondition_satisfied(
+                step,
+                refreshed,
+                resolved_task,
+                state=state,
+            )
     if postcondition is None:
         _mark_step_outcome_unknown(
             transitions,
@@ -2476,6 +2650,20 @@ def _ensure_step_precondition_with_fresh_reads(
             step,
         ):
             return current
+        if step.kind is not DurableStepKind.OPEN_LINK:
+            upgraded = _upgrade_observation_with_ocr_if_needed(
+                environment,
+                current,
+                progress=progress,
+            )
+            if upgraded is not current:
+                current = upgraded
+                if _step_precondition_satisfied(
+                    current,
+                    resolved_task,
+                    step,
+                ):
+                    return current
         if attempt == 2:
             break
 
@@ -2484,6 +2672,13 @@ def _ensure_step_precondition_with_fresh_reads(
             f"durable step {step.step_id!r}; "
             "re-observing before any action."
         )
+        recorder = getattr(
+            environment,
+            "record_readiness_reobservation",
+            None,
+        )
+        if callable(recorder):
+            recorder()
         current = _ensure_expected_workspace_observation(
             state=state,
             environment=environment,
@@ -2910,6 +3105,35 @@ def _ensure_expected_workspace_observation(
     return current
 
 
+def _upgrade_observation_with_ocr_if_needed(
+    environment: object,
+    observation: TextInputObservation,
+    *,
+    progress: Callable[[str], None],
+) -> TextInputObservation:
+    if observation.snapshot.timings.get("ocr_executed") == 1.0:
+        return observation
+
+    upgrader = getattr(
+        environment,
+        "upgrade_observation_with_ocr",
+        None,
+    )
+    if not callable(upgrader):
+        return observation
+
+    progress(
+        "AX-only browser evidence was insufficient; "
+        "running OCR on the same fresh capture."
+    )
+    upgraded = upgrader(observation)
+    _publish_observation_timing(
+        environment,
+        progress,
+    )
+    return upgraded
+
+
 def _publish_observation_timing(
     environment: object,
     progress: Callable[[str], None],
@@ -2926,28 +3150,53 @@ def _publish_observation_timing(
     if observe_total is None:
         return
 
-    accessibility = sum(
-        value
-        for key, value in timings.items()
-        if key.startswith("accessibility")
-        or key in (
-            "frontmost_application",
-            "viewport",
-        )
-    )
+    accessibility = _accessibility_timing_total(timings)
     ocr = _timing_value(timings, "ocr") or 0.0
     fusion = _timing_value(timings, "fusion") or 0.0
     stabilization = _timing_value(timings, "stabilization") or 0.0
+    ax_traversals = int(
+        _timing_value(timings, "accessibility_tree_traversals") or 0.0
+    )
+    ocr_executed = (
+        (_timing_value(timings, "ocr_executed") or 0.0)
+        >= 1.0
+    )
     known = accessibility + ocr + fusion + stabilization
     other = max(0.0, observe_total - known)
     progress(
         "Timing: Last observation "
         f"{observe_total:.2f} s "
         f"(Accessibility {accessibility:.2f} s, "
+        f"AX traversals {ax_traversals}, "
         f"OCR {ocr:.2f} s, Fusion {fusion:.2f} s, "
         f"Stabilization {stabilization:.2f} s, "
+        f"OCR {'ran' if ocr_executed else 'skipped'}, "
         f"Other {other:.2f} s)."
     )
+
+
+def _accessibility_timing_total(timings: dict) -> float:
+    total = 0.0
+    for key, value in timings.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if (
+            key.startswith("accessibility")
+            and key
+            not in (
+                "accessibility_tree_traversals",
+                "accessibility_nodes",
+                "accessibility_truncated",
+                "accessibility_maximum_depth_reached",
+                "accessibility_maximum_nodes_reached",
+                "accessibility_maximum_controls_reached",
+            )
+        ) or key in (
+            "frontmost_application",
+            "viewport",
+        ):
+            total += float(value)
+    return total
 
 
 def _timing_value(
@@ -3550,6 +3799,14 @@ def _execute_agent_plan(
     environment: LiveWebEnvironment,
     plan: StructuredPlan,
 ):
+    recorder = getattr(
+        environment,
+        "record_action_plan",
+        None,
+    )
+    if callable(recorder):
+        recorder(plan)
+
     fake_executor = getattr(
         environment,
         "execute_plan",
@@ -3565,13 +3822,17 @@ def _execute_agent_plan(
 
     return AgentLoop(
         perception_engine=(
-            environment.perception_engine
+            _LiveWebPerceptionSnapshotObserver(
+                environment
+            )
         ),
         executor=(
             environment.executor
         ),
         web_text_input_observer=(
-            environment.observe
+            _LiveWebTextInputObservationObserver(
+                environment
+            )
         ),
     ).run(
         plan
@@ -4080,6 +4341,13 @@ def _ground_followup_link_with_readiness(
             "Requested link is not exposed yet; "
             "refreshing browser state."
         )
+        recorder = getattr(
+            environment,
+            "record_readiness_reobservation",
+            None,
+        )
+        if callable(recorder):
+            recorder()
         current = _ensure_expected_workspace_observation(
             state=state,
             environment=environment,

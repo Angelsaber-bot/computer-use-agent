@@ -21,6 +21,7 @@ EXPECTED_TOOL_NAMES = {
     "paste_text",
     "press_key",
     "read_from_clipboard",
+    "release_modifier_keys",
     "scroll",
     "type_text",
 }
@@ -31,7 +32,7 @@ def test_factory_creates_all_computer_tools():
 
     tools = create_computer_tools(controller)
 
-    assert len(tools) == 14
+    assert len(tools) == 15
 
     assert {
         tool.name
@@ -69,7 +70,7 @@ def test_registered_computer_tool_executes_action(
 
     result = executor.execute(action)
 
-    assert len(registry) == 14
+    assert len(registry) == 15
     assert result.success is True
 
     assert result.output == {

@@ -1,7 +1,7 @@
 import subprocess
 
 import pytest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from computer_agent.control.computer_controller import ComputerController
 
@@ -52,6 +52,17 @@ def test_press_key(mock_press):
     controller.press_key("enter")
 
     mock_press.assert_called_once_with("enter")
+
+
+@patch("computer_agent.control.computer_controller.pyautogui.keyUp")
+def test_release_modifier_keys(mock_key_up):
+    controller = ComputerController()
+    controller.release_modifier_keys(("command", "shift"))
+
+    assert mock_key_up.call_args_list == [
+        call("command"),
+        call("shift"),
+    ]
 
 
 @patch("computer_agent.control.computer_controller.pyautogui.hotkey")

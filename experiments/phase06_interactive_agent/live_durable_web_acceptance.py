@@ -244,11 +244,23 @@ def _run_child(args: argparse.Namespace) -> int:
         args
     )
 
+    captured_environment = None
+
+    def environment_factory(*, capture_path):
+        nonlocal captured_environment
+        from computer_agent.app.live_web_worker import LiveWebEnvironment
+
+        captured_environment = LiveWebEnvironment(
+            capture_path=capture_path
+        )
+        return captured_environment
+
     worker = create_live_web_worker(
         state,
         publish_state,
         decisions.append,
         durable_planner=planner,
+        environment_factory=environment_factory,
     )
 
     worker(
@@ -270,6 +282,11 @@ def _run_child(args: argparse.Namespace) -> int:
         _state_line(state),
         flush=True,
     )
+    if captured_environment is not None:
+        print(
+            _performance_line(captured_environment),
+            flush=True,
+        )
     if (
         args.count_planner_calls
         and planner is not None
@@ -373,6 +390,31 @@ def _state_line(state: TaskState) -> str:
     return (
         f"task={state.task_id} status={state.status.value} "
         f"subgoals=[{subgoals}] side_effects=[{effects}]"
+    )
+
+
+def _performance_line(environment) -> str:
+    metrics = getattr(
+        environment,
+        "performance_metrics",
+        None,
+    )
+    if metrics is None:
+        return "performance unavailable"
+
+    return (
+        "performance "
+        f"observations={metrics.observation_count} "
+        f"ax_traversals={metrics.ax_tree_traversal_count} "
+        f"ocr_calls={metrics.ocr_call_count} "
+        f"actions={metrics.action_count} "
+        "readiness_reobservations="
+        f"{metrics.readiness_reobservation_count} "
+        f"ax_seconds={metrics.accessibility_seconds:.2f} "
+        f"ocr_seconds={metrics.ocr_seconds:.2f} "
+        "stabilization_seconds="
+        f"{metrics.stabilization_seconds:.2f} "
+        f"observation_seconds={metrics.observation_seconds:.2f}"
     )
 
 

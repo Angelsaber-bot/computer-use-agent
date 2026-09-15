@@ -27,6 +27,8 @@ from computer_agent.app.live_web_worker import (
     FOLLOWUP_TARGET_ARTIFACT_ID,
     GO_BUTTON,
     LiveCrashPoint,
+    LiveWebEnvironment,
+    LiveWebPerformanceMetrics,
     PYTHON_WORKFLOW,
     QUERY_ARTIFACT_ID,
     QueryVerificationMode,
@@ -51,6 +53,7 @@ from computer_agent.app.live_web_worker import (
     _ground_followup_link,
     _maybe_inject_process_crash,
     _ensure_live_task_structure,
+    _upgrade_observation_with_ocr_if_needed,
     _search_field_with_expected_value,
     _query_condition_satisfied,
     _results_visible,
@@ -67,10 +70,12 @@ from computer_agent.app.live_web_worker import (
     resolve_live_web_workflow,
 )
 from computer_agent.perception import (
+    AccessibilitySnapshot,
     BoundingBox,
     PerceptionSnapshot,
     ScreenFrame,
     UIElement,
+    Viewport,
 )
 from computer_agent.planning import (
     PlanOperation,
@@ -214,6 +219,85 @@ def _observation(
         ),
         semantic_elements=(),
     )
+
+
+class FakeLivePerceptionEngine:
+    def __init__(
+        self,
+        snapshots: tuple[PerceptionSnapshot, ...],
+    ) -> None:
+        self.snapshots = list(snapshots)
+        self.include_ocr_values: list[bool] = []
+        self.upgraded_snapshots: list[PerceptionSnapshot] = []
+
+    def observe(
+        self,
+        *,
+        include_ocr: bool = True,
+    ) -> PerceptionSnapshot:
+        self.include_ocr_values.append(include_ocr)
+        return self.snapshots.pop(0)
+
+    def with_ocr(
+        self,
+        snapshot: PerceptionSnapshot,
+    ) -> PerceptionSnapshot:
+        self.upgraded_snapshots.append(snapshot)
+        ocr_element = _element(
+            text="Results",
+            value=None,
+            element_type="text",
+            source="ocr",
+        )
+        return PerceptionSnapshot(
+            frame=snapshot.frame,
+            image=snapshot.image,
+            accessibility_elements=snapshot.accessibility_elements,
+            ocr_elements=(ocr_element,),
+            fused_elements=(
+                *snapshot.accessibility_elements,
+                ocr_element,
+            ),
+            warnings=snapshot.warnings,
+            timings={
+                **snapshot.timings,
+                "ocr": 0.25,
+                "ocr_executed": 1.0,
+                "fusion": snapshot.timings.get("fusion", 0.0) + 0.05,
+                "ocr_upgrade_total": 0.30,
+            },
+            accessibility_snapshot=snapshot.accessibility_snapshot,
+        )
+
+
+class FailingSeparateAccessibilityReads:
+    def read_frontmost_application_name(self):
+        raise AssertionError("separate app read should not run")
+
+    def read_frontmost_viewport(self):
+        raise AssertionError("separate viewport read should not run")
+
+    def read_frontmost_semantic_elements(self):
+        raise AssertionError("separate semantic read should not run")
+
+
+def _live_environment_shell(
+    tmp_path,
+    snapshot: PerceptionSnapshot,
+) -> tuple[LiveWebEnvironment, FakeLivePerceptionEngine]:
+    environment = object.__new__(
+        LiveWebEnvironment
+    )
+    environment.capture_path = tmp_path / "capture.png"
+    environment.stabilization_seconds = 0.0
+    engine = FakeLivePerceptionEngine(
+        (snapshot,)
+    )
+    environment.perception_engine = engine
+    environment.accessibility = FailingSeparateAccessibilityReads()
+    environment.last_observation_timings = {}
+    environment.performance_metrics = LiveWebPerformanceMetrics()
+    return environment, engine
 
 
 class FakeControl:
@@ -1429,6 +1513,171 @@ def test_live_worker_reobserves_post_action_without_reclicking(
     assert any(
         "post-action state is not verified yet" in message
         for message in progress_messages
+    )
+
+
+def test_live_environment_observe_uses_single_consolidated_ax_snapshot(
+    tmp_path,
+) -> None:
+    search = _element(
+        text="Search Wikipedia",
+        value="Alan Turing",
+        element_type="text_field",
+        source="accessibility",
+    )
+    semantic = AccessibilitySnapshot(
+        application_name="Google Chrome",
+        controls=(search,),
+        semantic_elements=(),
+        web_areas=(
+            BoundingBox(
+                x=0,
+                y=100,
+                width=1200,
+                height=700,
+            ),
+        ),
+        viewport=Viewport(
+            BoundingBox(
+                x=0,
+                y=100,
+                width=1200,
+                height=700,
+            )
+        ),
+        focused_window_bounds=BoundingBox(
+            x=0,
+            y=0,
+            width=1200,
+            height=800,
+        ),
+        traversed_nodes=42,
+        tree_traversals=1,
+    )
+    snapshot = PerceptionSnapshot(
+        frame=ScreenFrame(
+            image_path=tmp_path / "screen.png",
+            pixel_width=10,
+            pixel_height=10,
+            screen_width=10,
+            screen_height=10,
+        ),
+        image=Image.new("RGB", (10, 10)),
+        accessibility_elements=(search,),
+        ocr_elements=(),
+        fused_elements=(search,),
+        warnings=(),
+        timings={
+            "accessibility_controls": 0.4,
+            "accessibility_tree_traversals": 1.0,
+            "accessibility_nodes": 42.0,
+            "ocr": 0.0,
+            "ocr_executed": 0.0,
+            "fusion": 0.02,
+            "perception_total": 0.5,
+        },
+        accessibility_snapshot=semantic,
+    )
+    environment, engine = _live_environment_shell(
+        tmp_path,
+        snapshot,
+    )
+
+    observation = environment.observe(
+        include_ocr=False,
+    )
+
+    assert engine.include_ocr_values == [False]
+    assert observation.application_name == "Google Chrome"
+    assert observation.viewport == semantic.viewport
+    assert observation.snapshot.fused_elements == (search,)
+    assert (
+        environment.performance_metrics.observation_count
+        == 1
+    )
+    assert (
+        environment.performance_metrics.ax_tree_traversal_count
+        == 1
+    )
+    assert (
+        environment.performance_metrics.ocr_call_count
+        == 0
+    )
+
+
+def test_live_environment_same_capture_ocr_upgrade_preserves_fresh_snapshot(
+    tmp_path,
+) -> None:
+    ax_element = _element(
+        text="Search This Site",
+        value="asyncio",
+        element_type="text_field",
+        source="accessibility",
+    )
+    ax_snapshot = AccessibilitySnapshot(
+        application_name="Google Chrome",
+        controls=(ax_element,),
+        semantic_elements=(),
+        web_areas=(),
+        viewport=None,
+        focused_window_bounds=None,
+        traversed_nodes=3,
+        tree_traversals=1,
+    )
+    snapshot = PerceptionSnapshot(
+        frame=ScreenFrame(
+            image_path=tmp_path / "screen.png",
+            pixel_width=10,
+            pixel_height=10,
+            screen_width=10,
+            screen_height=10,
+        ),
+        image=Image.new("RGB", (10, 10)),
+        accessibility_elements=(ax_element,),
+        ocr_elements=(),
+        fused_elements=(ax_element,),
+        warnings=(),
+        timings={
+            "accessibility_controls": 0.1,
+            "accessibility_tree_traversals": 1.0,
+            "ocr": 0.0,
+            "ocr_executed": 0.0,
+            "fusion": 0.01,
+            "observe_total": 0.2,
+        },
+        accessibility_snapshot=ax_snapshot,
+    )
+    environment, engine = _live_environment_shell(
+        tmp_path,
+        snapshot,
+    )
+    observation = environment.observe()
+    messages: list[str] = []
+
+    upgraded = _upgrade_observation_with_ocr_if_needed(
+        environment,
+        observation,
+        progress=messages.append,
+    )
+
+    assert engine.upgraded_snapshots == [
+        observation.snapshot,
+    ]
+    assert upgraded is not observation
+    assert upgraded.snapshot.frame is observation.snapshot.frame
+    assert upgraded.snapshot.image is observation.snapshot.image
+    assert upgraded.snapshot.ocr_elements
+    assert (
+        environment.performance_metrics.observation_count
+        == 1
+    )
+    assert (
+        environment.performance_metrics.ocr_call_count
+        == 1
+    )
+    assert any(
+        "AX-only browser evidence was insufficient" in message
+        for message in messages
     )
 
 

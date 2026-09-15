@@ -1101,7 +1101,11 @@ class AgentLoop:
         if result.status is TextInputStatus.VERIFIED:
             return None
 
-        if result.status is TextInputStatus.BLOCKED:
+        if result.status in (
+            TextInputStatus.BLOCKED,
+            TextInputStatus.FOCUS_FAILED,
+            TextInputStatus.VERIFICATION_UNAVAILABLE,
+        ):
             return _terminal_failure(
                 plan=plan,
                 state=state,
@@ -1113,6 +1117,10 @@ class AgentLoop:
         if result.status in (
             TextInputStatus.ACTION_FAILED,
             TextInputStatus.VERIFICATION_FAILED,
+            TextInputStatus.CLEAR_FAILED,
+            TextInputStatus.INPUT_MISMATCH,
+            TextInputStatus.TARGET_DISAPPEARED,
+            TextInputStatus.RETRY_EXHAUSTED,
         ):
             return _terminal_failure(
                 plan=plan,

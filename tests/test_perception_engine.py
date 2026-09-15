@@ -6,11 +6,13 @@ from PIL import Image
 
 import computer_agent.perception.engine as engine_module
 from computer_agent.perception import (
+    AccessibilitySnapshot,
     BoundingBox,
     PerceptionEngine,
     PerceptionSnapshot,
     ScreenFrame,
     UIElement,
+    Viewport,
 )
 
 
@@ -122,6 +124,26 @@ class FakeAccessibilityReader:
             raise self.error
 
         return self.responses.pop(0)
+
+
+class FakeConsolidatedAccessibilityReader(FakeAccessibilityReader):
+    def __init__(
+        self,
+        snapshots=(),
+        *,
+        error=None,
+    ):
+        super().__init__((), error=error)
+        self.snapshots = list(snapshots)
+        self.snapshot_calls = 0
+
+    def read_frontmost_snapshot(self):
+        self.snapshot_calls += 1
+
+        if self.error is not None:
+            raise self.error
+
+        return self.snapshots.pop(0)
 
 
 class FakeOCR:
@@ -311,6 +333,179 @@ def test_observation_timings_use_deterministic_clock(tmp_path):
     assert snapshot.timings["ocr"] == 1.0
     assert snapshot.timings["fusion"] == 1.0
     assert snapshot.timings["perception_total"] == 11.0
+
+
+def test_consolidated_accessibility_snapshot_supplies_controls_and_metrics(
+    tmp_path,
+):
+    image_path = tmp_path / "screen.png"
+    _save_image(image_path)
+    frame = _frame(image_path)
+    accessibility_element = _element(
+        "Search",
+        element_type="button",
+        source="accessibility",
+    )
+    ax_snapshot = AccessibilitySnapshot(
+        application_name="Google Chrome",
+        controls=(accessibility_element,),
+        semantic_elements=(),
+        web_areas=(),
+        viewport=None,
+        focused_window_bounds=None,
+        traversed_nodes=17,
+        tree_traversals=1,
+    )
+    accessibility_reader = FakeConsolidatedAccessibilityReader(
+        [ax_snapshot]
+    )
+    fusion = RecordingFusion(
+        [
+            [
+                accessibility_element,
+            ]
+        ]
+    )
+
+    snapshot = _engine(
+        screen_capture=FakeScreenCapture([frame]),
+        accessibility_reader=accessibility_reader,
+        ocr=FakeOCR([[]]),
+        fusion=fusion,
+        capture_path=tmp_path / "capture.png",
+    ).observe()
+
+    assert accessibility_reader.snapshot_calls == 1
+    assert accessibility_reader.calls == 0
+    assert snapshot.accessibility_snapshot is ax_snapshot
+    assert snapshot.accessibility_elements == (accessibility_element,)
+    assert snapshot.timings["accessibility_tree_traversals"] == 1.0
+    assert snapshot.timings["accessibility_nodes"] == 17.0
+
+
+def test_default_observation_still_runs_ocr(tmp_path):
+    image_path = tmp_path / "screen.png"
+    _save_image(image_path)
+    frame = _frame(image_path)
+    ocr = FakeOCR([[]])
+
+    snapshot = _engine(
+        screen_capture=FakeScreenCapture([frame]),
+        accessibility_reader=FakeAccessibilityReader([[]]),
+        ocr=ocr,
+        fusion=RecordingFusion([[]]),
+        capture_path=tmp_path / "capture.png",
+    ).observe()
+
+    assert ocr.calls == 1
+    assert snapshot.timings["ocr_executed"] == 1.0
+
+
+def test_observation_can_skip_ocr_explicitly(tmp_path):
+    image_path = tmp_path / "screen.png"
+    _save_image(image_path)
+    frame = _frame(image_path)
+    accessibility_element = _element(
+        "AX only",
+        source="accessibility",
+    )
+    ocr = FakeOCR(
+        [
+            [
+                _element("SHOULD_NOT_RUN"),
+            ]
+        ]
+    )
+    fusion = RecordingFusion(
+        [
+            [
+                accessibility_element,
+            ]
+        ]
+    )
+
+    snapshot = _engine(
+        screen_capture=FakeScreenCapture([frame]),
+        accessibility_reader=FakeAccessibilityReader([[accessibility_element]]),
+        ocr=ocr,
+        fusion=fusion,
+        capture_path=tmp_path / "capture.png",
+    ).observe(include_ocr=False)
+
+    assert ocr.calls == 0
+    assert snapshot.ocr_elements == ()
+    assert snapshot.fused_elements == (accessibility_element,)
+    assert fusion.calls == [
+        (
+            (accessibility_element,),
+            (),
+        )
+    ]
+    assert snapshot.timings["ocr"] == 0.0
+    assert snapshot.timings["ocr_executed"] == 0.0
+
+
+def test_same_capture_ocr_upgrade_reuses_image_and_accessibility(tmp_path):
+    image_path = tmp_path / "screen.png"
+    _save_image(image_path)
+    frame = _frame(image_path)
+    accessibility_element = _element(
+        "AX",
+        source="accessibility",
+    )
+    pixel_ocr_element = _element(
+        "Visual",
+        x=20,
+        y=10,
+        width=40,
+        height=20,
+    )
+    logical_ocr_element = _element(
+        "Visual",
+        x=10,
+        y=5,
+        width=20,
+        height=10,
+    )
+    fused_element = _element(
+        "Visual",
+        source="ocr",
+    )
+    screen_capture = FakeScreenCapture([frame])
+    accessibility_reader = FakeAccessibilityReader([[accessibility_element]])
+    ocr = FakeOCR([[pixel_ocr_element]])
+    fusion = RecordingFusion(
+        [
+            [
+                accessibility_element,
+            ],
+            [
+                fused_element,
+            ],
+        ]
+    )
+    engine = _engine(
+        screen_capture=screen_capture,
+        accessibility_reader=accessibility_reader,
+        ocr=ocr,
+        fusion=fusion,
+        capture_path=tmp_path / "capture.png",
+    )
+
+    ax_only = engine.observe(include_ocr=False)
+    upgraded = engine.with_ocr(ax_only)
+
+    assert screen_capture.calls == [tmp_path / "capture.png"]
+    assert accessibility_reader.calls == 1
+    assert ocr.calls == 1
+    assert ocr.images[0] is ax_only.image
+    assert upgraded.frame is ax_only.frame
+    assert upgraded.image is ax_only.image
+    assert upgraded.accessibility_elements == (accessibility_element,)
+    assert upgraded.ocr_elements == (logical_ocr_element,)
+    assert upgraded.fused_elements == (fused_element,)
+    assert upgraded.timings["ocr_executed"] == 1.0
+    assert "ocr_upgrade_total" in upgraded.timings
 
 
 def test_accessibility_only_partial_success_when_ocr_fails(tmp_path):

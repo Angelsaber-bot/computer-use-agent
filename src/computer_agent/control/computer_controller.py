@@ -27,6 +27,21 @@ class ComputerController:
         pyautogui.write(text, interval=interval)
 
     @staticmethod
+    def release_modifier_keys(keys=None):
+        if keys is None:
+            keys = (
+                "command",
+                "ctrl",
+                "alt",
+                "option",
+                "shift",
+                "fn",
+            )
+
+        for key in keys:
+            pyautogui.keyUp(key)
+
+    @staticmethod
     def press_key(key):
         pyautogui.press(key)
 

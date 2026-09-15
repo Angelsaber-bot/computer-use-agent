@@ -38,6 +38,41 @@ class TypeTextTool(ComputerTool):
         }
 
 
+class ReleaseModifierKeysTool(ComputerTool):
+    """Release common keyboard modifier keys."""
+
+    name = "release_modifier_keys"
+    description = "Release common modifier keys before keyboard input."
+
+    parameters = {
+        "keys": ToolParameter(
+            list,
+            "Optional modifier keys to release.",
+            required=False,
+            default=None,
+        ),
+    }
+
+    def run(self, **arguments):
+        keys = arguments["keys"]
+        if keys is not None and (
+            not keys
+            or not all(
+                isinstance(key, str) and key.strip()
+                for key in keys
+            )
+        ):
+            raise ToolValidationError(
+                "argument 'keys' must be a non-empty list of strings or None"
+            )
+
+        self.controller.release_modifier_keys(keys)
+
+        return {
+            "keys": keys,
+        }
+
+
 class PressKeyTool(ComputerTool):
     """Press one keyboard key."""
 

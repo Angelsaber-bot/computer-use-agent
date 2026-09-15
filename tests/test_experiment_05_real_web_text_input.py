@@ -79,6 +79,35 @@ class FakeExecutor:
         )
 
 
+class ClipboardPreservingFakeExecutor(FakeExecutor):
+    def __init__(
+        self,
+        *,
+        clipboard_text="USER_CLIPBOARD",
+    ):
+        super().__init__()
+        self.clipboard_text = clipboard_text
+
+    def execute(self, action):
+        self.actions.append(action)
+        if action.tool_name == "read_from_clipboard":
+            return ToolResult(
+                action_id=action.action_id,
+                tool_name=action.tool_name,
+                success=True,
+                output={"text": self.clipboard_text},
+                error=None,
+            )
+
+        return ToolResult(
+            action_id=action.action_id,
+            tool_name=action.tool_name,
+            success=True,
+            output=dict(action.arguments),
+            error=None,
+        )
+
+
 class FakeExecutorBuilder:
     def __init__(
         self,
@@ -259,6 +288,39 @@ def _action_names(executor):
     ]
 
 
+def _verified_entry_observations(
+    *,
+    input_text="accessibility test",
+    initial_value="",
+):
+    return [
+        _observation(
+            elements=(
+                _field(value=initial_value),
+            ),
+            seconds=0,
+        ),
+        _observation(
+            elements=(
+                _field(value=initial_value),
+            ),
+            seconds=1,
+        ),
+        _observation(
+            elements=(
+                _field(value=""),
+            ),
+            seconds=2,
+        ),
+        _observation(
+            elements=(
+                _field(value=input_text),
+            ),
+            seconds=3,
+        ),
+    ]
+
+
 def test_dry_run_unique_visible_text_field_needs_action_with_zero_actions(
     tmp_path,
 ):
@@ -388,20 +450,7 @@ def test_execute_focuses_types_and_verifies_changed_value(tmp_path):
         tmp_path,
         execute=True,
         executor=executor,
-        observations=[
-            _observation(
-                elements=(
-                    _field(value=""),
-                ),
-                seconds=0,
-            ),
-            _observation(
-                elements=(
-                    _field(value="accessibility test"),
-                ),
-                seconds=1,
-            ),
-        ],
+        observations=_verified_entry_observations(),
     )
 
     assert result.status is experiment.TextInputStatus.VERIFIED
@@ -410,13 +459,133 @@ def test_execute_focuses_types_and_verifies_changed_value(tmp_path):
         action.tool_name
         for action in executor.actions
     ] == [
+        "read_from_clipboard",
+        "release_modifier_keys",
         "click_mouse",
-        "type_text",
+        "hotkey",
+        "press_key",
+        "paste_text",
     ]
-    assert executor.actions[1].arguments == {
+    assert executor.actions[-1].arguments == {
         "text": "accessibility test",
     }
     assert sleeps == [0.25]
+
+
+def test_execute_retries_after_mismatch_from_fresh_grounding(tmp_path):
+    executor = FakeExecutor()
+
+    result, _builder, _executor_builder, _executor, sleeps = _run(
+        tmp_path,
+        execute=True,
+        executor=executor,
+        input_text="Alan Turing",
+        observations=[
+            _observation(
+                elements=(
+                    _field(value="", x=100),
+                ),
+                seconds=0,
+            ),
+            _observation(
+                elements=(
+                    _field(value="", x=100),
+                ),
+                seconds=1,
+            ),
+            _observation(
+                elements=(
+                    _field(value="", x=100),
+                ),
+                seconds=2,
+            ),
+            _observation(
+                elements=(
+                    _field(value="Al安Turin", x=100),
+                ),
+                seconds=3,
+            ),
+            _observation(
+                elements=(
+                    _field(value="Al安Turin", x=250),
+                ),
+                seconds=4,
+            ),
+            _observation(
+                elements=(
+                    _field(value="Al安Turin", x=250),
+                ),
+                seconds=5,
+            ),
+            _observation(
+                elements=(
+                    _field(value="", x=250),
+                ),
+                seconds=6,
+            ),
+            _observation(
+                elements=(
+                    _field(value="Alan Turing", x=250),
+                ),
+                seconds=7,
+            ),
+        ],
+    )
+
+    assert result.status is experiment.TextInputStatus.VERIFIED
+    assert [
+        attempt.status
+        for attempt in result.attempts
+    ] == [
+        experiment.TextInputStatus.INPUT_MISMATCH,
+        experiment.TextInputStatus.VERIFIED,
+    ]
+    assert result.attempts[0].observed_text == "Al安Turin"
+    click_actions = [
+        action
+        for action in executor.actions
+        if action.tool_name == "click_mouse"
+    ]
+    assert [
+        action.arguments
+        for action in click_actions
+    ] == [
+        {"x": 190, "y": 515},
+        {"x": 340, "y": 515},
+    ]
+    assert [
+        action.arguments
+        for action in executor.actions
+        if action.tool_name == "paste_text"
+    ] == [
+        {"text": "Alan Turing"},
+        {"text": "Alan Turing"},
+    ]
+    assert sleeps == [0.25, 0.25]
+
+
+def test_execute_restores_clipboard_after_verified_paste(tmp_path):
+    executor = ClipboardPreservingFakeExecutor(
+        clipboard_text="USER_CLIPBOARD_VALUE"
+    )
+
+    result, _builder, _executor_builder, _executor, _sleeps = _run(
+        tmp_path,
+        execute=True,
+        executor=executor,
+        observations=_verified_entry_observations(
+            input_text="Alan Turing",
+        ),
+        input_text="Alan Turing",
+    )
+
+    assert result.status is experiment.TextInputStatus.VERIFIED
+    assert result.clipboard_restore_result is not None
+    assert result.clipboard_restore_result.success is True
+    assert executor.actions[-1].tool_name == "copy_to_clipboard"
+    assert executor.actions[-1].arguments == {
+        "text": "USER_CLIPBOARD_VALUE",
+    }
 
 
 def test_execute_missing_target_may_invoke_viewport_search(tmp_path):
@@ -454,12 +623,30 @@ def test_execute_missing_target_may_invoke_viewport_search(tmp_path):
             ),
             _observation(
                 elements=(
+                    _field(value=""),
+                ),
+                semantics=(
+                    _semantic_field(value=""),
+                ),
+                seconds=4,
+            ),
+            _observation(
+                elements=(
+                    _field(value=""),
+                ),
+                semantics=(
+                    _semantic_field(value=""),
+                ),
+                seconds=5,
+            ),
+            _observation(
+                elements=(
                     _field(value="accessibility test"),
                 ),
                 semantics=(
                     _semantic_field(value="accessibility test"),
                 ),
-                seconds=4,
+                seconds=6,
             ),
         ],
     )
@@ -467,10 +654,14 @@ def test_execute_missing_target_may_invoke_viewport_search(tmp_path):
     assert result.status is experiment.TextInputStatus.VERIFIED
     assert _action_names(executor) == [
         "scroll",
+        "read_from_clipboard",
+        "release_modifier_keys",
         "click_mouse",
-        "type_text",
+        "hotkey",
+        "press_key",
+        "paste_text",
     ]
-    assert builder.observer.calls == 5
+    assert builder.observer.calls == 7
     assert sleeps == [
         0.3,
         0.25,
@@ -521,12 +712,30 @@ def test_execute_outside_viewport_only_unsafe_target_may_search(
             ),
             _observation(
                 elements=(
+                    _field(value=""),
+                ),
+                semantics=(
+                    _semantic_field(value=""),
+                ),
+                seconds=4,
+            ),
+            _observation(
+                elements=(
+                    _field(value=""),
+                ),
+                semantics=(
+                    _semantic_field(value=""),
+                ),
+                seconds=5,
+            ),
+            _observation(
+                elements=(
                     _field(value="accessibility test"),
                 ),
                 semantics=(
                     _semantic_field(value="accessibility test"),
                 ),
-                seconds=4,
+                seconds=6,
             ),
         ],
     )
@@ -534,10 +743,14 @@ def test_execute_outside_viewport_only_unsafe_target_may_search(
     assert result.status is experiment.TextInputStatus.VERIFIED
     assert _action_names(executor) == [
         "scroll",
+        "read_from_clipboard",
+        "release_modifier_keys",
         "click_mouse",
-        "type_text",
+        "hotkey",
+        "press_key",
+        "paste_text",
     ]
-    assert builder.observer.calls == 5
+    assert builder.observer.calls == 7
     assert sleeps == [
         0.3,
         0.25,
@@ -648,25 +861,28 @@ def test_execute_snapshot_warnings_do_not_invoke_viewport_search(
     assert sleeps == []
 
 
-def test_execute_non_empty_field_does_not_invoke_viewport_search(
+def test_execute_non_empty_field_is_cleared_before_entry(
     tmp_path,
 ):
     result, builder, _executor_builder, executor, sleeps = _run(
         tmp_path,
         execute=True,
-        observations=[
-            _observation(
-                elements=(
-                    _field(value="already filled"),
-                ),
-            )
-        ],
+        observations=_verified_entry_observations(
+            initial_value="already filled",
+        ),
     )
 
-    assert result.status is experiment.TextInputStatus.BLOCKED
-    assert builder.observer.calls == 1
-    _assert_no_actions(executor)
-    assert sleeps == []
+    assert result.status is experiment.TextInputStatus.VERIFIED
+    assert builder.observer.calls == 4
+    assert _action_names(executor) == [
+        "read_from_clipboard",
+        "release_modifier_keys",
+        "click_mouse",
+        "hotkey",
+        "press_key",
+        "paste_text",
+    ]
+    assert sleeps == [0.25]
 
 
 def test_execute_focus_action_blocked_does_not_invoke_viewport_search(
@@ -745,17 +961,21 @@ def test_execute_click_failure_returns_action_failed(tmp_path):
         ],
     )
 
-    assert result.status is experiment.TextInputStatus.ACTION_FAILED
+    assert result.status is experiment.TextInputStatus.FOCUS_FAILED
     assert [
         action.tool_name
         for action in executor.actions
-    ] == ["click_mouse"]
+    ] == [
+        "read_from_clipboard",
+        "release_modifier_keys",
+        "click_mouse",
+    ]
     assert sleeps == []
 
 
-def test_execute_type_failure_returns_action_failed(tmp_path):
+def test_execute_paste_failure_returns_action_failed(tmp_path):
     executor = FakeExecutor(
-        fail_tool="type_text",
+        fail_tool="paste_text",
     )
 
     result, _builder, _executor_builder, _executor, sleeps = _run(
@@ -767,7 +987,17 @@ def test_execute_type_failure_returns_action_failed(tmp_path):
                 elements=(
                     _field(value=""),
                 ),
-            )
+            ),
+            _observation(
+                elements=(
+                    _field(value=""),
+                ),
+            ),
+            _observation(
+                elements=(
+                    _field(value=""),
+                ),
+            ),
         ],
     )
 
@@ -776,8 +1006,12 @@ def test_execute_type_failure_returns_action_failed(tmp_path):
         action.tool_name
         for action in executor.actions
     ] == [
+        "read_from_clipboard",
+        "release_modifier_keys",
         "click_mouse",
-        "type_text",
+        "hotkey",
+        "press_key",
+        "paste_text",
     ]
     assert sleeps == []
 
@@ -794,14 +1028,29 @@ def test_execute_post_action_field_missing_fails_verification(tmp_path):
                 seconds=0,
             ),
             _observation(
-                elements=(),
+                elements=(
+                    _field(value=""),
+                ),
                 seconds=1,
+            ),
+            _observation(
+                elements=(
+                    _field(value=""),
+                ),
+                seconds=2,
+            ),
+            _observation(
+                elements=(),
+                seconds=3,
             ),
         ],
     )
 
-    assert result.status is experiment.TextInputStatus.VERIFICATION_FAILED
-    assert len(executor.actions) == 2
+    assert result.status is experiment.TextInputStatus.BLOCKED
+    assert result.attempts[0].status is (
+        experiment.TextInputStatus.TARGET_DISAPPEARED
+    )
+    assert len(executor.actions) == 6
     assert sleeps == [0.25]
 
 
@@ -822,12 +1071,50 @@ def test_execute_post_action_value_unchanged_fails_verification(tmp_path):
                 ),
                 seconds=1,
             ),
+            _observation(
+                elements=(
+                    _field(value=""),
+                ),
+                seconds=2,
+            ),
+            _observation(
+                elements=(
+                    _field(value=""),
+                ),
+                seconds=3,
+            ),
+            _observation(
+                elements=(
+                    _field(value=""),
+                ),
+                seconds=4,
+            ),
+            _observation(
+                elements=(
+                    _field(value=""),
+                ),
+                seconds=5,
+            ),
+            _observation(
+                elements=(
+                    _field(value=""),
+                ),
+                seconds=6,
+            ),
         ],
     )
 
-    assert result.status is experiment.TextInputStatus.VERIFICATION_FAILED
-    assert len(executor.actions) == 2
-    assert sleeps == [0.25]
+    assert result.status is experiment.TextInputStatus.RETRY_EXHAUSTED
+    assert [
+        attempt.status
+        for attempt in result.attempts
+    ] == [
+        experiment.TextInputStatus.INPUT_MISMATCH,
+        experiment.TextInputStatus.INPUT_MISMATCH,
+    ]
+    assert _action_names(executor).count("paste_text") == 2
+    assert _action_names(executor).count("type_text") == 0
+    assert sleeps == [0.25, 0.25]
 
 
 def test_execute_post_action_ambiguous_field_blocks(tmp_path):
@@ -843,48 +1130,42 @@ def test_execute_post_action_ambiguous_field_blocks(tmp_path):
             ),
             _observation(
                 elements=(
+                    _field(value=""),
+                ),
+                seconds=1,
+            ),
+            _observation(
+                elements=(
+                    _field(value=""),
+                ),
+                seconds=2,
+            ),
+            _observation(
+                elements=(
                     _field(value="accessibility test", x=100),
                     _field(value="accessibility test", x=250),
                 ),
-                seconds=1,
+                seconds=3,
             ),
         ],
     )
 
     assert result.status is experiment.TextInputStatus.BLOCKED
-    assert len(executor.actions) == 2
+    assert len(executor.actions) == 6
     assert sleeps == [0.25]
 
 
-def test_execute_issues_no_enter_submit_navigation_or_clipboard_actions(
+def test_execute_issues_no_enter_submit_or_navigation_actions(
     tmp_path,
 ):
     result, _builder, _executor_builder, executor, _sleeps = _run(
         tmp_path,
         execute=True,
-        observations=[
-            _observation(
-                elements=(
-                    _field(value=""),
-                ),
-                seconds=0,
-            ),
-            _observation(
-                elements=(
-                    _field(value="accessibility test"),
-                ),
-                seconds=1,
-            ),
-        ],
+        observations=_verified_entry_observations(),
     )
 
     forbidden_tools = {
-        "press_key",
-        "hotkey",
         "open_url",
-        "copy_to_clipboard",
-        "paste_text",
-        "read_from_clipboard",
     }
 
     assert result.status is experiment.TextInputStatus.VERIFIED
@@ -892,4 +1173,11 @@ def test_execute_issues_no_enter_submit_navigation_or_clipboard_actions(
         action.tool_name
         for action in executor.actions
     } & forbidden_tools
-    assert len(executor.actions) == 2
+    assert _action_names(executor) == [
+        "read_from_clipboard",
+        "release_modifier_keys",
+        "click_mouse",
+        "hotkey",
+        "press_key",
+        "paste_text",
+    ]

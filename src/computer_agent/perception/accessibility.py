@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Any
 
 try:
@@ -47,6 +48,75 @@ _ROLE_MAP = {
 _APPKIT_STATE_REFRESH_SECONDS = 0.01
 
 
+@dataclass(frozen=True, slots=True)
+class AccessibilitySnapshot:
+    """One fresh bounded frontmost Accessibility observation."""
+
+    application_name: str | None
+    controls: tuple[UIElement, ...]
+    semantic_elements: tuple[SemanticAXElement, ...]
+    web_areas: tuple[BoundingBox, ...]
+    viewport: Viewport | None
+    focused_window_bounds: BoundingBox | None
+    traversed_nodes: int
+    tree_traversals: int
+    traversal_truncated: bool = False
+    maximum_depth_reached: bool = False
+    maximum_nodes_reached: bool = False
+    maximum_controls_reached: bool = False
+
+    def __post_init__(self) -> None:
+        if self.application_name is not None and not isinstance(
+            self.application_name,
+            str,
+        ):
+            raise ValueError("application_name must be a string or None")
+        object.__setattr__(self, "controls", tuple(self.controls))
+        object.__setattr__(
+            self,
+            "semantic_elements",
+            tuple(self.semantic_elements),
+        )
+        object.__setattr__(self, "web_areas", tuple(self.web_areas))
+        if self.viewport is not None and not isinstance(
+            self.viewport,
+            Viewport,
+        ):
+            raise ValueError("viewport must be a Viewport or None")
+        if self.focused_window_bounds is not None and not isinstance(
+            self.focused_window_bounds,
+            BoundingBox,
+        ):
+            raise ValueError(
+                "focused_window_bounds must be a BoundingBox or None"
+            )
+        for name in ("traversed_nodes", "tree_traversals"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"{name} must be an integer")
+            if value < 0:
+                raise ValueError(f"{name} must be non-negative")
+        for name in (
+            "traversal_truncated",
+            "maximum_depth_reached",
+            "maximum_nodes_reached",
+            "maximum_controls_reached",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
+
+
+@dataclass(slots=True)
+class _TraversalState:
+    controls: list[UIElement]
+    semantic_elements: list[SemanticAXElement]
+    web_areas: list[BoundingBox]
+    traversed_nodes: int = 0
+    maximum_depth_reached: bool = False
+    maximum_nodes_reached: bool = False
+    maximum_controls_reached: bool = False
+
+
 class MacOSAccessibility:
     """Read semantic controls from the focused macOS Accessibility window."""
 
@@ -54,6 +124,7 @@ class MacOSAccessibility:
         self,
         maximum_elements: int = 5000,
         maximum_depth: int = 30,
+        maximum_nodes: int = 50000,
     ) -> None:
         if (
             isinstance(maximum_elements, bool)
@@ -73,8 +144,18 @@ class MacOSAccessibility:
         if maximum_depth < 0:
             raise ValueError("maximum_depth must be non-negative")
 
+        if (
+            isinstance(maximum_nodes, bool)
+            or not isinstance(maximum_nodes, int)
+        ):
+            raise ValueError("maximum_nodes must be an integer")
+
+        if maximum_nodes <= 0:
+            raise ValueError("maximum_nodes must be positive")
+
         self.maximum_elements = maximum_elements
         self.maximum_depth = maximum_depth
+        self.maximum_nodes = maximum_nodes
 
     @staticmethod
     def is_available() -> bool:
@@ -96,6 +177,12 @@ class MacOSAccessibility:
 
     def read_frontmost_controls(self) -> list[UIElement]:
         """Return supported controls from the focused frontmost window."""
+        return list(
+            self.read_frontmost_snapshot().controls
+        )
+
+    def read_frontmost_snapshot(self) -> AccessibilitySnapshot:
+        """Return one bounded snapshot of frontmost Accessibility state."""
 
         if not self.is_available():
             raise RuntimeError(
@@ -107,9 +194,24 @@ class MacOSAccessibility:
                 "macOS Accessibility permission is not trusted"
             )
 
-        application = self._frontmost_application_element()
-        if application is None:
-            return []
+        workspace_application = self._frontmost_workspace_application()
+        application_name = _localized_application_name(
+            workspace_application
+        )
+        if workspace_application is None:
+            return AccessibilitySnapshot(
+                application_name=application_name,
+                controls=(),
+                semantic_elements=(),
+                web_areas=(),
+                viewport=None,
+                focused_window_bounds=None,
+                traversed_nodes=0,
+                tree_traversals=0,
+            )
+
+        pid = workspace_application.processIdentifier()
+        application = ApplicationServices.AXUIElementCreateApplication(pid)
 
         _copy_attribute(
             application,
@@ -121,22 +223,61 @@ class MacOSAccessibility:
             _ax_constant("kAXFocusedWindowAttribute"),
         )
         if focused_window is None:
-            return []
+            return AccessibilitySnapshot(
+                application_name=application_name,
+                controls=(),
+                semantic_elements=(),
+                web_areas=(),
+                viewport=None,
+                focused_window_bounds=None,
+                traversed_nodes=0,
+                tree_traversals=0,
+            )
 
         focused_element = _copy_attribute(
             application,
             _ax_constant("kAXFocusedUIElementAttribute"),
         )
 
-        controls: list[UIElement] = []
-        self._traverse(
+        traversal = _TraversalState(
+            controls=[],
+            semantic_elements=[],
+            web_areas=[],
+        )
+        focused_window_bounds = _bounding_box_from_element(
+            focused_window
+        )
+        self._traverse_snapshot(
             focused_window,
             depth=0,
-            controls=controls,
+            state=traversal,
             focused_element=focused_element,
         )
 
-        return controls
+        viewport = (
+            Viewport(bounds=traversal.web_areas[0])
+            if len(traversal.web_areas) == 1
+            else None
+        )
+
+        return AccessibilitySnapshot(
+            application_name=application_name,
+            controls=tuple(traversal.controls),
+            semantic_elements=tuple(traversal.semantic_elements),
+            web_areas=tuple(traversal.web_areas),
+            viewport=viewport,
+            focused_window_bounds=focused_window_bounds,
+            traversed_nodes=traversal.traversed_nodes,
+            tree_traversals=1,
+            traversal_truncated=(
+                traversal.maximum_depth_reached
+                or traversal.maximum_nodes_reached
+                or traversal.maximum_controls_reached
+            ),
+            maximum_depth_reached=traversal.maximum_depth_reached,
+            maximum_nodes_reached=traversal.maximum_nodes_reached,
+            maximum_controls_reached=traversal.maximum_controls_reached,
+        )
 
     def read_frontmost_application_name(self) -> str | None:
         """Return the localized frontmost application name when available."""
@@ -153,184 +294,116 @@ class MacOSAccessibility:
 
     def read_frontmost_window_bounds(self) -> BoundingBox | None:
         """Return the focused frontmost window bounds when available."""
-
-        if not self.is_available():
-            raise RuntimeError(
-                "macOS Accessibility frameworks are unavailable"
-            )
-
-        if not self.is_trusted():
-            raise RuntimeError(
-                "macOS Accessibility permission is not trusted"
-            )
-
-        application = self._frontmost_application_element()
-        if application is None:
-            return None
-
-        focused_window = _copy_attribute(
-            application,
-            _ax_constant("kAXFocusedWindowAttribute"),
-        )
-        if focused_window is None:
-            return None
-
-        return _bounding_box_from_element(focused_window)
+        return self.read_frontmost_snapshot().focused_window_bounds
 
     def read_frontmost_web_areas(self) -> list[BoundingBox]:
         """Return AXWebArea bounds from the focused frontmost window."""
-
-        if not self.is_available():
-            raise RuntimeError(
-                "macOS Accessibility frameworks are unavailable"
-            )
-
-        if not self.is_trusted():
-            raise RuntimeError(
-                "macOS Accessibility permission is not trusted"
-            )
-
-        application = self._frontmost_application_element()
-        if application is None:
-            return []
-
-        focused_window = _copy_attribute(
-            application,
-            _ax_constant("kAXFocusedWindowAttribute"),
+        return list(
+            self.read_frontmost_snapshot().web_areas
         )
-        if focused_window is None:
-            return []
-
-        web_areas: list[BoundingBox] = []
-        self._collect_web_areas(
-            focused_window,
-            depth=0,
-            web_areas=web_areas,
-        )
-        return web_areas
 
     def read_frontmost_viewport(self) -> Viewport | None:
         """Return the unique frontmost webpage viewport when available."""
-
-        web_areas = self.read_frontmost_web_areas()
-
-        if len(web_areas) != 1:
-            return None
-
-        return Viewport(bounds=web_areas[0])
+        return self.read_frontmost_snapshot().viewport
 
     def read_frontmost_semantic_elements(
         self,
     ) -> list[SemanticAXElement]:
         """Return supported Accessibility semantics with optional geometry."""
-
-        if not self.is_available():
-            raise RuntimeError(
-                "macOS Accessibility frameworks are unavailable"
-            )
-
-        if not self.is_trusted():
-            raise RuntimeError(
-                "macOS Accessibility permission is not trusted"
-            )
-
-        application = self._frontmost_application_element()
-        if application is None:
-            return []
-
-        focused_window = _copy_attribute(
-            application,
-            _ax_constant("kAXFocusedWindowAttribute"),
+        return list(
+            self.read_frontmost_snapshot().semantic_elements
         )
-        if focused_window is None:
-            return []
 
-        elements: list[SemanticAXElement] = []
-        self._collect_semantic_elements(
-            focused_window,
-            depth=0,
-            elements=elements,
-        )
-        return elements
-
-    def _collect_semantic_elements(
+    def _traverse_snapshot(
         self,
         element: Any,
         *,
         depth: int,
-        elements: list[SemanticAXElement],
+        state: _TraversalState,
+        focused_element: Any | None,
     ) -> None:
-        if depth > self.maximum_depth:
+        if state.traversed_nodes >= self.maximum_nodes:
+            state.maximum_nodes_reached = True
             return
+
+        state.traversed_nodes += 1
 
         role = _copy_attribute(
             element,
             _ax_constant("kAXRoleAttribute"),
         )
+        mapped_role = _ROLE_MAP.get(role)
+        bounds = None
 
-        if role in _ROLE_MAP:
-            mapped_role = _ROLE_MAP[role]
+        if mapped_role is not None:
+            bounds = _bounding_box_from_element(element)
+            text = _text_from_element(element, mapped_role)
+            value = _value_from_element(element, mapped_role)
 
-            text = _text_from_element(
-                element,
-                mapped_role,
-            )
-
-            elements.append(
+            state.semantic_elements.append(
                 SemanticAXElement(
                     role=role,
                     text=text,
-                    bounds=_bounding_box_from_element(element),
-                    value=_value_from_element(
-                        element,
-                        mapped_role,
-                    ),
+                    bounds=bounds,
+                    value=value,
                 )
             )
 
-        children = _copy_attribute(
-            element,
-            _ax_constant("kAXChildrenAttribute"),
-        )
+        if role == "AXWebArea":
+            bounds = bounds or _bounding_box_from_element(element)
+            if bounds is not None:
+                state.web_areas.append(bounds)
 
-        for child in _iter_children(children):
-            self._collect_semantic_elements(
-                child,
-                depth=depth + 1,
-                elements=elements,
+        if mapped_role is not None and bounds is not None:
+            if len(state.controls) < self.maximum_elements:
+                state.controls.append(
+                    UIElement(
+                        element_type=mapped_role,
+                        bounding_box=bounds,
+                        confidence=1.0,
+                        text=text,
+                        identifier=_identifier_from_element(element),
+                        value=value,
+                        enabled=_bool_attribute(
+                            element,
+                            "kAXEnabledAttribute",
+                        ),
+                        focused=_focused_from_element(
+                            element,
+                            focused_element,
+                        ),
+                        selected=None,
+                        source="accessibility",
+                    )
+                )
+                if len(state.controls) >= self.maximum_elements:
+                    state.maximum_controls_reached = True
+            else:
+                state.maximum_controls_reached = True
+
+        if depth >= self.maximum_depth:
+            children = _copy_attribute(
+                element,
+                _ax_constant("kAXChildrenAttribute"),
             )
-
-    def _collect_web_areas(
-        self,
-        element: Any,
-        *,
-        depth: int,
-        web_areas: list[BoundingBox],
-    ) -> None:
-        if depth > self.maximum_depth:
+            if _iter_children(children):
+                state.maximum_depth_reached = True
             return
 
-        role = _copy_attribute(
-            element,
-            _ax_constant("kAXRoleAttribute"),
-        )
-
-        if role == "AXWebArea":
-            bounds = _bounding_box_from_element(element)
-            if bounds is not None:
-                web_areas.append(bounds)
-
         children = _copy_attribute(
             element,
             _ax_constant("kAXChildrenAttribute"),
         )
 
         for child in _iter_children(children):
-            self._collect_web_areas(
+            self._traverse_snapshot(
                 child,
                 depth=depth + 1,
-                web_areas=web_areas,
+                state=state,
+                focused_element=focused_element,
             )
+            if state.maximum_nodes_reached:
+                return
 
     def _frontmost_application_element(self) -> Any | None:
         application = self._frontmost_workspace_application()

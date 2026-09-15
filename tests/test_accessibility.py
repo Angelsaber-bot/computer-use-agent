@@ -6,6 +6,8 @@ import pytest
 import computer_agent.perception.accessibility as accessibility_module
 from computer_agent.perception import MacOSAccessibility
 from computer_agent.perception import MacOSAccessibility as ExportedMacOSAccessibility
+from computer_agent.perception import AccessibilitySnapshot
+from computer_agent.perception import BoundingBox
 from computer_agent.perception import SemanticAXElement
 from computer_agent.perception import UIElement
 from computer_agent.perception import Viewport
@@ -390,6 +392,27 @@ def _read_controls(
     ).read_frontmost_controls()
 
 
+def _snapshot(
+    monkeypatch,
+    children,
+    *,
+    maximum_elements=5000,
+    maximum_depth=30,
+    maximum_nodes=50000,
+):
+    window = _node(
+        role="AXWindow",
+        children=children,
+    )
+    _install_fake_accessibility(monkeypatch, window)
+
+    return MacOSAccessibility(
+        maximum_elements=maximum_elements,
+        maximum_depth=maximum_depth,
+        maximum_nodes=maximum_nodes,
+    ).read_frontmost_snapshot()
+
+
 def test_macos_accessibility_is_exported_from_perception_package():
     assert ExportedMacOSAccessibility is accessibility_module.MacOSAccessibility
 
@@ -626,6 +649,10 @@ def test_read_frontmost_controls_fails_when_permission_is_untrusted(
         ({"maximum_depth": False}, "maximum_depth must be an integer"),
         ({"maximum_depth": "30"}, "maximum_depth must be an integer"),
         ({"maximum_depth": -1}, "maximum_depth must be non-negative"),
+        ({"maximum_nodes": True}, "maximum_nodes must be an integer"),
+        ({"maximum_nodes": "5000"}, "maximum_nodes must be an integer"),
+        ({"maximum_nodes": 0}, "maximum_nodes must be positive"),
+        ({"maximum_nodes": -1}, "maximum_nodes must be positive"),
     ],
 )
 def test_constructor_rejects_invalid_limits(kwargs, message):
@@ -771,6 +798,345 @@ def test_read_frontmost_viewport_returns_none_without_unique_web_area(
     )
 
     assert MacOSAccessibility().read_frontmost_viewport() is None
+
+
+def test_read_frontmost_snapshot_collects_controls_semantics_viewport_and_url(
+    monkeypatch,
+):
+    link = _node(
+        role="AXLink",
+        title="Turing machine",
+        url="https://en.wikipedia.org/wiki/Turing_machine",
+        position=(120, 240),
+        size=(160, 20),
+    )
+    web_area = _node(
+        role="AXWebArea",
+        position=(0, 100),
+        size=(1400, 800),
+        children=[link],
+    )
+    window = _node(
+        role="AXWindow",
+        position=(0, 40),
+        size=(1440, 900),
+        children=[web_area],
+    )
+    _install_fake_accessibility(
+        monkeypatch,
+        window,
+        focused_element=link,
+    )
+
+    snapshot = MacOSAccessibility().read_frontmost_snapshot()
+
+    assert isinstance(snapshot, AccessibilitySnapshot)
+    assert snapshot.application_name == "Google Chrome"
+    assert snapshot.tree_traversals == 1
+    assert snapshot.traversed_nodes == 3
+    assert snapshot.traversal_truncated is False
+    assert snapshot.viewport == Viewport(
+        BoundingBox(
+            x=0,
+            y=100,
+            width=1400,
+            height=800,
+        )
+    )
+    assert snapshot.focused_window_bounds == BoundingBox(
+        x=0,
+        y=40,
+        width=1440,
+        height=900,
+    )
+    assert snapshot.web_areas == (
+        BoundingBox(
+            x=0,
+            y=100,
+            width=1400,
+            height=800,
+        ),
+    )
+    assert len(snapshot.controls) == 1
+    assert snapshot.controls[0].element_type == "link"
+    assert snapshot.controls[0].text == "Turing machine"
+    assert snapshot.controls[0].value == (
+        "https://en.wikipedia.org/wiki/Turing_machine"
+    )
+    assert snapshot.controls[0].focused is True
+    assert snapshot.controls[0].bounding_box == BoundingBox(
+        x=120,
+        y=240,
+        width=160,
+        height=20,
+    )
+    assert snapshot.semantic_elements == (
+        SemanticAXElement(
+            role="AXLink",
+            text="Turing machine",
+            bounds=BoundingBox(
+                x=120,
+                y=240,
+                width=160,
+                height=20,
+            ),
+            value="https://en.wikipedia.org/wiki/Turing_machine",
+        ),
+    )
+
+
+def test_read_frontmost_snapshot_honors_maximum_node_bound(
+    monkeypatch,
+):
+    late_button = _node(
+        role="AXButton",
+        title="TOO_DEEP_AFTER_NODE_LIMIT",
+    )
+    group = _node(
+        role="AXGroup",
+        children=[late_button],
+    )
+    window = _node(
+        role="AXWindow",
+        children=[group],
+    )
+    _install_fake_accessibility(
+        monkeypatch,
+        window,
+    )
+
+    snapshot = MacOSAccessibility(
+        maximum_nodes=2,
+    ).read_frontmost_snapshot()
+
+    assert snapshot.traversed_nodes == 2
+    assert snapshot.traversal_truncated is True
+    assert snapshot.controls == ()
+    assert snapshot.semantic_elements == ()
+    assert snapshot.maximum_nodes_reached is True
+    assert snapshot.maximum_depth_reached is False
+    assert snapshot.maximum_controls_reached is False
+
+
+def test_unsupported_raw_nodes_do_not_consume_legacy_control_budget(
+    monkeypatch,
+):
+    unsupported_nodes = [
+        _node(role="AXGroup")
+        for _ in range(25)
+    ]
+    late_text_field = _node(
+        role="AXTextField",
+        title="Search Wikipedia",
+        value="",
+    )
+
+    controls = _read_controls(
+        monkeypatch,
+        [
+            *unsupported_nodes,
+            late_text_field,
+        ],
+        maximum_elements=1,
+    )
+
+    assert [control.text for control in controls] == ["Search Wikipedia"]
+
+
+def test_snapshot_uses_separate_raw_node_bound_after_unsupported_nodes(
+    monkeypatch,
+):
+    late_text_field = _node(
+        role="AXTextField",
+        title="Search Wikipedia",
+        value="",
+    )
+    children = [
+        *[
+            _node(role="AXGroup")
+            for _ in range(25)
+        ],
+        late_text_field,
+    ]
+
+    truncated = _snapshot(
+        monkeypatch,
+        children,
+        maximum_elements=1,
+        maximum_nodes=10,
+    )
+
+    assert truncated.controls == ()
+    assert truncated.traversed_nodes == 10
+    assert truncated.traversal_truncated is True
+    assert truncated.maximum_nodes_reached is True
+
+    complete = _snapshot(
+        monkeypatch,
+        children,
+        maximum_elements=1,
+        maximum_nodes=100,
+    )
+
+    assert [control.text for control in complete.controls] == [
+        "Search Wikipedia",
+    ]
+    assert complete.maximum_nodes_reached is False
+    assert complete.maximum_controls_reached is True
+
+
+def test_consolidated_snapshot_preserves_legacy_control_walk(
+    monkeypatch,
+):
+    late_text_field = _node(
+        role="AXTextField",
+        title="Search Wikipedia",
+        value="",
+        position=(100, 120),
+        size=(300, 30),
+    )
+    search_button = _node(
+        role="AXButton",
+        title="Search",
+        value="",
+        position=(400, 120),
+        size=(80, 30),
+    )
+    window = _node(
+        role="AXWindow",
+        children=[
+            *[
+                _node(role="AXGroup")
+                for _ in range(40)
+            ],
+            late_text_field,
+            search_button,
+        ],
+    )
+    _install_fake_accessibility(monkeypatch, window)
+    reader = MacOSAccessibility(
+        maximum_elements=2,
+    )
+    legacy_controls = []
+    reader._traverse(
+        window,
+        depth=0,
+        controls=legacy_controls,
+        focused_element=None,
+    )
+
+    snapshot = reader.read_frontmost_snapshot()
+
+    assert [
+        (control.element_type, control.text, control.value)
+        for control in snapshot.controls
+    ] == [
+        (control.element_type, control.text, control.value)
+        for control in legacy_controls
+    ]
+    assert [control.text for control in snapshot.controls] == [
+        "Search Wikipedia",
+        "Search",
+    ]
+
+
+def test_wikipedia_like_snapshot_includes_action_relevant_controls(
+    monkeypatch,
+):
+    text_field = _node(
+        role="AXTextField",
+        title="Search Wikipedia",
+        value="",
+        position=(266, 201),
+        size=(405, 32),
+        enabled=True,
+    )
+    search_button = _node(
+        role="AXButton",
+        title="Search",
+        value="",
+        position=(669, 201),
+        size=(71, 32),
+        enabled=True,
+    )
+    heading = _node(
+        role="AXHeading",
+        title="Welcome to Wikipedia",
+        position=(200, 260),
+        size=(300, 40),
+    )
+    link = _node(
+        role="AXLink",
+        title="Turing machine",
+        url="https://en.wikipedia.org/wiki/Turing_machine",
+        position=(200, 320),
+        size=(160, 20),
+    )
+    web_area = _node(
+        role="AXWebArea",
+        position=(0, 184),
+        size=(1458, 699),
+        children=[
+            *[
+                _node(
+                    role="AXGroup",
+                    children=[
+                        _node(role="AXGroup")
+                        for _ in range(3)
+                    ],
+                )
+                for _ in range(20)
+            ],
+            text_field,
+            search_button,
+            heading,
+            link,
+        ],
+    )
+
+    snapshot = _snapshot(
+        monkeypatch,
+        [web_area],
+        maximum_elements=10,
+    )
+
+    assert any(
+        control.element_type == "text_field"
+        and control.text == "Search Wikipedia"
+        for control in snapshot.controls
+    )
+    assert any(
+        control.element_type == "button"
+        and control.text == "Search"
+        for control in snapshot.controls
+    )
+    assert any(
+        control.element_type == "heading"
+        and control.text == "Welcome to Wikipedia"
+        for control in snapshot.controls
+    )
+    assert any(
+        control.element_type == "link"
+        and control.value == "https://en.wikipedia.org/wiki/Turing_machine"
+        for control in snapshot.controls
+    )
+    assert snapshot.web_areas == (
+        BoundingBox(
+            x=0,
+            y=184,
+            width=1458,
+            height=699,
+        ),
+    )
+    assert snapshot.viewport == Viewport(
+        BoundingBox(
+            x=0,
+            y=184,
+            width=1458,
+            height=699,
+        )
+    )
+    assert snapshot.maximum_nodes_reached is False
 
 
 def test_read_frontmost_semantic_elements_preserves_missing_geometry(
