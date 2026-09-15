@@ -11,15 +11,21 @@ from computer_agent.grounding.models import (
     GroundingStatus,
     TargetSpec,
 )
+from computer_agent.grounding.semantic_target_resolver import (
+    EquivalentLinkResolution,
+    SemanticTargetResolver,
+)
 from computer_agent.grounding.ui_grounder import UIGrounder
 
 __all__ = [
     "ActionGrounder",
     "ActionGroundingResult",
     "ActionGroundingStatus",
+    "EquivalentLinkResolution",
     "GroundingCandidate",
     "GroundingResult",
     "GroundingStatus",
+    "SemanticTargetResolver",
     "TargetSpec",
     "UIGrounder",
 ]

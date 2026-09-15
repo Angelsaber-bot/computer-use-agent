@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import re
+import time
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import QTimer, Qt, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -13,6 +15,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -31,8 +34,10 @@ from computer_agent.app.event_bridge import RuntimeEventBridge
 from computer_agent.app.evidence_demo import (
     create_evidence_demo_worker,
 )
+from computer_agent.app.runtime_ui_state import RuntimeUIStateTracker
 from computer_agent.app.task_state_bridge import TaskStateBridge
 from computer_agent.app.task_state_panel import TaskStatePanel
+from computer_agent.app.tray_status import AgentTrayStatus
 from computer_agent.app.storage import (
     create_default_task_store,
 )
@@ -70,6 +75,13 @@ class MainWindow(QMainWindow):
         self._task_state_bridge = TaskStateBridge(self)
         self._adaptive_decision_bridge = (
             AdaptiveDecisionBridge(self)
+        )
+        self._ui_state_tracker = RuntimeUIStateTracker()
+        self._task_started_at: float | None = None
+        self._elapsed_timer = QTimer(self)
+        self._elapsed_timer.setInterval(250)
+        self._elapsed_timer.timeout.connect(
+            self._update_elapsed_display
         )
 
         if (
@@ -124,6 +136,10 @@ class MainWindow(QMainWindow):
             )
 
         self._build_ui()
+        self._tray_status = AgentTrayStatus(
+            parent_window=self,
+            controller_getter=lambda: self._controller,
+        )
 
         self._event_bridge.event_received.connect(
             self._handle_runtime_event,
@@ -252,6 +268,28 @@ class MainWindow(QMainWindow):
         self._current_value.setObjectName("currentValue")
         self._current_value.setWordWrap(True)
         layout.addWidget(self._current_value)
+
+        self._step_progress = QProgressBar()
+        self._step_progress.setObjectName("stepProgress")
+        self._step_progress.setRange(0, 1)
+        self._step_progress.setValue(0)
+        self._step_progress.setFormat("Waiting for task")
+        layout.addWidget(self._step_progress)
+
+        self._elapsed_value = QLabel("Elapsed: 0.0 s")
+        self._elapsed_value.setObjectName("elapsedValue")
+        self._elapsed_value.setStyleSheet(
+            "font-size: 12px; color: #666666;"
+        )
+        layout.addWidget(self._elapsed_value)
+
+        self._timing_value = QLabel("Last observation: -")
+        self._timing_value.setObjectName("timingValue")
+        self._timing_value.setStyleSheet(
+            "font-size: 12px; color: #666666;"
+        )
+        self._timing_value.setWordWrap(True)
+        layout.addWidget(self._timing_value)
 
         tabs = QTabWidget()
         tabs.setObjectName("workspaceTabs")
@@ -403,6 +441,7 @@ class MainWindow(QMainWindow):
         self._current_value.setText(
             "Waiting for the runtime to begin."
         )
+        self._start_elapsed_display()
 
     @Slot()
     def _resume_last_task(self) -> None:
@@ -465,6 +504,7 @@ class MainWindow(QMainWindow):
             "Loading persisted task state and "
             "re-observing the current environment."
         )
+        self._start_elapsed_display()
 
     @Slot()
     def _toggle_pause(self) -> None:
@@ -495,6 +535,8 @@ class MainWindow(QMainWindow):
             return
 
         self._append_event(event)
+        ui_state = self._ui_state_tracker.handle_event(event)
+        self._tray_status.update_state(ui_state)
 
         if event.event_type is RuntimeEventType.TASK_STARTED:
             self._status_value.setText("Running")
@@ -504,7 +546,13 @@ class MainWindow(QMainWindow):
             return
 
         if event.event_type is RuntimeEventType.PROGRESS:
+            if event.message.startswith("Timing: "):
+                self._timing_value.setText(
+                    event.message.removeprefix("Timing: ")
+                )
+                return
             self._current_value.setText(event.message)
+            self._update_step_progress(event.message)
             return
 
         if event.event_type is RuntimeEventType.TASK_PAUSED:
@@ -535,6 +583,7 @@ class MainWindow(QMainWindow):
             self._current_value.setText(
                 "Task stopped safely."
             )
+            self._finish_elapsed_display()
             self._set_terminal_controls()
             return
 
@@ -543,6 +592,11 @@ class MainWindow(QMainWindow):
             self._current_value.setText(
                 "Task runtime completed."
             )
+            self._step_progress.setValue(
+                self._step_progress.maximum()
+            )
+            self._step_progress.setFormat("Completed")
+            self._finish_elapsed_display()
             self._set_terminal_controls()
             return
 
@@ -557,7 +611,74 @@ class MainWindow(QMainWindow):
                     "Task runtime failed."
                 )
 
+            self._step_progress.setFormat("Failed")
+            self._finish_elapsed_display()
             self._set_terminal_controls()
+
+    def _start_elapsed_display(self) -> None:
+        self._task_started_at = time.monotonic()
+        self._elapsed_value.setText("Elapsed: 0.0 s")
+        self._step_progress.setRange(0, 0)
+        self._step_progress.setFormat("Preparing durable plan...")
+        self._elapsed_timer.start()
+
+    def _finish_elapsed_display(self) -> None:
+        self._update_elapsed_display()
+        self._elapsed_timer.stop()
+
+    @Slot()
+    def _update_elapsed_display(self) -> None:
+        if self._task_started_at is None:
+            return
+        elapsed = max(
+            0.0,
+            time.monotonic() - self._task_started_at,
+        )
+        self._elapsed_value.setText(
+            f"Elapsed: {elapsed:.1f} s"
+        )
+        self._tray_status.update_state(
+            self._ui_state_tracker.state
+        )
+
+    def _update_step_progress(self, message: str) -> None:
+        plan_match = re.search(
+            r"Plan ready:\s+(\d+) durable step",
+            message,
+            re.IGNORECASE,
+        )
+        if plan_match is not None:
+            total = int(plan_match.group(1))
+            if total > 0:
+                self._step_progress.setRange(0, total)
+                self._step_progress.setValue(0)
+                self._step_progress.setFormat(
+                    f"0 of {total} steps verified"
+                )
+            return
+
+        step_match = re.search(
+            r"Step\s+(\d+)\s*/\s*(\d+)",
+            message,
+            re.IGNORECASE,
+        )
+        if step_match is None:
+            return
+
+        current = int(step_match.group(1))
+        total = int(step_match.group(2))
+        if total <= 0:
+            return
+
+        verified = "VERIFIED" in message.upper()
+        self._step_progress.setRange(0, total)
+        self._step_progress.setValue(
+            min(current if verified else current - 1, total)
+        )
+        self._step_progress.setFormat(
+            f"Step {current} of {total}"
+            + (" — verified" if verified else " — running")
+        )
 
     def _append_event(
         self,

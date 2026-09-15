@@ -281,7 +281,10 @@ class MacOSAccessibility:
                     role=role,
                     text=text,
                     bounds=_bounding_box_from_element(element),
-                    value=_value_from_element(element),
+                    value=_value_from_element(
+                        element,
+                        mapped_role,
+                    ),
                 )
             )
 
@@ -483,7 +486,10 @@ def _control_from_element(
             mapped_role,
         ),
         identifier=_identifier_from_element(element),
-        value=_value_from_element(element),
+        value=_value_from_element(
+            element,
+            mapped_role,
+        ),
         enabled=_bool_attribute(element, "kAXEnabledAttribute"),
         focused=_focused_from_element(element, focused_element),
         # Chrome did not reliably expose checkbox/radio state through AXValue
@@ -542,7 +548,39 @@ def _non_empty_string_attribute(
     return value.strip()
 
 
-def _value_from_element(element: Any) -> str | int | float | bool | None:
+def _value_from_element(
+    element: Any,
+    mapped_role: str | None = None,
+) -> str | int | float | bool | None:
+    # Chrome links commonly expose the real href through AXURL rather than
+    # AXValue. Preserve it in the existing value field so higher layers can
+    # verify the destination without fuzzy title matching.
+    if mapped_role == "link":
+        url_attribute = getattr(
+            ApplicationServices,
+            "kAXURLAttribute",
+            "AXURL",
+        )
+        url_value = _copy_attribute(
+            element,
+            url_attribute,
+        )
+        if isinstance(url_value, str) and url_value.strip():
+            return url_value.strip()
+
+        absolute_string = getattr(
+            url_value,
+            "absoluteString",
+            None,
+        )
+        if callable(absolute_string):
+            try:
+                rendered = absolute_string()
+            except Exception:
+                rendered = None
+            if isinstance(rendered, str) and rendered.strip():
+                return rendered.strip()
+
     value = _copy_attribute(
         element,
         _ax_constant("kAXValueAttribute"),

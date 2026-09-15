@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
+import time
 from typing import Protocol
 
 from PIL import Image
@@ -50,6 +52,7 @@ class PerceptionSnapshot:
     ocr_elements: tuple[UIElement, ...]
     fused_elements: tuple[UIElement, ...]
     warnings: tuple[str, ...]
+    timings: dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.frame, ScreenFrame):
@@ -81,6 +84,18 @@ class PerceptionSnapshot:
             "warnings",
             tuple(self.warnings),
         )
+        if not isinstance(self.timings, dict):
+            raise ValueError("timings must be a dict")
+        timings = {}
+        for key, value in self.timings.items():
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError("timing keys must be non-empty strings")
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError("timing values must be numeric")
+            if value < 0:
+                raise ValueError("timing values must be non-negative")
+            timings[key] = float(value)
+        object.__setattr__(self, "timings", timings)
 
     @property
     def source_counts(self) -> dict[str, int]:
@@ -104,18 +119,28 @@ class PerceptionEngine:
         ocr: _OCRRecognizer,
         fusion: _FusionComponent,
         capture_path: str | Path,
+        clock: Callable[[], float] = time.perf_counter,
     ) -> None:
         self.screen_capture = screen_capture
         self.accessibility_reader = accessibility_reader
         self.ocr = ocr
         self.fusion = fusion
         self.capture_path = Path(capture_path)
+        self.clock = clock
 
     def observe(self) -> PerceptionSnapshot:
         """Capture and return a fresh perception snapshot."""
 
+        total_started = self.clock()
+        timings: dict[str, float] = {}
+
+        capture_started = self.clock()
         frame = self.screen_capture.capture(self.capture_path)
+        timings["screen_capture"] = self.clock() - capture_started
+
+        load_started = self.clock()
         image = self._load_rgb_image(frame)
+        timings["image_load"] = self.clock() - load_started
 
         if image.size != frame.pixel_size:
             raise RuntimeError(
@@ -126,6 +151,7 @@ class PerceptionEngine:
 
         warnings: list[str] = []
 
+        accessibility_started = self.clock()
         try:
             accessibility_elements = tuple(
                 self.accessibility_reader.read_frontmost_controls()
@@ -138,7 +164,11 @@ class PerceptionEngine:
                     error,
                 )
             )
+        timings["accessibility_controls"] = (
+            self.clock() - accessibility_started
+        )
 
+        ocr_started = self.clock()
         try:
             pixel_ocr_elements = tuple(
                 self.ocr.recognize(image)
@@ -156,13 +186,17 @@ class PerceptionEngine:
                     error,
                 )
             )
+        timings["ocr"] = self.clock() - ocr_started
 
+        fusion_started = self.clock()
         fused_elements = tuple(
             self.fusion.fuse(
                 accessibility_elements,
                 ocr_elements,
             )
         )
+        timings["fusion"] = self.clock() - fusion_started
+        timings["perception_total"] = self.clock() - total_started
 
         return PerceptionSnapshot(
             frame=frame,
@@ -171,6 +205,7 @@ class PerceptionEngine:
             ocr_elements=ocr_elements,
             fused_elements=fused_elements,
             warnings=tuple(warnings),
+            timings=timings,
         )
 
     @staticmethod

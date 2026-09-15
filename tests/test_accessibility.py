@@ -16,6 +16,14 @@ class FakeAXValue:
         self.value = value
 
 
+class FakeURL:
+    def __init__(self, value):
+        self.value = value
+
+    def absoluteString(self):
+        return self.value
+
+
 class FakeAXElement:
     def __init__(
         self,
@@ -145,6 +153,7 @@ class FakeApplicationServices:
     kAXDescriptionAttribute = "AXDescription"
     kAXDOMIdentifierAttribute = "AXDOMIdentifier"
     kAXValueAttribute = "AXValue"
+    kAXURLAttribute = "AXURL"
     kAXEnabledAttribute = "AXEnabled"
     kAXFocusedAttribute = "AXFocused"
     kAXPositionAttribute = "AXPosition"
@@ -231,6 +240,7 @@ def _node(
     description=None,
     identifier=None,
     value=None,
+    url=None,
     enabled=None,
     focused=None,
     position=(10, 20),
@@ -256,6 +266,9 @@ def _node(
 
     if value is not None:
         attributes["AXValue"] = value
+
+    if url is not None:
+        attributes["AXURL"] = url
 
     if enabled is not None:
         attributes["AXEnabled"] = enabled
@@ -982,6 +995,58 @@ def test_role_mapping_for_supported_controls_preserves_tree_order(
     ]
     assert all(control.source == "accessibility" for control in controls)
     assert all(control.confidence == 1.0 for control in controls)
+
+
+def test_ax_link_value_uses_axurl_string(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXLink",
+                title="perception",
+                value="visible value",
+                url="https://en.wikipedia.org/wiki/Perception",
+            ),
+        ],
+    )
+
+    assert len(controls) == 1
+    assert controls[0].element_type == "link"
+    assert controls[0].text == "perception"
+    assert controls[0].value == "https://en.wikipedia.org/wiki/Perception"
+
+
+def test_ax_link_value_uses_axurl_absolute_string(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXLink",
+                title="perception",
+                value="visible value",
+                url=FakeURL(
+                    "https://en.wikipedia.org/wiki/Perception"
+                ),
+            ),
+        ],
+    )
+
+    assert controls[0].value == "https://en.wikipedia.org/wiki/Perception"
+
+
+def test_ax_link_value_falls_back_to_axvalue_without_axurl(monkeypatch):
+    controls = _read_controls(
+        monkeypatch,
+        [
+            _node(
+                role="AXLink",
+                title="perception",
+                value="visible value",
+            ),
+        ],
+    )
+
+    assert controls[0].value == "visible value"
 
 
 def test_ax_text_area_preserves_value_focus_box_and_source(monkeypatch):

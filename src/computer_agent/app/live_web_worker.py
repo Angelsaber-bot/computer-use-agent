@@ -12,6 +12,7 @@ import re
 import sys
 import time
 from typing import NoReturn
+from urllib.parse import unquote, urlparse
 
 from computer_agent.agent import (
     AgentLoop,
@@ -30,7 +31,9 @@ from computer_agent.control.computer_controller import (
 )
 from computer_agent.core.models import Action
 from computer_agent.grounding import (
+    GroundingResult,
     GroundingStatus,
+    SemanticTargetResolver,
     TargetSpec,
     UIGrounder,
 )
@@ -95,6 +98,9 @@ QUERY_ARTIFACT_ID = "live-web-query"
 FOLLOWUP_TARGET_ARTIFACT_ID = (
     "live-web-followup-target"
 )
+FOLLOWUP_DESTINATION_ARTIFACT_ID = (
+    "live-web-followup-destination"
+)
 DURABLE_PLAN_ARTIFACT_ID = (
     "live-web-durable-plan"
 )
@@ -114,6 +120,7 @@ FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID = (
 FOLLOWUP_NAVIGATION_ACTION_KEY = (
     "click_target:wikipedia_followup_link"
 )
+FOLLOWUP_LINK_READINESS_REOBSERVATIONS = 2
 
 BROWSER_WINDOW_MARKER_PREFIX = (
     "about:blank#computer-agent-task="
@@ -185,6 +192,15 @@ class StepPostconditionResult:
 
     summary: str
     source: str
+
+
+@dataclass(frozen=True, slots=True)
+class FollowupLinkReadinessResult:
+    """Grounded follow-up link state after bounded read-only refreshes."""
+
+    observation: TextInputObservation
+    grounding: GroundingResult | None
+    already_at_destination: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -626,12 +642,26 @@ class LiveWebEnvironment:
                 )
             )
         )
+        self.last_observation_timings: dict[str, float] = {}
+
+    def frontmost_application_name(self) -> str | None:
+        """Return the current frontmost app without a full perception pass."""
+        return (
+            self.accessibility
+            .read_frontmost_application_name()
+        )
 
     def observe(
         self,
     ) -> TextInputObservation:
+        observe_started = time.perf_counter()
+        timings: dict[str, float] = {}
+        stabilization_started = time.perf_counter()
         time.sleep(
             self.stabilization_seconds
+        )
+        timings["stabilization"] = (
+            time.perf_counter() - stabilization_started
         )
 
         self.capture_path.parent.mkdir(
@@ -639,24 +669,47 @@ class LiveWebEnvironment:
             exist_ok=True,
         )
 
+        perception_started = time.perf_counter()
         snapshot = (
             self.perception_engine.observe()
         )
+        timings["perception_engine"] = (
+            time.perf_counter() - perception_started
+        )
+        timings.update(snapshot.timings)
+
+        application_started = time.perf_counter()
+        application_name = (
+            self.accessibility
+            .read_frontmost_application_name()
+        )
+        timings["frontmost_application"] = (
+            time.perf_counter() - application_started
+        )
+
+        viewport_started = time.perf_counter()
+        viewport = (
+            self.accessibility
+            .read_frontmost_viewport()
+        )
+        timings["viewport"] = time.perf_counter() - viewport_started
+
+        semantic_started = time.perf_counter()
+        semantic_elements = tuple(
+            self.accessibility
+            .read_frontmost_semantic_elements()
+        )
+        timings["accessibility_semantic_elements"] = (
+            time.perf_counter() - semantic_started
+        )
+        timings["observe_total"] = time.perf_counter() - observe_started
+        self.last_observation_timings = timings
 
         return TextInputObservation(
-            application_name=(
-                self.accessibility
-                .read_frontmost_application_name()
-            ),
-            viewport=(
-                self.accessibility
-                .read_frontmost_viewport()
-            ),
+            application_name=application_name,
+            viewport=viewport,
             snapshot=snapshot,
-            semantic_elements=tuple(
-                self.accessibility
-                .read_frontmost_semantic_elements()
-            ),
+            semantic_elements=semantic_elements,
         )
 
     def open_task_site(
@@ -785,6 +838,8 @@ def build_resume_plan(
 def build_followup_plan(
     goal: str,
     resolved_task: ResolvedDurableWebSearchTask | None = None,
+    *,
+    action_target: TargetSpec | None = None,
 ) -> StructuredPlan:
     """Build the bounded follow-up navigation segment."""
     resolved_task = _coerce_resolved_task(
@@ -813,7 +868,9 @@ def build_followup_plan(
                     PlanOperation.CLICK_TARGET
                 ),
                 action_target=(
-                    _followup_link_target(
+                    action_target
+                    if action_target is not None
+                    else _followup_link_target(
                         resolved_task
                     )
                 ),
@@ -1814,6 +1871,11 @@ def _run_live_task(
     spec = resolved_task.spec
     control.checkpoint()
 
+    progress(
+        f"Plan ready: {len(durable_plan.steps)} durable step"
+        f"{'s' if len(durable_plan.steps) != 1 else ''}."
+    )
+
     observation = _ensure_browser_workspace(
         state=state,
         transitions=transitions,
@@ -1885,6 +1947,15 @@ def _reconcile_durable_plan(
     observation: TextInputObservation,
 ) -> TextInputObservation:
     """Reconcile one ordered durable plan from fresh browser state."""
+    observation = _ensure_expected_workspace_observation(
+        state=state,
+        environment=environment,
+        spec=resolved_task.spec,
+        observation=observation,
+        refresh=False,
+        progress=progress,
+    )
+
     observation, next_index = (
         _reconcile_most_advanced_satisfied_step(
             transitions=transitions,
@@ -1938,6 +2009,7 @@ def _reconcile_most_advanced_satisfied_step(
             step,
             observation,
             resolved_task,
+            state=transitions.state,
         )
         if postcondition is None:
             continue
@@ -1994,10 +2066,25 @@ def _reconcile_durable_step(
     progress: Callable[[str], None],
     observation: TextInputObservation,
 ) -> TextInputObservation:
+    progress(
+        f"Step {step_index + 1}/{len(durable_plan.steps)} — "
+        f"{step.description}: checking browser state."
+    )
+
+    observation = _ensure_expected_workspace_observation(
+        state=state,
+        environment=environment,
+        spec=resolved_task.spec,
+        observation=observation,
+        refresh=False,
+        progress=progress,
+    )
+
     postcondition = _step_postcondition_satisfied(
         step,
         observation,
         resolved_task,
+        state=state,
     )
     if postcondition is not None:
         evidence = _verify_step_from_postcondition(
@@ -2013,8 +2100,8 @@ def _reconcile_durable_step(
         )
         publish_state()
         progress(
-            "Fresh browser state verifies durable "
-            f"plan step {step.step_id!r}."
+            f"Step {step_index + 1}/{len(durable_plan.steps)} — "
+            f"{step.description}: VERIFIED from fresh browser state."
         )
         return observation
 
@@ -2024,11 +2111,53 @@ def _reconcile_durable_step(
         step_index,
     )
 
-    _ensure_step_precondition(
-        observation,
-        resolved_task,
-        step,
+    grounded_action_target = None
+    observation = _ensure_step_precondition_with_fresh_reads(
+        state=state,
+        environment=environment,
+        resolved_task=resolved_task,
+        step=step,
+        observation=observation,
+        progress=progress,
     )
+
+    if step.kind is DurableStepKind.OPEN_LINK:
+        readiness = (
+            _ground_followup_link_with_readiness(
+                state=state,
+                transitions=transitions,
+                environment=environment,
+                resolved_task=resolved_task,
+                observation=observation,
+                publish_state=publish_state,
+                progress=progress,
+            )
+        )
+        observation = readiness.observation
+        if readiness.already_at_destination:
+            return observation
+        if readiness.grounding is None:
+            raise RuntimeError(
+                "Follow-up readiness finished without "
+                "a grounded link or destination evidence."
+            )
+        _persist_followup_destination_identity(
+            transitions,
+            resolved_task,
+            readiness.grounding,
+        )
+        publish_state()
+        if readiness.grounding.element is not None:
+            grounded_action_target = TargetSpec(
+                text=_followup_target_text(
+                    resolved_task
+                ),
+                element_types=("link",),
+                minimum_confidence=0.70,
+                reference_point=(
+                    readiness.grounding.element.center
+                ),
+            )
 
     side_effect = _ensure_step_side_effect(
         transitions,
@@ -2056,9 +2185,8 @@ def _reconcile_durable_step(
     control.checkpoint()
 
     progress(
-        _step_execution_progress(
-            step
-        )
+        f"Step {step_index + 1}/{len(durable_plan.steps)} — "
+        + _step_execution_progress(step)
     )
 
     result = _execute_agent_plan(
@@ -2067,6 +2195,8 @@ def _reconcile_durable_step(
             state.goal,
             resolved_task,
             step,
+            observation=observation,
+            action_target=grounded_action_target,
         ),
     )
 
@@ -2074,17 +2204,48 @@ def _reconcile_durable_step(
         step
     )
 
-    refreshed = environment.observe()
-    _require_expected_app(
-        refreshed,
-        resolved_task.spec,
+    progress(
+        f"Step {step_index + 1}/{len(durable_plan.steps)} — "
+        "verifying fresh post-action browser state."
+    )
+
+    refreshed = _ensure_expected_workspace_observation(
+        state=state,
+        environment=environment,
+        spec=resolved_task.spec,
+        observation=None,
+        refresh=True,
+        progress=progress,
     )
 
     postcondition = _step_postcondition_satisfied(
         step,
         refreshed,
         resolved_task,
+        state=state,
     )
+    for _ in range(2):
+        if postcondition is not None:
+            break
+        progress(
+            f"Step {step_index + 1}/{len(durable_plan.steps)} — "
+            "fresh post-action state is not verified yet; "
+            "re-observing before deciding outcome."
+        )
+        refreshed = _ensure_expected_workspace_observation(
+            state=state,
+            environment=environment,
+            spec=resolved_task.spec,
+            observation=None,
+            refresh=True,
+            progress=progress,
+        )
+        postcondition = _step_postcondition_satisfied(
+            step,
+            refreshed,
+            resolved_task,
+            state=state,
+        )
     if postcondition is None:
         _mark_step_outcome_unknown(
             transitions,
@@ -2115,6 +2276,11 @@ def _reconcile_durable_step(
     )
     publish_state()
 
+    progress(
+        f"Step {step_index + 1}/{len(durable_plan.steps)} — "
+        f"{step.description}: VERIFIED."
+    )
+
     _maybe_inject_checkpoint_crash(
         step
     )
@@ -2126,6 +2292,8 @@ def _step_postcondition_satisfied(
     step: DurableTaskStep,
     observation: TextInputObservation,
     resolved_task: ResolvedDurableWebSearchTask,
+    *,
+    state: TaskState | None = None,
 ) -> StepPostconditionResult | None:
     if (
         step.postcondition
@@ -2165,20 +2333,10 @@ def _step_postcondition_satisfied(
         step.postcondition
         is DurablePostconditionKind.DESTINATION_HEADING_VISIBLE
     ):
-        if not _followup_destination_visible(
+        return _followup_destination_postcondition(
             observation,
             resolved_task,
-        ):
-            return None
-        return StepPostconditionResult(
-            summary=(
-                "Fresh browser state verifies "
-                "the requested Wikipedia destination "
-                f"{resolved_task.followup_target_text!r}."
-            ),
-            source=(
-                "Live Chrome destination observation"
-            ),
+            state=state,
         )
 
     return None
@@ -2289,49 +2447,113 @@ def _ensure_step_precondition(
     resolved_task: ResolvedDurableWebSearchTask,
     step: DurableTaskStep,
 ) -> None:
+    if _step_precondition_satisfied(
+        observation,
+        resolved_task,
+        step,
+    ):
+        return
+
+    raise RuntimeError(
+        _missing_step_precondition_message(step)
+    )
+
+
+def _ensure_step_precondition_with_fresh_reads(
+    *,
+    state: TaskState,
+    environment: LiveWebEnvironment,
+    resolved_task: ResolvedDurableWebSearchTask,
+    step: DurableTaskStep,
+    observation: TextInputObservation,
+    progress: Callable[[str], None],
+) -> TextInputObservation:
+    current = observation
+    for attempt in range(3):
+        if _step_precondition_satisfied(
+            current,
+            resolved_task,
+            step,
+        ):
+            return current
+        if attempt == 2:
+            break
+
+        progress(
+            "Fresh browser state is not ready for "
+            f"durable step {step.step_id!r}; "
+            "re-observing before any action."
+        )
+        current = _ensure_expected_workspace_observation(
+            state=state,
+            environment=environment,
+            spec=resolved_task.spec,
+            observation=None,
+            refresh=True,
+            progress=progress,
+        )
+
+    raise RuntimeError(
+        _missing_step_precondition_message(step)
+    )
+
+
+def _step_precondition_satisfied(
+    observation: TextInputObservation,
+    resolved_task: ResolvedDurableWebSearchTask,
+    step: DurableTaskStep,
+) -> bool:
     spec = resolved_task.spec
     if step.kind is DurableStepKind.ENTER_TEXT:
-        if not _search_field_available(
+        return _search_field_available(
             observation,
             spec,
-        ):
-            raise RuntimeError(
-                "The live browser state is ambiguous: "
-                "the durable query-entry target is not available."
-            )
-        return
+        )
 
     if step.kind is DurableStepKind.ACTIVATE_CONTROL:
-        if not _pre_submit_query_state(
-            observation,
-            resolved_task,
-        ):
-            raise RuntimeError(
-                "The live browser state is ambiguous: "
-                "it is not verified pre-submit search state."
-            )
-        return
-
-    if step.kind is DurableStepKind.OPEN_LINK:
-        if not _results_visible(
-            observation,
-            resolved_task,
-        ):
-            raise RuntimeError(
-                "The live browser state is ambiguous: "
-                "it is not verified search outcome state."
-            )
-        _ground_followup_link(
+        return _pre_submit_query_state(
             observation,
             resolved_task,
         )
-        return
+
+    if step.kind is DurableStepKind.OPEN_LINK:
+        return _results_visible(
+            observation,
+            resolved_task,
+        )
+
+    return False
+
+
+def _missing_step_precondition_message(
+    step: DurableTaskStep,
+) -> str:
+    if step.kind is DurableStepKind.ENTER_TEXT:
+        return (
+            "The live browser state is ambiguous: "
+            "the durable query-entry target is not available."
+        )
+    if step.kind is DurableStepKind.ACTIVATE_CONTROL:
+        return (
+            "The live browser state is ambiguous: "
+            "it is not verified pre-submit search state."
+        )
+    if step.kind is DurableStepKind.OPEN_LINK:
+        return (
+            "The live browser state is ambiguous: "
+            "it is not verified search outcome state."
+        )
+
+    return f"Unsupported durable step kind: {step.kind}"
 
 
 def _structured_plan_for_durable_step(
     goal: str,
     resolved_task: ResolvedDurableWebSearchTask,
     step: DurableTaskStep,
+    *,
+    observation: TextInputObservation | None = None,
+    action_target: TargetSpec | None = None,
 ) -> StructuredPlan:
     if step.kind is DurableStepKind.ENTER_TEXT:
         return build_prepare_plan(
@@ -2344,9 +2566,27 @@ def _structured_plan_for_durable_step(
             resolved_task,
         )
     if step.kind is DurableStepKind.OPEN_LINK:
+        if observation is not None:
+            if action_target is None:
+                grounding = _ground_followup_link(
+                    observation,
+                    resolved_task,
+                )
+                if grounding.element is not None:
+                    action_target = TargetSpec(
+                        text=_followup_target_text(
+                            resolved_task
+                        ),
+                        element_types=("link",),
+                        minimum_confidence=0.70,
+                        reference_point=(
+                            grounding.element.center
+                        ),
+                    )
         return build_followup_plan(
             goal,
             resolved_task,
+            action_target=action_target,
         )
     raise RuntimeError(
         f"Unsupported durable step kind: {step.kind}"
@@ -2578,6 +2818,149 @@ def _missing_postcondition_message(
     )
 
 
+def _ensure_expected_workspace_observation(
+    *,
+    state: TaskState,
+    environment: LiveWebEnvironment,
+    spec: DurableWebSearchSpec,
+    observation: TextInputObservation | None,
+    refresh: bool,
+    progress: Callable[[str], None],
+) -> TextInputObservation:
+    """Return a valid observation from the exact marker-owned workspace."""
+    probe = getattr(
+        environment,
+        "frontmost_application_name",
+        None,
+    )
+
+    # If the environment exposes a cheap frontmost-app probe, use it to
+    # reacquire before an expensive full observation. Unknown focus is not
+    # treated as wrong focus.
+    if callable(probe):
+        frontmost = probe()
+
+        if (
+            frontmost is not None
+            and frontmost != spec.expected_application
+        ):
+            progress(
+                "Browser focus changed; re-acquiring the exact "
+                "Agent-owned Chrome task window."
+            )
+
+            environment.activate_task_chrome_window(
+                _browser_window_marker_from_state(
+                    state,
+                    spec,
+                ),
+                spec.working_url_prefix,
+            )
+
+            current = environment.observe()
+            _publish_observation_timing(
+                environment,
+                progress,
+            )
+
+            _require_expected_app(
+                current,
+                spec,
+            )
+
+            return current
+
+    # If we do not already have a usable observation, observe first.
+    # Only reactivate Chrome when that fresh observation proves that the
+    # wrong application is frontmost.
+    current = observation
+
+    if current is None or refresh:
+        current = environment.observe()
+        _publish_observation_timing(
+            environment,
+            progress,
+        )
+
+    if current.application_name != spec.expected_application:
+        progress(
+            "Browser focus changed; re-acquiring the exact "
+            "Agent-owned Chrome task window."
+        )
+
+        environment.activate_task_chrome_window(
+            _browser_window_marker_from_state(
+                state,
+                spec,
+            ),
+            spec.working_url_prefix,
+        )
+
+        current = environment.observe()
+        _publish_observation_timing(
+            environment,
+            progress,
+        )
+
+    _require_expected_app(
+        current,
+        spec,
+    )
+
+    return current
+
+
+def _publish_observation_timing(
+    environment: object,
+    progress: Callable[[str], None],
+) -> None:
+    timings = getattr(
+        environment,
+        "last_observation_timings",
+        None,
+    )
+    if not isinstance(timings, dict) or not timings:
+        return
+
+    observe_total = _timing_value(timings, "observe_total")
+    if observe_total is None:
+        return
+
+    accessibility = sum(
+        value
+        for key, value in timings.items()
+        if key.startswith("accessibility")
+        or key in (
+            "frontmost_application",
+            "viewport",
+        )
+    )
+    ocr = _timing_value(timings, "ocr") or 0.0
+    fusion = _timing_value(timings, "fusion") or 0.0
+    stabilization = _timing_value(timings, "stabilization") or 0.0
+    known = accessibility + ocr + fusion + stabilization
+    other = max(0.0, observe_total - known)
+    progress(
+        "Timing: Last observation "
+        f"{observe_total:.2f} s "
+        f"(Accessibility {accessibility:.2f} s, "
+        f"OCR {ocr:.2f} s, Fusion {fusion:.2f} s, "
+        f"Stabilization {stabilization:.2f} s, "
+        f"Other {other:.2f} s)."
+    )
+
+
+def _timing_value(
+    timings: dict,
+    key: str,
+) -> float | None:
+    value = timings.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value < 0:
+        return None
+    return float(value)
+
 def _reconcile_followup_navigation_condition(
     *,
     state: TaskState,
@@ -2639,10 +3022,30 @@ def _reconcile_followup_navigation_condition(
             "state nor the requested destination."
         )
 
-    link_grounding = _ground_followup_link(
-        observation,
-        resolved_task,
+    readiness = _ground_followup_link_with_readiness(
+        state=state,
+        transitions=transitions,
+        environment=environment,
+        resolved_task=resolved_task,
+        observation=observation,
+        publish_state=publish_state,
+        progress=progress,
     )
+    observation = readiness.observation
+    if readiness.already_at_destination:
+        return observation
+    if readiness.grounding is None:
+        raise RuntimeError(
+            "Follow-up readiness finished without "
+            "a grounded link or destination evidence."
+        )
+
+    _persist_followup_destination_identity(
+        transitions,
+        resolved_task,
+        readiness.grounding,
+    )
+    publish_state()
 
     _ensure_followup_side_effect(
         transitions,
@@ -2680,12 +3083,24 @@ def _reconcile_followup_navigation_condition(
         "through newly grounded live UI coordinates."
     )
 
-    del link_grounding
+    action_target = None
+    if readiness.grounding.element is not None:
+        action_target = TargetSpec(
+            text=_followup_target_text(
+                resolved_task
+            ),
+            element_types=("link",),
+            minimum_confidence=0.70,
+            reference_point=(
+                readiness.grounding.element.center
+            ),
+        )
     result = _execute_agent_plan(
         environment,
         build_followup_plan(
             state.goal,
             resolved_task,
+            action_target=action_target,
         ),
     )
 
@@ -2694,16 +3109,21 @@ def _reconcile_followup_navigation_condition(
     )
 
     final_observation = environment.observe()
+    _publish_observation_timing(
+        environment,
+        progress,
+    )
     _require_expected_app(
         final_observation,
         spec,
     )
 
-    destination = _followup_destination_visible(
+    destination = _followup_destination_postcondition(
         final_observation,
         resolved_task,
+        state=transitions.state,
     )
-    if not destination:
+    if destination is None:
         _mark_followup_outcome_unknown(
             transitions,
         )
@@ -2722,14 +3142,8 @@ def _reconcile_followup_navigation_condition(
     evidence = _verify_followup_from_current_observation(
         transitions,
         resolved_task,
-        summary=(
-            "The requested Wikipedia destination "
-            f"{resolved_task.followup_target_text!r} "
-            "is visible after follow-up navigation."
-        ),
-        source=(
-            "Post-follow-up live Chrome observation"
-        ),
+        summary=destination.summary,
+        source=destination.source,
     )
     _confirm_followup_side_effect(
         transitions,
@@ -3270,10 +3684,12 @@ def _reconcile_followup_if_destination_visible(
     ):
         return None
 
-    if not _followup_destination_visible(
+    destination = _followup_destination_postcondition(
         observation,
         resolved_task,
-    ):
+        state=transitions.state,
+    )
+    if destination is None:
         return None
 
     _reconcile_search_history_from_final_destination(
@@ -3284,14 +3700,8 @@ def _reconcile_followup_if_destination_visible(
     evidence = _verify_followup_from_current_observation(
         transitions,
         resolved_task,
-        summary=(
-            "Fresh browser state verifies "
-            "the requested Wikipedia destination "
-            f"{resolved_task.followup_target_text!r}."
-        ),
-        source=(
-            "Live Chrome destination observation"
-        ),
+        summary=destination.summary,
+        source=destination.source,
     )
     _confirm_followup_side_effect(
         transitions,
@@ -3606,29 +4016,172 @@ def _confirm_followup_side_effect(
     )
 
 
-def _ground_followup_link(
+def _try_ground_followup_link(
     observation: TextInputObservation,
     resolved_task: ResolvedDurableWebSearchTask,
-):
-    grounding = UIGrounder().ground(
-        _followup_link_target(
-            resolved_task
-        ),
+) -> GroundingResult:
+    resolver = SemanticTargetResolver(
+        destination_normalizer=_wikipedia_article_identity,
+    )
+    return resolver.ground(
+        _followup_link_target(resolved_task),
         observation.snapshot.fused_elements,
     )
 
-    if (
-        grounding.status
-        is GroundingStatus.RESOLVED
-    ):
+
+def _ground_followup_link(
+    observation: TextInputObservation,
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> GroundingResult:
+    grounding = _try_ground_followup_link(
+        observation,
+        resolved_task,
+    )
+
+    if grounding.status is GroundingStatus.RESOLVED:
         return grounding
 
+    _raise_followup_grounding_error(
+        resolved_task,
+        grounding,
+    )
+
+
+def _ground_followup_link_with_readiness(
+    *,
+    state: TaskState,
+    transitions: TaskStateTransitions,
+    environment: LiveWebEnvironment,
+    resolved_task: ResolvedDurableWebSearchTask,
+    observation: TextInputObservation,
+    publish_state: TaskStatePublisher,
+    progress: Callable[[str], None],
+) -> FollowupLinkReadinessResult:
+    current = observation
+    grounding = _try_ground_followup_link(
+        current,
+        resolved_task,
+    )
+    if grounding.status is GroundingStatus.RESOLVED:
+        return FollowupLinkReadinessResult(
+            observation=current,
+            grounding=grounding,
+        )
+    if grounding.status is not GroundingStatus.NOT_FOUND:
+        _raise_followup_grounding_error(
+            resolved_task,
+            grounding,
+        )
+
+    for _ in range(
+        FOLLOWUP_LINK_READINESS_REOBSERVATIONS
+    ):
+        progress(
+            "Requested link is not exposed yet; "
+            "refreshing browser state."
+        )
+        current = _ensure_expected_workspace_observation(
+            state=state,
+            environment=environment,
+            spec=resolved_task.spec,
+            observation=None,
+            refresh=True,
+            progress=progress,
+        )
+
+        already_final = (
+            _reconcile_followup_if_destination_visible(
+                transitions=transitions,
+                resolved_task=resolved_task,
+                observation=current,
+                publish_state=publish_state,
+                progress=progress,
+            )
+        )
+        if already_final is not None:
+            return FollowupLinkReadinessResult(
+                observation=already_final,
+                grounding=None,
+                already_at_destination=True,
+            )
+
+        grounding = _try_ground_followup_link(
+            current,
+            resolved_task,
+        )
+        if grounding.status is GroundingStatus.RESOLVED:
+            return FollowupLinkReadinessResult(
+                observation=current,
+                grounding=grounding,
+            )
+        if grounding.status is not GroundingStatus.NOT_FOUND:
+            _raise_followup_grounding_error(
+                resolved_task,
+                grounding,
+            )
+
+    _raise_followup_grounding_error(
+        resolved_task,
+        grounding,
+    )
+
+
+def _raise_followup_grounding_error(
+    resolved_task: ResolvedDurableWebSearchTask,
+    grounding: GroundingResult,
+) -> NoReturn:
     raise RuntimeError(
         "The requested Wikipedia follow-up link "
         f"{resolved_task.followup_target_text!r} "
         "did not resolve to one actionable link: "
-        f"{grounding.status.value}."
+        f"{grounding.status.value}. "
+        + _followup_ambiguity_diagnostics(grounding)
     )
+
+
+def _followup_ambiguity_diagnostics(
+    grounding: GroundingResult,
+) -> str:
+    eligible = tuple(
+        candidate
+        for candidate in grounding.candidates
+        if candidate.eligible
+    )
+    if not eligible:
+        return "No eligible actionable candidates were found."
+
+    lines = [
+        f"Eligible candidates: {len(eligible)}.",
+    ]
+    identities = []
+    for index, candidate in enumerate(eligible, start=1):
+        element = candidate.element
+        identity = _wikipedia_article_identity(element.value)
+        identities.append(identity)
+        box = element.bounding_box
+        lines.append(
+            "Candidate "
+            f"{index}: text={element.text!r}, "
+            f"type={element.element_type!r}, "
+            f"bounds=({box.left},{box.top},{box.width},{box.height}), "
+            f"destination={element.value!r}."
+        )
+
+    canonical = {
+        identity[0]
+        for identity in identities
+        if identity is not None
+    }
+    equivalent = (
+        len(identities) == len(eligible)
+        and all(identity is not None for identity in identities)
+        and len(canonical) == 1
+    )
+    lines.append(
+        "Equivalent destination: "
+        + ("yes." if equivalent else "no.")
+    )
+    return " ".join(lines)
 
 
 def _results_visible(
@@ -3672,18 +4225,218 @@ def _results_visible(
 def _followup_destination_visible(
     observation: TextInputObservation,
     resolved_task: ResolvedDurableWebSearchTask,
+    *,
+    state: TaskState | None = None,
 ) -> bool:
-    grounding = UIGrounder().ground(
+    return (
+        _followup_destination_postcondition(
+            observation,
+            resolved_task,
+            state=state,
+        )
+        is not None
+    )
+
+
+def _followup_destination_postcondition(
+    observation: TextInputObservation,
+    resolved_task: ResolvedDurableWebSearchTask,
+    *,
+    state: TaskState | None,
+) -> StepPostconditionResult | None:
+    direct = UIGrounder().ground(
         _followup_destination_target(
             resolved_task
         ),
         observation.snapshot.fused_elements,
     )
+    if direct.status is GroundingStatus.RESOLVED:
+        return StepPostconditionResult(
+            summary=(
+                "Fresh destination heading directly matches "
+                f"the requested Wikipedia link "
+                f"{resolved_task.followup_target_text!r}."
+            ),
+            source="Live Chrome destination heading observation",
+        )
 
-    return (
-        grounding.status
-        is GroundingStatus.RESOLVED
+    if state is None:
+        return None
+
+    artifact = state.artifacts.get(
+        FOLLOWUP_DESTINATION_ARTIFACT_ID
     )
+    if artifact is None:
+        return None
+
+    expected_identity = _wikipedia_article_identity(
+        artifact.location
+    )
+    current_url = _chrome_address_bar_url(
+        observation
+    )
+    current_identity = _wikipedia_article_identity(
+        current_url
+    )
+    if (
+        expected_identity is None
+        or current_identity is None
+        or expected_identity[0] != current_identity[0]
+    ):
+        return None
+
+    canonical_path, canonical_title = current_identity
+    heading = UIGrounder().ground(
+        TargetSpec(
+            text=canonical_title,
+            element_types=("heading",),
+            minimum_confidence=0.70,
+        ),
+        observation.snapshot.fused_elements,
+    )
+    if heading.status is not GroundingStatus.RESOLVED:
+        return None
+
+    return StepPostconditionResult(
+        summary=(
+            "Fresh Wikipedia navigation verifies requested link "
+            f"{resolved_task.followup_target_text!r}: persisted "
+            f"destination {canonical_path!r} agrees with the fresh "
+            f"address-bar URL and heading {canonical_title!r}."
+        ),
+        source=(
+            "Persisted grounded-link AXURL plus fresh Chrome address bar "
+            "and Wikipedia heading"
+        ),
+    )
+
+
+def _ensure_followup_destination_identity(
+    transitions: TaskStateTransitions,
+    observation: TextInputObservation,
+    resolved_task: ResolvedDurableWebSearchTask,
+) -> None:
+    grounding = _ground_followup_link(
+        observation,
+        resolved_task,
+    )
+    _persist_followup_destination_identity(
+        transitions,
+        resolved_task,
+        grounding,
+    )
+
+
+def _persist_followup_destination_identity(
+    transitions: TaskStateTransitions,
+    resolved_task: ResolvedDurableWebSearchTask,
+    grounding,
+) -> None:
+    element = grounding.element
+    raw_url = (
+        getattr(element, "value", None)
+        if element is not None
+        else None
+    )
+    identity = _wikipedia_article_identity(
+        raw_url
+    )
+    if identity is None:
+        # Direct requested-heading verification remains available when AXURL
+        # is genuinely unavailable. Never invent a destination URL.
+        return
+
+    canonical_path, _ = identity
+    canonical_url = (
+        "https://en.wikipedia.org"
+        + canonical_path
+    )
+    existing = transitions.state.artifacts.get(
+        FOLLOWUP_DESTINATION_ARTIFACT_ID
+    )
+    if existing is not None:
+        existing_identity = _wikipedia_article_identity(
+            existing.location
+        )
+        if (
+            existing_identity is None
+            or existing_identity[0] != canonical_path
+        ):
+            raise RuntimeError(
+                "Persisted Wikipedia follow-up destination does not "
+                "match the freshly grounded link."
+            )
+        return
+
+    transitions.add_artifact(
+        ArtifactRecord(
+            artifact_id=FOLLOWUP_DESTINATION_ARTIFACT_ID,
+            description=(
+                "Canonical Wikipedia destination of the uniquely "
+                "grounded follow-up link."
+            ),
+            location=canonical_url,
+        )
+    )
+
+
+def _chrome_address_bar_url(
+    observation: TextInputObservation,
+) -> str | None:
+    expected_label = normalize_ui_text(
+        "Address and search bar"
+    )
+    values = []
+    for element in observation.snapshot.fused_elements:
+        if element.element_type != "text_field":
+            continue
+        if normalize_ui_text(element.text or "") != expected_label:
+            continue
+        value = element.value
+        if isinstance(value, str) and value.strip():
+            values.append(value.strip())
+
+    unique = tuple(dict.fromkeys(values))
+    if len(unique) != 1:
+        return None
+    return unique[0]
+
+
+def _wikipedia_article_identity(
+    raw_url: object,
+) -> tuple[str, str] | None:
+    if not isinstance(raw_url, str) or not raw_url.strip():
+        return None
+
+    value = raw_url.strip()
+    if value.startswith("/wiki/"):
+        value = "https://en.wikipedia.org" + value
+    elif "://" not in value:
+        value = "https://" + value
+
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return None
+
+    if (parsed.hostname or "").lower() != "en.wikipedia.org":
+        return None
+
+    path = unquote(parsed.path or "")
+    prefix = "/wiki/"
+    if not path.startswith(prefix):
+        return None
+
+    slug = path[len(prefix):].strip()
+    if not slug or slug.startswith("Special:"):
+        return None
+
+    canonical_path = prefix + slug
+    canonical_title = slug.replace("_", " ").strip()
+    if not canonical_title:
+        return None
+
+    return canonical_path, canonical_title
 
 
 def _followup_link_target(

@@ -182,13 +182,18 @@ def _engine(
     ocr,
     fusion,
     capture_path,
+    clock=None,
 ):
+    kwargs = {}
+    if clock is not None:
+        kwargs["clock"] = clock
     return PerceptionEngine(
         screen_capture=screen_capture,
         accessibility_reader=accessibility_reader,
         ocr=ocr,
         fusion=fusion,
         capture_path=capture_path,
+        **kwargs,
     )
 
 
@@ -281,6 +286,31 @@ def test_complete_observation_loads_rgb_maps_ocr_and_fuses(tmp_path):
         "ocr": 1,
         "fused": 1,
     }
+    assert all(value >= 0 for value in snapshot.timings.values())
+
+
+def test_observation_timings_use_deterministic_clock(tmp_path):
+    image_path = tmp_path / "screen.png"
+    _save_image(image_path)
+    frame = _frame(image_path)
+    ticks = iter(float(value) for value in range(20))
+    engine = _engine(
+        screen_capture=FakeScreenCapture([frame]),
+        accessibility_reader=FakeAccessibilityReader([[]]),
+        ocr=FakeOCR([[]]),
+        fusion=RecordingFusion([[]]),
+        capture_path=tmp_path / "capture.png",
+        clock=lambda: next(ticks),
+    )
+
+    snapshot = engine.observe()
+
+    assert snapshot.timings["screen_capture"] == 1.0
+    assert snapshot.timings["image_load"] == 1.0
+    assert snapshot.timings["accessibility_controls"] == 1.0
+    assert snapshot.timings["ocr"] == 1.0
+    assert snapshot.timings["fusion"] == 1.0
+    assert snapshot.timings["perception_total"] == 11.0
 
 
 def test_accessibility_only_partial_success_when_ocr_fails(tmp_path):

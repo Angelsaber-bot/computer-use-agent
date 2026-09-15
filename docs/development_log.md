@@ -5194,3 +5194,68 @@ Crash recovery does not re-plan: passed
 Planner calls observed: 2
 Experiment acceptance: passed
 ```
+
+## Phase 06.08.05 — Real-World Robustness Pass
+
+Phase 06.08.05 is a robustness pass over the existing durable live-web runtime. It does not add new websites, arbitrary web browsing, arbitrary scrolling, arbitrary multi-hop navigation, or LLM-directed execution.
+
+The pass preserves the current dirty-tree fixes: exact marker-owned Chrome workspace reacquisition when Python/Computer Agent becomes frontmost, main-window progress and elapsed display, and canonical Wikipedia destination verification for `data structures -> Data structure`.
+
+Accessibility URL handling was tightened and tested. For `AXLink` controls, `MacOSAccessibility` now reads `AXURL` into `UIElement.value` before falling back to `AXValue`. Tests cover direct string URLs, NSURL-like `absoluteString()`, and fallback behavior.
+
+Wikipedia follow-up grounding now uses a layered semantic resolver:
+
+- normal exact `UIGrounder` resolution first;
+- equivalent-link disambiguation only when all eligible exact same-text candidates are actionable links with usable in-scope Wikipedia AXURLs and a single canonical destination;
+- bounded wrapped-text composition only when exact matching did not already resolve the target.
+
+Equivalent duplicate links are not first-match behavior. The chosen physical candidate is topmost, then leftmost, after destination equivalence is externally proven. Missing URL, malformed URL, wrong domain, or differing destination keeps the target ambiguous and fails closed. Ambiguity diagnostics report candidate count, text, type, bounds, destination, and whether destination equivalence was proven.
+
+The follow-up destination URL is persisted before clicking as `live-web-followup-destination` when AXURL evidence is available. Destination verification has two safe paths:
+
+- direct fresh heading match for literal destinations such as `Turing machine`;
+- canonical Wikipedia destination verification requiring persisted pre-click AXURL, fresh address-bar URL, matching canonical `/wiki/...` path, URL-derived title, fresh unique heading, and Wikipedia scope.
+
+This keeps the live `Search Wikipedia for computer science and open data structures` behavior correct: the requested anchor text is `data structures`, while the canonical destination is `https://en.wikipedia.org/wiki/Data_structure` with heading `Data structure`.
+
+Wrapped/multiline grounding is implemented in `SemanticTargetResolver` rather than by weakening `UIGrounder`. It composes only deterministic nearby fragments in reading order with bounded geometry and exact normalized text equality. It supports whitespace wrapping and strict hyphen wrapping, including `reinforce-` + `ment` -> `reinforcement`, while preserving meaningful hyphens such as `state-of-` + `the-art` -> `state-of-the-art`. OCR-only split text is not treated as a trusted clickable link. Actionable split links require Accessibility link fragments and equivalent URL proof.
+
+The desktop app now creates a minimal macOS menu-bar status item through `QSystemTrayIcon`. It uses a small fixed icon, tooltip/menu status rows, and explicit Pause/Resume, Stop, and Show Main Window actions. It consumes the same `RuntimeEvent`-derived UI state as the main window and does not focus the main window on progress updates. The explicit Show Main Window menu action is the only tray path that calls `show`, `raise_`, and `activateWindow`.
+
+Observation timing instrumentation is non-durable. `PerceptionSnapshot.timings` records screen capture/load, Accessibility controls, OCR, fusion, and perception total. `LiveWebEnvironment.observe()` records stabilization, frontmost application, viewport, semantic element reads, and total observation time. The main window displays compact latest-observation timing diagnostics, while activity logs retain timing progress messages.
+
+Safe read-only reliability optimizations were added after measurement:
+
+- before an action, if a fresh browser state is not ready for the next durable step, the runtime re-observes a bounded number of times before failing closed;
+- after an action, if the first fresh post-action observation does not externally verify the postcondition, the runtime re-observes a bounded number of times before deciding the side effect outcome.
+
+These are not action retries. They do not repeat typing or clicking and do not accept AgentLoop completion without external verification.
+
+An additional Wikipedia follow-up readiness race was fixed after a live `Alan Turing -> Turing machine` run reached the article page but the first fused Accessibility snapshot did not expose the visible blue `Turing machine` link as actionable. The durable `OPEN_LINK` path now separates pure deterministic grounding from readiness policy: `RESOLVED` continues normally, `AMBIGUOUS` and `UNSAFE` fail closed immediately, and only `NOT_FOUND` performs at most two fresh read-only observations through the existing marker-owned Chrome workspace helper. Each refreshed observation checks the most advanced external state first, so if the destination is already visible the worker reconciles durable state and does not click again. No punctuation matching change, confidence-threshold change, fuzzy clicking, OCR-only link clicking, action retry, or stale-coordinate reuse was introduced.
+
+Live measurements and outcomes:
+
+- `Search Wikipedia for computer science.` completed in 42.52 s before the read-only retry changes and 42.55 s after. Observation timings included about 1.6 s OCR and up to 2.5 s Accessibility on post-submit verification.
+- `Search Wikipedia for computer science and open data structures` completed in 61.65 s before the final post-action retry change and 61.97 s after. Canonical destination verification passed for `/wiki/Data_structure` and heading `Data structure`.
+- `Search Wikipedia for Alan Turing and open Turing machine.` completed through the real macOS app after the follow-up AX readiness recovery change. The final Chrome URL was `https://en.wikipedia.org/wiki/Turing_machine` and elapsed app time was 71.3 s.
+- A second fresh `Search Wikipedia for Alan Turing and open Turing machine.` run through the live harness also completed at `https://en.wikipedia.org/wiki/Turing_machine` in 70 s.
+- `Search Wikipedia for computer science and open data structures.` completed through the real macOS app after the follow-up AX readiness recovery change. Canonical destination verification passed at `https://en.wikipedia.org/wiki/Data_structure` and elapsed app time was 56.1 s.
+- `Search Wikipedia for Artificial intelligence and open perception` failed closed through the real macOS app after 58.2 s. Actual eligible AXURLs were `https://en.wikipedia.org/wiki/Perception` and `https://en.wikipedia.org/wiki/Machine_perception`; equivalence was not proven, so no click was forced.
+- During the real app validation run, the menu-bar/runtime UI state path showed `Running`, `Step N/M`, current activity, elapsed time, observation timing, and later `Completed` or `Failed` without focusing the main window for progress updates.
+- `Search python.org for asyncio.` initially failed after 25.78 s because the first post-action observation did not verify results while AgentLoop bookkeeping failed. After bounded read-only post-action re-observation, it completed in 19.73 s.
+- `Search python.org for asyncio.` completed through the real macOS app after the follow-up AX readiness recovery change in 22.1 s at `https://www.python.org/search/?q=asyncio&submit=`.
+
+Dominant measured bottlenecks were observation costs, especially OCR and Accessibility traversal. OCR was typically about 0.8-1.7 s per measured observation. Accessibility was usually subsecond to about 2.6 s on normal result pages, but reached 9.77 s on the `Artificial intelligence` result page. Stabilization remained a fixed 0.60 s per observation. No broad OCR disabling, threshold lowering, stale coordinate reuse, fuzzy matching, or unbounded retry was introduced.
+
+Validation completed:
+
+- focused live-worker, Accessibility, workspace, grounding, perception, durable planning, AgentLoop, task recovery, and tray/status tests: 431 passed;
+- full repository suite: 2056 passed;
+- `compileall -q src experiments tests`: passed.
+
+Remaining limitations:
+
+- duplicate same-text links resolve only when AXURL equivalence proves a single in-scope Wikipedia destination;
+- Wikipedia redirects are not generalized in this phase;
+- live multiline success was validated by deterministic fixtures only, not claimed from an observed real split target;
+- timing instrumentation identifies OCR and Accessibility as bottlenecks, but this pass did not safely remove those costs globally.

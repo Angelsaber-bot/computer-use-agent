@@ -437,3 +437,40 @@ Existing crash points remain: `query_checkpoint`, `submit_execution`, and `follo
 The deterministic Experiment 06.08.03 covers plan compilation for Wikipedia search-only, Wikipedia follow-up, and python.org search-only goals; uninterrupted 3-step execution; resume from Step 1; resume from Step 2; resume already at Step 3 destination; persisted plan tampering failure; and search-only regression.
 
 Live regression validation passed for `Search Wikipedia for Claude Shannon and open Information theory.`, the same goal with `followup_execution` crash/resume, and `Search python.org for asyncio.` A local PyAutoGUI fail-safe condition was encountered before validation because the pointer was at a screen corner; moving the pointer away restored normal tool execution and no production code change was needed for that environment issue.
+
+#### Phase 06.08.05: Real-World Robustness Pass
+
+Phase 06.08.05 hardens the existing durable live-web runtime without adding new websites, arbitrary browsing, or new LLM execution authority.
+
+Accessibility link URLs are now surfaced through the existing `UIElement.value` field for `AXLink` elements by reading `AXURL` first and falling back to `AXValue` only when no URL is available. Wikipedia follow-up grounding keeps the normal exact semantic path for a unique link. When exact same-text links are ambiguous, it collapses them only if every eligible candidate is an actionable link, every candidate has an in-scope Wikipedia AXURL, and all URLs normalize to exactly one canonical `/wiki/...` destination. The selected physical instance is deterministic: topmost, then leftmost. Missing URLs, malformed URLs, wrong-domain URLs, or differing URLs remain ambiguous and fail closed with concise candidate diagnostics.
+
+For follow-up clicks with a proven AXURL, the worker persists `live-web-followup-destination` before clicking. Destination verification still accepts the direct heading path such as `Turing machine -> Turing machine`. It also accepts the canonical Wikipedia destination path when persisted pre-click AXURL, fresh Chrome address-bar URL, URL-derived canonical title, fresh unique heading, and Wikipedia scope all agree. This preserves the live `data structures -> Data structure` behavior without accepting URL change alone, heading alone, click bookkeeping alone, or AgentLoop completion alone.
+
+Wrapped/multiline semantic grounding is implemented as a bounded resolver layered above the exact `UIGrounder`. It first tries normal exact Accessibility/fused text. Only if needed, it composes nearby fragments in deterministic reading order with strict geometry limits and exact normalized text equality. It supports safe line-wrap hyphen forms such as `reinforce-` + `ment` -> `reinforcement`, while preserving meaningful hyphens such as `state-of-` + `the-art` -> `state-of-the-art`. OCR-only split text may support visual evidence but is not promoted into a trusted clickable link. Split actionable links require Accessibility link evidence and equivalent destination proof.
+
+The macOS app now creates a minimal `QSystemTrayIcon` menu-bar status item with a fixed icon, tooltip, disabled status rows, and explicit `Pause`, `Resume`, `Stop`, and `Show Main Window` actions. It consumes the same `RuntimeEvent`-derived UI state as the main window. Progress updates do not show or focus the main window; only the explicit menu action does. The existing exact marker-owned Chrome workspace reacquisition remains in place for cases where the user brings Python or the Computer Agent UI frontmost during execution.
+
+Observation timing instrumentation records non-durable, latest-operation timings for stabilization, screen capture/load, Accessibility controls, Accessibility semantic elements, viewport/frontmost-app reads, OCR, fusion, and total observation time. The main window displays compact latest observation diagnostics and the activity log receives timing progress messages.
+
+Live timing measurements showed observation dominates runtime. OCR was commonly about 0.8-1.7 s per measured observation, while Accessibility grew as high as 9.77 s on the `Artificial intelligence` search results page. The fixed stabilization sleep contributes 0.60 s per observation. No broad OCR disabling, confidence lowering, stale coordinate reuse, or fuzzy matching was introduced. The reliability optimization added in this pass is bounded read-only re-observation before an action when a newly opened page is not ready, and bounded read-only re-observation after an action when the first fresh post-action state is not yet externally verified. It does not retry the action.
+
+Follow-up link grounding now has a narrow Wikipedia AX readiness recovery. After the search/article outcome is verified, a `NOT_FOUND` result for the requested follow-up link triggers at most two fresh read-only workspace observations using the existing marker-owned Chrome reacquisition path. Each refreshed observation first checks whether the requested destination is already externally visible; if so, durable state is reconciled and no duplicate link click is performed. Only `NOT_FOUND` is retried. `AMBIGUOUS` and `UNSAFE` still fail closed immediately, exact semantic matching and confidence thresholds are unchanged, OCR-only text is not promoted to an actionable link, and the eventual click uses only coordinates from the fresh resolved observation.
+
+Live validation:
+
+- `Search Wikipedia for computer science and open data structures` completed; canonical destination verification accepted `https://en.wikipedia.org/wiki/Data_structure` with heading `Data structure`.
+- `Search Wikipedia for Alan Turing and open Turing machine.` completed after the follow-up AX readiness recovery change; the final Chrome URL was `https://en.wikipedia.org/wiki/Turing_machine`.
+- `Search Wikipedia for Artificial intelligence and open perception` failed closed. The two eligible `perception` link AXURLs were `https://en.wikipedia.org/wiki/Perception` and `https://en.wikipedia.org/wiki/Machine_perception`, so destination equivalence was not proven and no click was forced.
+- `Search python.org for asyncio` completed after bounded read-only post-action verification handling.
+- During the live app run, the menu-bar/runtime UI path showed `Running`, `Step N/M`, current activity, elapsed time, observation timing, and later `Completed` or `Failed` without focusing the main window for progress updates.
+- A prior live run observed Python/Computer Agent focus stealing the frontmost app; the runtime reacquired the exact persisted marker-owned Chrome task window before continuing.
+- Multiline grounding was validated through deterministic fixtures. No live page was claimed to expose a genuine split semantic target during this pass.
+
+Measured live wall times:
+
+- Wikipedia `computer science`: 42.52 s before the read-only retry changes, 42.55 s after.
+- Wikipedia `computer science` + `data structures`: 61.65 s before the final post-action retry change, 61.97 s after.
+- python.org `asyncio`: first run failed after 25.78 s because the first fresh post-action observation did not yet verify results; after bounded read-only post-action re-observation, it completed in 19.73 s.
+- After the follow-up AX readiness recovery change, live app runs measured: Alan Turing -> Turing machine 71.3 s; computer science -> data structures 56.1 s; Artificial intelligence -> perception fail-closed ambiguity 58.2 s; python.org asyncio 22.1 s. A second fresh Alan Turing -> Turing machine run through the live harness also completed at `https://en.wikipedia.org/wiki/Turing_machine` in 70 s.
+
+Final Phase 06.08.05 validation completed with 2056 passing tests. Focused regression coverage included live-worker, Accessibility, workspace, grounding, perception, durable planning, AgentLoop, task recovery, and tray/status tests. `compileall` passed.

@@ -22,6 +22,7 @@ from computer_agent.app.live_web_worker import (
     DurablePostconditionKind,
     DurableStepKind,
     DurableWebSearchSpec,
+    FOLLOWUP_DESTINATION_ARTIFACT_ID,
     FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID,
     FOLLOWUP_TARGET_ARTIFACT_ID,
     GO_BUTTON,
@@ -42,9 +43,12 @@ from computer_agent.app.live_web_worker import (
     QUERY_SUBGOAL_ID,
     _browser_window_marker_from_state,
     _ensure_durable_plan_identity,
+    _ensure_expected_workspace_observation,
     _ensure_followup_identity,
     _ensure_query_identity,
     _ensure_workflow_identity,
+    _followup_destination_postcondition,
+    _ground_followup_link,
     _maybe_inject_process_crash,
     _ensure_live_task_structure,
     _search_field_with_expected_value,
@@ -229,8 +233,12 @@ class FakeLiveWebEnvironment:
         spec: DurableWebSearchSpec = PYTHON_WORKFLOW,
         query_text: str | None = None,
         followup_target_text: str | None = None,
+        followup_link_value: str | None = None,
+        destination_heading_text: str | None = None,
+        address_bar_value: str | None = None,
         click_external_modes: tuple[str, ...] = (),
         click_loop_statuses: tuple[AgentLoopStatus, ...] = (),
+        frontmost_sequence: tuple[str | None, ...] = (),
     ) -> None:
         del capture_path
         self.mode = mode
@@ -247,21 +255,46 @@ class FakeLiveWebEnvironment:
         self.followup_target_text = (
             followup_target_text
         )
+        self.followup_link_value = followup_link_value
+        self.destination_heading_text = (
+            destination_heading_text
+        )
+        self.address_bar_value = address_bar_value
         self.click_external_modes = list(
             click_external_modes
         )
         self.click_loop_statuses = list(
             click_loop_statuses
         )
+        self.frontmost_sequence = list(
+            frontmost_sequence
+        )
         self.open_count = 0
         self.activate_count = 0
+        self.frontmost_probe_count = 0
         self.type_count = 0
         self.click_count = 0
         self.submit_click_count = 0
         self.followup_click_count = 0
+        self.click_reference_points: list[
+            tuple[float, float] | None
+        ] = []
         self.markers: list[str] = []
         self.perception_engine = object()
         self.executor = object()
+        self.last_observation_timings = {
+            "observe_total": 0.0,
+            "accessibility_controls": 0.0,
+            "ocr": 0.0,
+            "fusion": 0.0,
+            "stabilization": 0.0,
+        }
+
+    def frontmost_application_name(self) -> str | None:
+        self.frontmost_probe_count += 1
+        if self.frontmost_sequence:
+            return self.frontmost_sequence.pop(0)
+        return "Google Chrome"
 
     def observe(self) -> TextInputObservation:
         return TextInputObservation(
@@ -322,6 +355,13 @@ class FakeLiveWebEnvironment:
                 step.action_target,
                 "text",
                 None,
+            )
+            self.click_reference_points.append(
+                getattr(
+                    step.action_target,
+                    "reference_point",
+                    None,
+                )
             )
             self.click_count += 1
             if (
@@ -453,7 +493,7 @@ class FakeLiveWebEnvironment:
                 elements.append(
                     _element(
                         text=self.followup_target_text,
-                        value=None,
+                        value=self.followup_link_value,
                         element_type="link",
                         bounding_box=BoundingBox(
                             x=30,
@@ -524,11 +564,139 @@ class FakeLiveWebEnvironment:
                 ),
             )
 
+        if self.mode == "unsafe_link":
+            assert self.followup_target_text is not None
+            return (
+                _element(
+                    text=self.spec.search_field.text,
+                    value=self.query_text,
+                ),
+                _button(
+                    self.spec.submit_target.text
+                    or "",
+                    bounding_box=submit_box,
+                ),
+                _element(
+                    text=self.spec.result_target.text,
+                    value=None,
+                    element_type="heading",
+                ),
+                _element(
+                    text=self.followup_target_text,
+                    value=(
+                        "https://en.wikipedia.org/wiki/"
+                        "Information_theory"
+                    ),
+                    element_type="link",
+                    enabled=False,
+                    bounding_box=BoundingBox(
+                        x=30,
+                        y=100,
+                        width=220,
+                        height=20,
+                    ),
+                ),
+            )
+
+        if self.mode in (
+            "ambiguous_link_same_url",
+            "ambiguous_link_different_url",
+        ):
+            assert self.followup_target_text is not None
+            if self.mode == "ambiguous_link_same_url":
+                first_url = second_url = (
+                    "https://en.wikipedia.org/wiki/"
+                    "Information_theory"
+                )
+            else:
+                first_url = (
+                    "https://en.wikipedia.org/wiki/"
+                    "Information_theory"
+                )
+                second_url = (
+                    "https://en.wikipedia.org/wiki/"
+                    "Information"
+                )
+            return (
+                _element(
+                    text=self.spec.search_field.text,
+                    value=self.query_text,
+                ),
+                _button(
+                    self.spec.submit_target.text
+                    or "",
+                    bounding_box=submit_box,
+                ),
+                _element(
+                    text=self.spec.result_target.text,
+                    value=None,
+                    element_type="heading",
+                ),
+                _element(
+                    text=self.followup_target_text,
+                    value=first_url,
+                    element_type="link",
+                    bounding_box=BoundingBox(
+                        x=80,
+                        y=140,
+                        width=220,
+                        height=20,
+                    ),
+                ),
+                _element(
+                    text=self.followup_target_text,
+                    value=second_url,
+                    element_type="link",
+                    bounding_box=BoundingBox(
+                        x=30,
+                        y=100,
+                        width=220,
+                        height=20,
+                    ),
+                ),
+            )
+
         if self.mode == "destination":
             assert self.followup_target_text is not None
             return (
                 _element(
-                    text=self.followup_target_text,
+                    text=(
+                        self.destination_heading_text
+                        or self.followup_target_text
+                    ),
+                    value=None,
+                    element_type="heading",
+                    bounding_box=BoundingBox(
+                        x=10,
+                        y=60,
+                        width=280,
+                        height=32,
+                    ),
+                ),
+            )
+
+        if self.mode == "canonical_destination":
+            return (
+                _element(
+                    text="Address and search bar",
+                    value=(
+                        self.address_bar_value
+                        or "https://en.wikipedia.org/wiki/"
+                        "Information_theory"
+                    ),
+                    element_type="text_field",
+                    bounding_box=BoundingBox(
+                        x=100,
+                        y=10,
+                        width=300,
+                        height=20,
+                    ),
+                ),
+                _element(
+                    text=(
+                        self.destination_heading_text
+                        or "Information theory"
+                    ),
                     value=None,
                     element_type="heading",
                     bounding_box=BoundingBox(
@@ -684,6 +852,116 @@ class SubmitBookkeepingEnvironment(
         return super().execute_plan(
             plan
         )
+
+
+class WrongApplicationEnvironment(FakeLiveWebEnvironment):
+    def observe(self) -> TextInputObservation:
+        observation = super().observe()
+        return TextInputObservation(
+            application_name="TextEdit",
+            viewport=observation.viewport,
+            snapshot=observation.snapshot,
+            semantic_elements=observation.semantic_elements,
+        )
+
+
+class DelayedReadyEnvironment(FakeLiveWebEnvironment):
+    def __init__(
+        self,
+        *,
+        capture_path,
+        mode: str = "empty",
+        ready_mode: str = "empty",
+        initial_unready_observes: int = 1,
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            capture_path=capture_path,
+            mode=mode,
+            **kwargs,
+        )
+        self.ready_mode = ready_mode
+        self.initial_unready_observes = initial_unready_observes
+        self.observe_count = 0
+
+    def observe(self) -> TextInputObservation:
+        self.observe_count += 1
+        if self.observe_count > self.initial_unready_observes:
+            if self.mode == "ambiguous":
+                self.mode = self.ready_mode
+        return super().observe()
+
+
+class DelayedPostActionEnvironment(FakeLiveWebEnvironment):
+    def __init__(
+        self,
+        *,
+        capture_path,
+        delayed_mode: str,
+        final_mode: str,
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            capture_path=capture_path,
+            **kwargs,
+        )
+        self.delayed_mode = delayed_mode
+        self.final_mode = final_mode
+        self.delayed_observed = False
+
+    def execute_plan(
+        self,
+        plan,
+    ) -> AgentLoopResult:
+        result = super().execute_plan(plan)
+        step = plan.steps[0]
+        if (
+            not isinstance(step, WebTextInputStep)
+            and step.operation is PlanOperation.CLICK_TARGET
+        ):
+            self.mode = self.delayed_mode
+            self.delayed_observed = False
+        return result
+
+    def observe(self) -> TextInputObservation:
+        observation = super().observe()
+        if self.mode == self.delayed_mode:
+            if self.delayed_observed:
+                self.mode = self.final_mode
+            else:
+                self.delayed_observed = True
+        return observation
+
+
+class DelayedFollowupLinkEnvironment(
+    FakeLiveWebEnvironment
+):
+    def __init__(
+        self,
+        *,
+        capture_path,
+        ready_mode: str,
+        missing_link_observes: int = 1,
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            capture_path=capture_path,
+            **kwargs,
+        )
+        self.ready_mode = ready_mode
+        self.missing_link_observes = missing_link_observes
+        self.missing_link_observe_count = 0
+
+    def observe(self) -> TextInputObservation:
+        if self.mode == "missing_link":
+            self.missing_link_observe_count += 1
+            if (
+                self.missing_link_observe_count
+                > self.missing_link_observes
+            ):
+                self.mode = self.ready_mode
+
+        return super().observe()
 
 
 def _fake_environment_factory(
@@ -842,6 +1120,22 @@ def _run_worker_until_injected_crash(
     )
 
 
+def _state_with_browser_artifact(
+    spec: DurableWebSearchSpec = PYTHON_WORKFLOW,
+) -> TaskState:
+    state = TaskState(
+        goal=GOAL
+    )
+    state.artifacts[
+        spec.workspace_artifact_id
+    ] = ArtifactRecord(
+        artifact_id=spec.workspace_artifact_id,
+        description=spec.workspace_description,
+        location=BROWSER_WINDOW_MARKER_PREFIX + state.task_id,
+    )
+    return state
+
+
 def test_live_web_goal_support() -> None:
     assert goal_is_supported(
         GOAL
@@ -912,6 +1206,12 @@ def test_live_web_goal_support() -> None:
             "Information theory",
         ),
         (
+            "Search Wikipedia for Alan Turing and open Turing machine.",
+            "wikipedia",
+            "Alan Turing",
+            "Turing machine",
+        ),
+        (
             "search wikipedia for alan turing and open turing machine",
             "wikipedia",
             "alan turing",
@@ -965,6 +1265,171 @@ def test_live_web_goal_parser_rejects_python_followup() -> None:
         parse_live_web_search_goal(
             "Search python.org for asyncio and open documentation."
         )
+
+
+def test_expected_workspace_observation_does_not_activate_when_chrome_frontmost():
+    state = _state_with_browser_artifact()
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        frontmost_sequence=("Google Chrome",),
+    )
+    observation = environment.observe()
+    messages: list[str] = []
+
+    result = _ensure_expected_workspace_observation(
+        state=state,
+        environment=environment,
+        spec=PYTHON_WORKFLOW,
+        observation=observation,
+        refresh=False,
+        progress=messages.append,
+    )
+
+    assert result is observation
+    assert environment.activate_count == 0
+    assert not messages
+
+
+def test_expected_workspace_observation_reacquires_when_ui_steals_focus():
+    state = _state_with_browser_artifact()
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        frontmost_sequence=("Python",),
+    )
+    messages: list[str] = []
+
+    _ensure_expected_workspace_observation(
+        state=state,
+        environment=environment,
+        spec=PYTHON_WORKFLOW,
+        observation=environment.observe(),
+        refresh=False,
+        progress=messages.append,
+    )
+
+    assert environment.activate_count == 1
+    assert environment.markers[-1] == (
+        BROWSER_WINDOW_MARKER_PREFIX + state.task_id
+    )
+    assert any("exact Agent-owned Chrome" in message for message in messages)
+
+
+def test_expected_workspace_post_action_reacquires_before_refresh():
+    state = _state_with_browser_artifact()
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="results",
+        frontmost_sequence=("Python",),
+    )
+
+    _ensure_expected_workspace_observation(
+        state=state,
+        environment=environment,
+        spec=PYTHON_WORKFLOW,
+        observation=None,
+        refresh=True,
+        progress=lambda message: None,
+    )
+
+    assert environment.activate_count == 1
+
+
+def test_expected_workspace_reacquisition_failure_fails_closed():
+    state = _state_with_browser_artifact()
+    environment = WrongApplicationEnvironment(
+        capture_path=None,
+        mode="empty",
+        frontmost_sequence=("Python",),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="expected 'Google Chrome'",
+    ):
+        _ensure_expected_workspace_observation(
+            state=state,
+            environment=environment,
+            spec=PYTHON_WORKFLOW,
+            observation=environment.observe(),
+            refresh=False,
+            progress=lambda message: None,
+        )
+
+    assert environment.activate_count == 1
+
+
+def test_live_worker_reobserves_once_when_new_workspace_not_ready(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=GOAL
+    )
+    environment = DelayedReadyEnvironment(
+        capture_path=None,
+        mode="ambiguous",
+        ready_mode="empty",
+        initial_unready_observes=1,
+    )
+
+    (
+        _published_statuses,
+        _decisions,
+        progress_messages,
+        _control,
+    ) = _run_worker_with_fake_environment(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert environment.type_count == 1
+    assert (
+        state.status
+        is TaskStateStatus.COMPLETED
+    )
+    assert any(
+        "re-observing before any action" in message
+        for message in progress_messages
+    )
+
+
+def test_live_worker_reobserves_post_action_without_reclicking(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=GOAL
+    )
+    environment = DelayedPostActionEnvironment(
+        capture_path=None,
+        mode="empty",
+        delayed_mode="ambiguous",
+        final_mode="results",
+    )
+
+    (
+        _published_statuses,
+        _decisions,
+        progress_messages,
+        _control,
+    ) = _run_worker_with_fake_environment(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert environment.submit_click_count == 1
+    assert (
+        state.side_effects[
+            SUBMIT_SIDE_EFFECT_ID
+        ].state
+        is SideEffectState.CONFIRMED
+    )
+    assert any(
+        "post-action state is not verified yet" in message
+        for message in progress_messages
+    )
 
 
 def test_python_task_resolves_correctly() -> None:
@@ -2392,6 +2857,207 @@ def test_dynamic_queries_reuse_workflow_side_effect_identity(
     ]
 
 
+def test_followup_not_found_reobserves_then_uses_fresh_link_coordinates(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    environment = DelayedFollowupLinkEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_FOLLOWUP_QUERY,
+        followup_target_text=(
+            WIKIPEDIA_FOLLOWUP_TARGET
+        ),
+        click_external_modes=(
+            "missing_link",
+            "destination",
+        ),
+        ready_mode="results",
+        missing_link_observes=1,
+    )
+
+    (
+        _published_statuses,
+        _decisions,
+        progress_messages,
+        _control,
+    ) = _run_worker_with_fake_environment(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert environment.followup_click_count == 1
+    assert environment.missing_link_observe_count == 2
+    assert environment.click_reference_points[-1] == (
+        140.0,
+        110.0,
+    )
+    assert (
+        state.side_effects[
+            FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+        ].state
+        is SideEffectState.CONFIRMED
+    )
+    assert (
+        state.status
+        is TaskStateStatus.COMPLETED
+    )
+    assert any(
+        "Requested link is not exposed yet" in message
+        for message in progress_messages
+    )
+
+
+def test_followup_persistent_not_found_uses_bounded_reobservations(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    environment = DelayedFollowupLinkEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_FOLLOWUP_QUERY,
+        followup_target_text=(
+            WIKIPEDIA_FOLLOWUP_TARGET
+        ),
+        click_external_modes=("missing_link",),
+        ready_mode="missing_link",
+        missing_link_observes=99,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="not_found",
+    ):
+        _run_worker_with_fake_environment(
+            monkeypatch,
+            state,
+            environment,
+        )
+
+    assert environment.followup_click_count == 0
+    assert environment.missing_link_observe_count == 3
+    assert (
+        FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+        not in state.side_effects
+    )
+    assert (
+        state.status
+        is TaskStateStatus.RUNNING
+    )
+
+
+def test_followup_ambiguous_does_not_use_readiness_reobservation(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    environment = DelayedFollowupLinkEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_FOLLOWUP_QUERY,
+        followup_target_text=(
+            WIKIPEDIA_FOLLOWUP_TARGET
+        ),
+        click_external_modes=("ambiguous_link_different_url",),
+        ready_mode="results",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="ambiguous",
+    ):
+        _run_worker_with_fake_environment(
+            monkeypatch,
+            state,
+            environment,
+        )
+
+    assert environment.followup_click_count == 0
+    assert environment.missing_link_observe_count == 0
+
+
+def test_followup_unsafe_does_not_use_readiness_reobservation(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    environment = DelayedFollowupLinkEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_FOLLOWUP_QUERY,
+        followup_target_text=(
+            WIKIPEDIA_FOLLOWUP_TARGET
+        ),
+        click_external_modes=("unsafe_link",),
+        ready_mode="results",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="unsafe",
+    ):
+        _run_worker_with_fake_environment(
+            monkeypatch,
+            state,
+            environment,
+        )
+
+    assert environment.followup_click_count == 0
+    assert environment.missing_link_observe_count == 0
+
+
+def test_followup_readiness_reconciles_destination_without_clicking(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    environment = DelayedFollowupLinkEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_FOLLOWUP_QUERY,
+        followup_target_text=(
+            WIKIPEDIA_FOLLOWUP_TARGET
+        ),
+        click_external_modes=("missing_link",),
+        ready_mode="destination",
+        missing_link_observes=1,
+    )
+
+    _run_worker_with_fake_environment(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert environment.followup_click_count == 0
+    assert environment.missing_link_observe_count == 2
+    assert (
+        state.side_effects[
+            FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+        ].state
+        is SideEffectState.CONFIRMED
+    )
+    assert (
+        state.subgoals[
+            WIKIPEDIA_WORKFLOW.followup_subgoal_id
+        ].status
+        is SubgoalStatus.VERIFIED
+    )
+
+
 @pytest.mark.parametrize(
     "loop_status",
     (
@@ -2581,6 +3247,136 @@ def test_followup_link_ambiguous_fails_closed(
     assert environment.followup_click_count == 0
 
 
+def test_duplicate_followup_links_same_axurl_resolve_and_persist_destination(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_FOLLOWUP_QUERY,
+        followup_target_text=(
+            WIKIPEDIA_FOLLOWUP_TARGET
+        ),
+        click_external_modes=(
+            "ambiguous_link_same_url",
+            "canonical_destination",
+        ),
+    )
+
+    _run_worker_with_fake_environment(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert environment.followup_click_count == 1
+    assert (
+        state.artifacts[
+            FOLLOWUP_DESTINATION_ARTIFACT_ID
+        ].location
+        == "https://en.wikipedia.org/wiki/Information_theory"
+    )
+    assert (
+        state.side_effects[
+            FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+        ].state
+        is SideEffectState.CONFIRMED
+    )
+    assert (
+        state.status
+        is TaskStateStatus.COMPLETED
+    )
+
+
+def test_duplicate_followup_links_different_axurls_stay_ambiguous(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=WIKIPEDIA_FOLLOWUP_GOAL
+    )
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text=WIKIPEDIA_FOLLOWUP_QUERY,
+        followup_target_text=(
+            WIKIPEDIA_FOLLOWUP_TARGET
+        ),
+        click_external_modes=("ambiguous_link_different_url",),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Equivalent destination: no",
+    ):
+        _run_worker_with_fake_environment(
+            monkeypatch,
+            state,
+            environment,
+        )
+
+    assert environment.followup_click_count == 0
+
+
+def test_followup_canonical_destination_behavior_remains_unchanged(
+    monkeypatch,
+) -> None:
+    state = TaskState(
+        goal=(
+            "Search Wikipedia for computer science "
+            "and open data structures."
+        )
+    )
+    environment = FakeLiveWebEnvironment(
+        capture_path=None,
+        mode="empty",
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text="computer science",
+        followup_target_text="data structures",
+        followup_link_value=(
+            "https://en.wikipedia.org/wiki/"
+            "Data_structure"
+        ),
+        destination_heading_text="Data structure",
+        address_bar_value=(
+            "https://en.wikipedia.org/wiki/"
+            "Data_structure"
+        ),
+        click_external_modes=(
+            "results",
+            "canonical_destination",
+        ),
+    )
+
+    _run_worker_with_fake_environment(
+        monkeypatch,
+        state,
+        environment,
+    )
+
+    assert environment.followup_click_count == 1
+    assert (
+        state.artifacts[
+            FOLLOWUP_DESTINATION_ARTIFACT_ID
+        ].location
+        == "https://en.wikipedia.org/wiki/Data_structure"
+    )
+    assert (
+        state.side_effects[
+            FOLLOWUP_NAVIGATION_SIDE_EFFECT_ID
+        ].state
+        is SideEffectState.CONFIRMED
+    )
+    assert (
+        state.status
+        is TaskStateStatus.COMPLETED
+    )
+
+
 def test_followup_success_bookkeeping_still_fails_when_heading_absent(
     monkeypatch,
 ) -> None:
@@ -2703,6 +3499,177 @@ def test_followup_loop_failure_still_fails_when_heading_absent(
         ].state
         is SideEffectState.UNKNOWN
     )
+
+
+def test_followup_destination_direct_heading_match_passes_without_url():
+    task = ResolvedDurableWebSearchTask(
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text="Alan Turing",
+        followup_target_text="Turing machine",
+    )
+
+    result = _followup_destination_postcondition(
+        _observation(
+            (
+                _element(
+                    text="Turing machine",
+                    value=None,
+                    element_type="heading",
+                ),
+            )
+        ),
+        task,
+        state=None,
+    )
+
+    assert result is not None
+    assert "directly matches" in result.summary
+
+
+def test_followup_destination_canonical_url_and_heading_pass():
+    task = ResolvedDurableWebSearchTask(
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text="computer science",
+        followup_target_text="data structures",
+    )
+    state = TaskState(
+        goal="Search Wikipedia for computer science and open data structures"
+    )
+    state.artifacts[
+        FOLLOWUP_DESTINATION_ARTIFACT_ID
+    ] = ArtifactRecord(
+        artifact_id=FOLLOWUP_DESTINATION_ARTIFACT_ID,
+        description="Destination",
+        location="https://en.wikipedia.org/wiki/Data_structure",
+    )
+
+    result = _followup_destination_postcondition(
+        _observation(
+            (
+                _element(
+                    text="Address and search bar",
+                    value="https://en.wikipedia.org/wiki/Data_structure",
+                    element_type="text_field",
+                ),
+                _element(
+                    text="Data structure",
+                    value=None,
+                    element_type="heading",
+                ),
+            )
+        ),
+        task,
+        state=state,
+    )
+
+    assert result is not None
+    assert "fresh address-bar URL" in result.summary
+
+
+def test_followup_destination_url_mismatch_fails():
+    task = ResolvedDurableWebSearchTask(
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text="computer science",
+        followup_target_text="data structures",
+    )
+    state = TaskState(goal="goal")
+    state.artifacts[
+        FOLLOWUP_DESTINATION_ARTIFACT_ID
+    ] = ArtifactRecord(
+        artifact_id=FOLLOWUP_DESTINATION_ARTIFACT_ID,
+        description="Destination",
+        location="https://en.wikipedia.org/wiki/Data_structure",
+    )
+
+    result = _followup_destination_postcondition(
+        _observation(
+            (
+                _element(
+                    text="Address and search bar",
+                    value="https://en.wikipedia.org/wiki/Computer_science",
+                    element_type="text_field",
+                ),
+                _element(
+                    text="Data structure",
+                    value=None,
+                    element_type="heading",
+                ),
+            )
+        ),
+        task,
+        state=state,
+    )
+
+    assert result is None
+
+
+def test_followup_destination_heading_mismatch_fails():
+    task = ResolvedDurableWebSearchTask(
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text="computer science",
+        followup_target_text="data structures",
+    )
+    state = TaskState(goal="goal")
+    state.artifacts[
+        FOLLOWUP_DESTINATION_ARTIFACT_ID
+    ] = ArtifactRecord(
+        artifact_id=FOLLOWUP_DESTINATION_ARTIFACT_ID,
+        description="Destination",
+        location="https://en.wikipedia.org/wiki/Data_structure",
+    )
+
+    result = _followup_destination_postcondition(
+        _observation(
+            (
+                _element(
+                    text="Address and search bar",
+                    value="https://en.wikipedia.org/wiki/Data_structure",
+                    element_type="text_field",
+                ),
+                _element(
+                    text="Wrong heading",
+                    value=None,
+                    element_type="heading",
+                ),
+            )
+        ),
+        task,
+        state=state,
+    )
+
+    assert result is None
+
+
+def test_followup_destination_missing_address_bar_fails_canonical_path():
+    task = ResolvedDurableWebSearchTask(
+        spec=WIKIPEDIA_WORKFLOW,
+        query_text="computer science",
+        followup_target_text="data structures",
+    )
+    state = TaskState(goal="goal")
+    state.artifacts[
+        FOLLOWUP_DESTINATION_ARTIFACT_ID
+    ] = ArtifactRecord(
+        artifact_id=FOLLOWUP_DESTINATION_ARTIFACT_ID,
+        description="Destination",
+        location="https://en.wikipedia.org/wiki/Data_structure",
+    )
+
+    result = _followup_destination_postcondition(
+        _observation(
+            (
+                _element(
+                    text="Data structure",
+                    value=None,
+                    element_type="heading",
+                ),
+            )
+        ),
+        task,
+        state=state,
+    )
+
+    assert result is None
 
 
 def test_wikipedia_query_accepts_fresh_external_postcondition_after_loop_failure(
